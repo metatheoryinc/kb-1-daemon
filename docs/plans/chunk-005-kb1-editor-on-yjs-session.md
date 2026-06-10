@@ -49,6 +49,10 @@ All under `apps/@kb-1/web/src/lib/` in the KB-1 repo:
 - Transport: a minimal client-side y-protocols sync provider (~100 lines or
   the y-websocket client) against the existing chunk-003 WebSocket endpoint.
   No VaultChannelClient port, no multiplexing, no custom framing — one doc.
+  The provider lives in `apps/web`, not in `packages/editor`: the editor
+  takes a bound `Y.Text`/`Y.Doc` as a prop and contains zero transport or
+  endpoint knowledge, per the ui-packages-own-no-transport invariant (this is
+  also exactly how KB-1 structures it).
 - KB-1's custom sync plugin and origin-tagging contract come over intact:
   user edits use the user origin and are undo-tracked; remote/system updates
   are not undoable. Y.RelativePosition semantics must survive the port.
