@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path';
 
-import { DEFAULT_HOST, DEFAULT_PORT, createDaemonConfig, resolveKb2Home, resolvePort } from './config.js';
+import { DEFAULT_HOST, DEFAULT_PORT, createDaemonConfig, resolveKb2Home, resolvePort, resolveWebProxyTarget } from './config.js';
 
 describe('daemon config', () => {
   it('defaults KB2_HOME to a user-level .kb2 directory', () => {
@@ -28,7 +28,8 @@ describe('daemon config', () => {
       env: {
         KB2_HOME: kb2Home,
         KB2_HOST: '0.0.0.0',
-        KB2_PORT: '8399'
+        KB2_PORT: '8399',
+        KB2_WEB_PROXY_TARGET: 'http://127.0.0.1:5173'
       },
       now,
       pid: 1234
@@ -38,6 +39,7 @@ describe('daemon config', () => {
       serviceName: 'kb2d',
       host: '0.0.0.0',
       port: 8399,
+      webProxyTarget: 'http://127.0.0.1:5173',
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
       statusFile: join(kb2Home, 'daemon', 'status.json'),
@@ -56,5 +58,10 @@ describe('daemon config', () => {
   it('rejects invalid ports', () => {
     expect(() => resolvePort({ KB2_PORT: 'abc' })).toThrow(/KB2_PORT/);
     expect(() => resolvePort({ KB2_PORT: '0' })).toThrow(/KB2_PORT/);
+  });
+
+  it('uses KB2_WEB_PROXY_TARGET when supplied', () => {
+    expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' http://127.0.0.1:5173 ' })).toBe('http://127.0.0.1:5173');
+    expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' ' })).toBeUndefined();
   });
 });

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { fileURLToPath } from 'node:url';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createApp } from './app.js';
 import { createDaemonConfig, type DaemonConfig } from './config.js';
@@ -17,7 +16,8 @@ export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
   const app = createApp({
     statusFile: config.statusFile,
-    webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url))
+    webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
+    webProxyTarget: config.webProxyTarget
   });
 
   return new Promise((resolve, reject) => {
@@ -42,6 +42,9 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
           console.log(`${config.serviceName} listening on http://${info.address}:${info.port}`);
           console.log(`KB2_HOME=${config.kb2Home}`);
+          if (config.webProxyTarget) {
+            console.log(`KB2_WEB_PROXY_TARGET=${config.webProxyTarget}`);
+          }
           console.log(`status=${config.statusFile}`);
 
           resolve({

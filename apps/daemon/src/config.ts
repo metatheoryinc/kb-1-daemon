@@ -9,6 +9,7 @@ export interface DaemonConfig {
   serviceName: typeof SERVICE_NAME;
   host: string;
   port: number;
+  webProxyTarget?: string;
   kb2Home: string;
   daemonHome: string;
   statusFile: string;
@@ -55,6 +56,11 @@ export function resolveHost(env: NodeJS.ProcessEnv = process.env): string {
   return configuredHost && configuredHost.length > 0 ? configuredHost : DEFAULT_HOST;
 }
 
+export function resolveWebProxyTarget(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const configuredTarget = env.KB2_WEB_PROXY_TARGET?.trim();
+  return configuredTarget && configuredTarget.length > 0 ? configuredTarget : undefined;
+}
+
 export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonConfig {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
@@ -65,6 +71,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     serviceName: SERVICE_NAME,
     host: resolveHost(env),
     port: resolvePort(env),
+    webProxyTarget: resolveWebProxyTarget(env),
     kb2Home,
     daemonHome,
     statusFile: join(daemonHome, 'status.json'),

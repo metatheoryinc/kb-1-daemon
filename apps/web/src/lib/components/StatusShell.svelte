@@ -17,9 +17,13 @@
     status: DaemonStatus;
   }
 
-  let health: HealthResponse | null = null;
-  let error: string | null = null;
-  let loading = true;
+  let { routeLabel = 'Local daemon' } = $props<{
+    routeLabel?: string;
+  }>();
+
+  let health = $state<HealthResponse | null>(null);
+  let error = $state<string | null>(null);
+  let loading = $state(true);
 
   onMount(async () => {
     try {
@@ -41,7 +45,7 @@
 <main class="min-h-screen bg-[#f6f7f9] text-[#15171a]">
   <section class="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center px-6 py-12 sm:px-10">
     <div class="border-b border-[#d7dce2] pb-6">
-      <p class="text-sm font-semibold uppercase text-[#5a6572]">Local daemon</p>
+      <p class="text-sm font-semibold uppercase text-[#5a6572]">{routeLabel}</p>
       <h1 class="mt-3 text-4xl font-semibold tracking-normal text-[#111418] sm:text-5xl">KB-2 Local</h1>
       <p class="mt-4 max-w-2xl text-base leading-7 text-[#4b5563]">
         One local daemon port is serving the API and this SvelteKit shell.

@@ -2,4 +2,4 @@
   import StatusShell from '$lib/components/StatusShell.svelte';
 </script>
 
-<StatusShell />
+<StatusShell routeLabel="Status route" />

@@ -8,6 +8,7 @@ import { readDaemonStatus } from './status.js';
 export interface CreateAppOptions {
   statusFile: string;
   webBuildDir?: string;
+  webProxyTarget?: string;
 }
 
 export function createApp(options: CreateAppOptions): Hono {
@@ -26,7 +27,10 @@ export function createApp(options: CreateAppOptions): Hono {
 
   app.route('/api', api);
 
-  if (options.webBuildDir) {
+  const webBuildDir = options.webBuildDir;
+  const webProxyTarget = options.webProxyTarget;
+
+  if (webProxyTarget || webBuildDir) {
     app.notFound(async (context) => {
       const { pathname } = new URL(context.req.url);
 
@@ -34,16 +38,49 @@ export function createApp(options: CreateAppOptions): Hono {
         return context.json({ ok: false, error: 'Not found' }, 404);
       }
 
-      return serveUi(options.webBuildDir!, pathname);
+      if (webProxyTarget) {
+        return proxyUi(webProxyTarget, context.req.raw);
+      }
+
+      if (!webBuildDir) {
+        return missingUiBuildResponse(resolve('apps/web/build'));
+      }
+
+      return serveUi(webBuildDir, pathname);
     });
   }
 
   return app;
 }
 
+async function proxyUi(webProxyTarget: string, request: Request): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  const upstreamUrl = new URL(webProxyTarget);
+  upstreamUrl.pathname = requestUrl.pathname;
+  upstreamUrl.search = requestUrl.search;
+
+  try {
+    return await fetch(new Request(upstreamUrl, request));
+  } catch (error) {
+    return new Response(`KB-2 web dev server is unavailable at ${webProxyTarget}.\n${String(error)}\n`, {
+      status: 502,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8'
+      }
+    });
+  }
+}
+
+// Hono's Node static helper relies on middleware root handling that does not
+// cover this SPA fallback cleanly, so the daemon keeps this small file server.
 async function serveUi(webBuildDir: string, pathname: string): Promise<Response> {
   const root = resolve(webBuildDir);
   const filePath = await resolveUiFile(root, pathname);
+
+  if (!filePath) {
+    return missingUiBuildResponse(root);
+  }
+
   const body = await readFile(filePath);
 
   return new Response(body, {
@@ -53,7 +90,7 @@ async function serveUi(webBuildDir: string, pathname: string): Promise<Response>
   });
 }
 
-async function resolveUiFile(root: string, pathname: string): Promise<string> {
+async function resolveUiFile(root: string, pathname: string): Promise<string | undefined> {
   const decodedPathname = safeDecodePathname(pathname);
   const requestPath = decodedPathname.replace(/^\/+/, '') || 'index.html';
   const candidate = resolve(join(root, requestPath));
@@ -62,7 +99,28 @@ async function resolveUiFile(root: string, pathname: string): Promise<string> {
     return candidate;
   }
 
-  return join(root, 'index.html');
+  const fallback = join(root, 'index.html');
+  return await isFile(fallback) ? fallback : undefined;
+}
+
+function missingUiBuildResponse(root: string): Response {
+  return new Response(
+    [
+      'KB-2 local UI is not built yet.',
+      '',
+      'Run `pnpm --filter @kb-2/web build` before starting the daemon,',
+      'or run `pnpm dev` to start the daemon with the Vite dev proxy.',
+      '',
+      `Expected UI entry: ${join(root, 'index.html')}`,
+      ''
+    ].join('\n'),
+    {
+      status: 503,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8'
+      }
+    }
+  );
 }
 
 function safeDecodePathname(pathname: string): string {

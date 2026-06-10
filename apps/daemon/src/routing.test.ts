@@ -1,4 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -6,7 +8,7 @@ import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
 
-describe('health endpoint', () => {
+describe('daemon routing', () => {
   let kb2Home: string;
 
   beforeEach(async () => {
@@ -114,4 +116,73 @@ describe('health endpoint', () => {
 
     await rm(webBuildDir, { force: true, recursive: true });
   });
+
+  it('proxies non-API requests to the configured Vite dev server', async () => {
+    const upstream = createServer((request, response) => {
+      response.setHeader('content-type', 'text/plain; charset=utf-8');
+      response.end(`proxied ${request.method} ${request.url}`);
+    });
+    await listen(upstream);
+    const port = (upstream.address() as AddressInfo).port;
+
+    const config = createDaemonConfig({
+      env: {
+        KB2_HOME: kb2Home
+      }
+    });
+    const app = createApp({
+      statusFile: config.statusFile,
+      webProxyTarget: `http://127.0.0.1:${port}`
+    });
+
+    const rootResponse = await app.request('/');
+    const clientRouteResponse = await app.request('/status?from=test');
+
+    expect(rootResponse.status).toBe(200);
+    await expect(rootResponse.text()).resolves.toBe('proxied GET /');
+
+    expect(clientRouteResponse.status).toBe(200);
+    await expect(clientRouteResponse.text()).resolves.toBe('proxied GET /status?from=test');
+
+    await close(upstream);
+  });
+
+  it('returns an instructional response when no UI build is available', async () => {
+    const webBuildDir = await mkdtemp(join(tmpdir(), 'kb2-web-build-missing-'));
+    const config = createDaemonConfig({
+      env: {
+        KB2_HOME: kb2Home
+      }
+    });
+    const app = createApp({ statusFile: config.statusFile, webBuildDir });
+
+    const response = await app.request('/');
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).toContain('KB-2 local UI is not built yet.');
+    expect(body).toContain('pnpm dev');
+
+    await rm(webBuildDir, { force: true, recursive: true });
+  });
 });
+
+function listen(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+}
+
+function close(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}

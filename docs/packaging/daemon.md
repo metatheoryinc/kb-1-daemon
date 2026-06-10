@@ -17,23 +17,31 @@ The daemon reads configuration from environment variables owned by KB-2 code:
   `~/.kb2`
 - `KB2_HOST`: HTTP bind host, defaulting to `127.0.0.1`
 - `KB2_PORT`: HTTP port, defaulting to `7382`
+- `KB2_WEB_PROXY_TARGET`: optional dev-only Vite target for non-API UI requests
 
 The root `.env` only disables Nx implicit env loading with
 `NX_LOAD_DOT_ENV_FILES=false`; runtime env loading remains explicit.
 
 ## Local UI Development
 
-Chunk 002 adds a SvelteKit local UI at `apps/web`. Product development uses two
-processes: the daemon serves the API and the Vite dev server serves the UI while
-proxying `/api/*` requests to the daemon.
+Chunk 002 adds a SvelteKit local UI at `apps/web`. Product development still
+uses the daemon as the browser front door: `pnpm dev` starts Vite and the daemon,
+sets `KB2_WEB_PROXY_TARGET` for the daemon, and leaves Vite HMR connected
+directly to the Vite port.
 
 ```bash
-KB2_HOME=/tmp/kb2-ui-dev KB2_PORT=7382 pnpm --filter @kb-2/daemon dev
-pnpm --filter @kb-2/web dev
+KB2_HOME=/tmp/kb2-ui-dev KB2_PORT=7382 pnpm dev
+open http://127.0.0.1:7382/
 ```
 
+In this mode, `/api/*` is handled by the daemon and non-API HTTP requests are
+proxied to Vite. When `KB2_WEB_PROXY_TARGET` is not set, the daemon serves the
+built static UI instead. If neither the built UI nor the dev proxy is available,
+the daemon returns an instructional response that tells the developer which
+command to run.
+
 For a production-like local smoke, build the web app first and load it from the
-daemon port:
+same daemon port:
 
 ```bash
 pnpm check
