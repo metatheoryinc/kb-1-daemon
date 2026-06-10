@@ -1,0 +1,21 @@
+{
+  "name": "kb-2",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.5.3",
+  "type": "module",
+  "scripts": {
+    "build": "nx run-many -t build",
+    "check": "pnpm typecheck && pnpm test",
+    "dev:daemon": "pnpm --filter @kb-2/daemon dev",
+    "test": "nx run-many -t test",
+    "typecheck": "nx run-many -t typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.2",
+    "nx": "22.7.5",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}
