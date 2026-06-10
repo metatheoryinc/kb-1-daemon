@@ -1,0 +1,8 @@
+.git/
+.nx/
+coverage/
+dist/
+node_modules/
+.kb2-docker/
+apps/*/dist/
+apps/*/node_modules/
