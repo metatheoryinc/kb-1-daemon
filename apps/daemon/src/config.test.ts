@@ -42,6 +42,7 @@ describe('daemon config', () => {
       webProxyTarget: 'http://127.0.0.1:5173',
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
+      demoDocumentFile: join(kb2Home, 'demo-vault', 'hello-world.md'),
       statusFile: join(kb2Home, 'daemon', 'status.json'),
       startedAt: now.toISOString(),
       pid: 1234

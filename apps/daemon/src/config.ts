@@ -12,6 +12,7 @@ export interface DaemonConfig {
   webProxyTarget?: string;
   kb2Home: string;
   daemonHome: string;
+  demoDocumentFile: string;
   statusFile: string;
   startedAt: string;
   pid: number;
@@ -66,6 +67,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
   const homeDir = options.homeDir ?? homedir();
   const kb2Home = resolveKb2Home(env, homeDir);
   const daemonHome = join(kb2Home, 'daemon');
+  const demoDocumentFile = join(kb2Home, 'demo-vault', 'hello-world.md');
 
   return {
     serviceName: SERVICE_NAME,
@@ -74,6 +76,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     webProxyTarget: resolveWebProxyTarget(env),
     kb2Home,
     daemonHome,
+    demoDocumentFile,
     statusFile: join(daemonHome, 'status.json'),
     startedAt: (options.now ?? new Date()).toISOString(),
     pid: options.pid ?? process.pid
