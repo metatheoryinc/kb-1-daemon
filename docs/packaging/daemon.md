@@ -21,6 +21,30 @@ The daemon reads configuration from environment variables owned by KB-2 code:
 The root `.env` only disables Nx implicit env loading with
 `NX_LOAD_DOT_ENV_FILES=false`; runtime env loading remains explicit.
 
+## Local UI Development
+
+Chunk 002 adds a SvelteKit local UI at `apps/web`. Product development uses two
+processes: the daemon serves the API and the Vite dev server serves the UI while
+proxying `/api/*` requests to the daemon.
+
+```bash
+KB2_HOME=/tmp/kb2-ui-dev KB2_PORT=7382 pnpm --filter @kb-2/daemon dev
+pnpm --filter @kb-2/web dev
+```
+
+For a production-like local smoke, build the web app first and load it from the
+daemon port:
+
+```bash
+pnpm check
+KB2_HOME=/tmp/kb2-ui-smoke KB2_PORT=8787 pnpm --filter @kb-2/daemon dev
+curl http://127.0.0.1:8787/api/health
+open http://127.0.0.1:8787/
+```
+
+The daemon owns one port in this mode: `/api/*` is the Hono API and every
+non-API route is served from the built SvelteKit shell with an SPA fallback.
+
 ## Docker
 
 The initial Docker path supports both direct image runs and a Compose-backed
@@ -55,7 +79,8 @@ For an outside-the-container smoke:
 
 ```bash
 pnpm docker:up
-curl http://127.0.0.1:17382/health
+curl http://127.0.0.1:17382/api/health
+open http://127.0.0.1:17382/
 cat .kb2-docker/daemon/status.json
 pnpm docker:down
 ```

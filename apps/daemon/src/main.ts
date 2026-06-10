@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
+import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
 import { createApp } from './app.js';
@@ -14,7 +15,10 @@ export interface StartedDaemon {
 
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
-  const app = createApp({ statusFile: config.statusFile });
+  const app = createApp({
+    statusFile: config.statusFile,
+    webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url))
+  });
 
   return new Promise((resolve, reject) => {
     let settled = false;
