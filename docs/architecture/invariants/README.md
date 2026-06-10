@@ -8,8 +8,17 @@ an invariant and flag drift.
 
 ## Current Invariants
 
-- [Frontend components and Storybook](./frontend-components-and-storybook.md)
-- [Package-composed monorepo](./package-composed-monorepo.md)
+Product and domain invariants — what the product is and how it treats data:
+
+- [Single writer, one service boundary](./product/single-writer-service-boundary.md)
+- [Filesystem is durable truth](./product/filesystem-durable-truth.md)
+- [Content, not people (local product)](./product/content-not-people.md)
+
+Engineering invariants — how the codebase stays healthy:
+
+- [Package-composed monorepo](./engineering/package-composed-monorepo.md)
+- [Frontend components and Storybook](./engineering/frontend-components-and-storybook.md)
+- [Tests never touch real user data](./engineering/tests-never-touch-real-user-data.md)
 
 ## How To Read These
 

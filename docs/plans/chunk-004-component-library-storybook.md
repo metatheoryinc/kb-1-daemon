@@ -144,6 +144,9 @@ After implementation is reported complete:
 
 - the implementer runs `pnpm check` and the manual verification flow above and
   reports actual output, not expected output
+- Storybook is verified in a real browser (rendered stories observed, light
+  and dark modes inspected) — a green Storybook build alone does not count;
+  the report states what was visibly rendered
 - a fresh reviewer who did not implement the chunk audits the diff against the
   acceptance criteria and the invariants in `docs/architecture/invariants/`,
   with particular attention to dead components (imported but unused, broken,
