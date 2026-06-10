@@ -39,6 +39,9 @@ running the full application.
 - A reusable control is copied into multiple pages instead of becoming a
   component.
 - A semantic component exists but has no Storybook story.
+- A component only appears inside a gallery or composition story. Galleries
+  and compositions are welcome additions, but every semantic component needs
+  its own dedicated story entry with args/controls where sensible.
 - Storybook only covers primitives and cannot show app-level composition.
 - Dark mode is implemented in the app but not easy to inspect in Storybook.
 - Stories require live backend data when fixtures would make them reviewable.
