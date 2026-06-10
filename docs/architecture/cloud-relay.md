@@ -1,7 +1,12 @@
 # Cloud Relay
 
-The cloud relay keeps the KB-1-style web, API, and MCP experience while moving
-durable content storage to the user's local server.
+The cloud relay is the later remote-access and collaboration layer for KB-2. It
+keeps the KB-1-style hosted web, API, and MCP experience while durable content
+storage stays on the user's local server.
+
+Cloud relay is not required for the first useful local KB-2 product. The
+open-source daemon/server can host a local web UI and local MCP/API tools before
+remote relay exists.
 
 ## Responsibilities
 
@@ -86,6 +91,11 @@ The local server does not need cursor state to perform content writes. The cloud
 already knows authenticated users and connected browser sessions, making it the
 natural place for ephemeral awareness.
 
+The local-first UI intentionally does not implement presence. If a local user is
+editing a document and some other local process or agent changes that file, the
+local product should surface a file-change event or direct-write warning rather
+than attempting to show remote cursors or user presence.
+
 ## Collaboration Gates
 
 The cloud can enforce collaboration policy without changing the open-source
@@ -111,3 +121,5 @@ to a registered vault, but business-tier enforcement belongs in the cloud.
 - Should presence be available on the free plan for a single user plus their own
   agents?
 - What guarantees do cloud APIs provide when a vault server is offline?
+- What, if anything, should the cloud presence layer know about edits that
+  originated in the local-only UI before a relay session exists?

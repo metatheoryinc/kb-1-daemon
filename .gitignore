@@ -4,3 +4,5 @@ coverage/
 .nx/
 .kb2-docker/
 .DS_Store
+.fleet/
+fleet-claude-inbox-*.jsonl

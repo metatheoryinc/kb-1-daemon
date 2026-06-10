@@ -1,7 +1,8 @@
 # KB-2 Vision
 
 KB-2 is a local-first, agent-ready knowledge base where users own the durable
-data and the cloud coordinates access to it.
+data. The open-source local runtime should be useful on its own, and the cloud
+should later coordinate remote access, identity, sharing, and collaboration.
 
 It keeps the best parts of KB-1: a rich web experience, MCP/API access for
 agents, service-mediated writes, conflict-free collaborative editing, visible
@@ -13,48 +14,63 @@ KB-2 makes the user's local filesystem the durable source of truth.
 
 The user's vault should be plain files they can inspect, back up, commit, move,
 and keep. KB-2 should provide the coordination layer around those files:
-structured reads and edits, search, moves and renames, local and remote agent
-tools, web access, presence, collaboration policy, and auditability.
+structured reads and edits, search, moves and renames, local agent tools, a
+minimal local web UI, remote access, presence, collaboration policy, and
+auditability.
 
 The cloud should not be the place where customer knowledge lives at rest. The
 cloud should provide authentication, billing, relay, session coordination,
-presence, and collaboration gates. Content reads and writes should route to an
-authoritative local KB-2 server owned by the user or organization.
+presence, and collaboration gates when users opt into remote or multi-user
+features. Content reads and writes should route to an authoritative local KB-2
+server owned by the user or organization.
 
 ## Core Shift From KB-1
 
 KB-1 was cloud Obsidian for humans and agents: a hosted Markdown vault backed by
 Cloudflare Workers, Durable Objects, D1, R2, and Yjs.
 
-KB-2 is a user-owned vault node with cloud reachability: Markdown, images, and
-attachments live on the user's filesystem; an open-source local server exposes a
-structured vault API; the closed-source cloud relays authenticated web, API, and
-MCP requests to that server.
+KB-2 is a user-owned vault node that can stand alone locally and later gain
+cloud reachability: Markdown, images, and attachments live on the user's
+filesystem; an open-source local server exposes a structured vault API, local
+MCP/API access, and a minimal local web UI; the closed-source cloud can later
+relay authenticated web, API, and MCP requests to that server.
 
 ## Principles
 
 - The filesystem is the durable truth.
 - Markdown and assets are canonical user data.
 - The local KB-2 server is the only legitimate runtime writer.
+- The local web UI must use the local server APIs; it must not read or write the
+  filesystem directly.
 - Yjs/Y.Text state is a runtime artifact for active collaborative editing, not
   the durable source of truth.
 - Rebuildable indexes, caches, parsed metadata, and hot document sessions can be
   regenerated from the filesystem and local metadata.
-- Cloud services relay and coordinate; they do not store customer knowledge
-  content at rest.
+- Cloud services relay and coordinate when enabled; they do not store customer
+  knowledge content at rest.
 - Permission checks happen at every edge.
 - One vault has one active authoritative local server connection.
 - One local server may host many vaults.
 - Direct filesystem edits are valid but second-class: they bypass conflict-free
   collaboration and must be detected, reconciled, and surfaced to clients.
+- The local open-source product does not model users, cursors, selections, or
+  presence. It models files, edits, and file-change events.
+- Presence, cursors, selections, and follow-mode are cloud collaboration
+  features, not local-first requirements.
 - The open-source local server should earn trust by making the custody boundary
   inspectable.
 
 ## Product Shape
 
-Free individual users should be able to run the local server and use the cloud
-relay for their own web and agent access. The web experience depends on the
-relay and should be part of the core product, not only a paid feature.
+The first useful KB-2 product should be local and open source: a user runs the
+daemon/server, opens a local web UI, browses a file tree, reads and edits
+Markdown, and lets local agents use local MCP/API tools against the same
+filesystem-backed service.
+
+Cloud relay should become an upgrade path, not the first path to value. Free
+individual users may still get cloud relay for their own web and agent access,
+but KB-2 should not require the cloud before it becomes a useful local knowledge
+base.
 
 Paid or organization tiers can unlock multi-user capabilities: other users
 reading or writing a vault, richer collaboration policy, organization
@@ -66,6 +82,7 @@ KB-2 owns the coordination surface:
 
 - local vault API
 - local MCP/API access
+- local web UI access through the daemon/server
 - cloud relay API
 - web UI access through the relay
 - content operations such as read, search, splice edit, move, rename, and delete
@@ -84,9 +101,10 @@ around the plain vault files.
 - Which packaging targets matter first: CLI, Docker image, desktop app, or all
   three?
 - Should Git support be built in from the beginning or introduced after the core
-  local server and relay work?
+  local server, local UI, and local MCP work?
 - What is the first paid collaboration boundary: multi-user reads, multi-user
   writes, organization permissions, or presence?
 - How much of the web UI can operate when the local server is offline?
+- What is the smallest local UI that makes KB-2 useful before cloud relay?
 - Should vaults begin path-keyed only, or should a hidden stable ID layer be
   reserved for future migrations?

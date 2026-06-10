@@ -35,6 +35,7 @@ KB-2 should preserve:
 
 - Markdown-centered knowledge work
 - a rich web UI
+- a useful local web UI before cloud relay
 - MCP/API access for agents
 - service-mediated reads and writes
 - splice edits and structured content operations
@@ -54,9 +55,9 @@ The central change is custody.
 | Concern | KB-1 | KB-2 |
 |---|---|---|
 | Durable content | Hosted D1/R2/DO substrate | User filesystem |
-| Cloud role | Source of truth and app backend | Auth, relay, web, policy, presence |
-| Local role | Optional desktop wrapper | Authoritative vault server |
-| Open source surface | Optional/unclear | Local server should be open source |
+| Cloud role | Source of truth and app backend | Later auth, relay, hosted web, policy, presence |
+| Local role | Optional desktop wrapper | Authoritative vault server and local app host |
+| Open source surface | Optional/unclear | Local server and local UI should be open source |
 | Multi-tenancy | Shared hosted storage substrate | Tenant content outside hosted storage |
 | Document identity | Migrated toward stable note IDs | Path-keyed initially because files are canonical |
 | Awareness | Cloud/realtime substrate | Cloud presence plane can remain separate |
@@ -91,11 +92,24 @@ KB-2 removes customer knowledge content from the hosted substrate. The cloud
 still needs account and routing metadata, but the user's actual vault content
 lives with the user.
 
+## Local Product Before Cloud Relay
+
+KB-1's primary useful experience depended on the hosted app and hosted substrate.
+KB-2 should become useful earlier: the open-source local server should host a
+minimal local UI for file-tree browsing and Markdown editing, while local agents
+use local MCP/API tools against the same service.
+
+This changes execution order, not the long-term cloud ambition. Cloud relay,
+auth, org management, billing, and presence can arrive later as remote and
+multi-user layers on top of the same local authority.
+
 ## Open Questions
 
 - Which KB-1 MCP tools should be carried over exactly, and which should change
   because the filesystem is canonical?
 - Which KB-1 collaboration affordances are essential for the first KB-2 demo?
+- Which local UI affordances should replace hosted collaboration affordances in
+  the first local-only demo?
 - Which KB-1 architectural docs should be treated as source inspiration versus
   migration cautionary tales?
 - How much KB-1 import/migration support should KB-2 plan for?

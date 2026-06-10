@@ -4,6 +4,10 @@ The local KB-2 server is the authoritative runtime for one or more vaults. It is
 open source and runs on a user's device, a home server, or a user-controlled
 cloud instance such as a Docker container on a provider they choose.
 
+The server is also the host for the first local KB-2 product experience. It
+should serve a minimal local web UI that uses the same service APIs as local MCP,
+local API clients, and later cloud relay requests.
+
 ## Responsibilities
 
 The local server owns:
@@ -19,11 +23,17 @@ The local server owns:
 - direct file write detection
 - local audit/event logs
 - folder and vault metadata
+- local web UI delivery
 - local MCP/API access
 - outbound cloud tunnel connection
 
 It does not own cloud billing, organization membership, or multi-user feature
 policy. Those are enforced by the cloud layer before requests are relayed.
+
+It also does not own local multi-user presence. In the local-first product, the
+server should model files, edits, file-change events, and audit history. Users,
+cursors, selections, follow mode, and presence remain cloud collaboration
+concepts unless a future local collaboration mode explicitly adds them.
 
 ## Filesystem Canonical Model
 
@@ -44,10 +54,17 @@ The clean write path is always through the server:
 caller -> read/search/splice/move/rename API -> local server -> filesystem
 ```
 
+This applies to the local web UI as well. The UI must not bypass the server and
+read or write the filesystem directly.
+
 Direct file writes are allowed because users own their vault files, but they are
 outside the conflict-free editing path. The server should detect them with file
 watching or periodic scans, invalidate relevant hot state, re-read/reindex the
 file, and emit a warning event through connected local and cloud clients.
+
+For the local UI, a direct filesystem edit should be represented as a content
+state change, not as a presence event. A simple warning such as "changed outside
+KB-2; reloaded from disk" is preferable to introducing local user/cursor models.
 
 ## Document Identity
 
@@ -114,6 +131,30 @@ Agent -> localhost MCP/API -> Local Server -> Filesystem
 This supports fast private local workflows without sending requests through the
 cloud. Remote/web agents still use the cloud MCP/API and relay.
 
+## Local Web UI
+
+The local web UI is a first-class open-source surface. It should be a small
+subset of the eventual hosted product:
+
+- file tree browsing
+- Markdown read/edit
+- local service-mediated writes
+- file-change warnings
+- search when the local search subsystem exists
+
+It should not include:
+
+- cloud auth
+- users
+- organization management
+- billing
+- remote sharing policy
+- cursors, selections, follow mode, or presence
+
+The purpose of the local UI is to make KB-2 useful before the cloud relay exists
+and to exercise the same filesystem-backed APIs that local MCP tools and later
+cloud relay requests will use.
+
 ## Open Questions
 
 - What language/runtime should the local server use?
@@ -123,3 +164,5 @@ cloud. Remote/web agents still use the cloud MCP/API and relay.
 - What is the exact audit event schema and retention model?
 - Should local API auth be required on localhost, and how should local agent
   credentials be issued?
+- Should the local UI be served by the daemon app directly or built as a separate
+  workspace app whose static output is mounted by the daemon?
