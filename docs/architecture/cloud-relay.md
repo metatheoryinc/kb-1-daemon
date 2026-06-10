@@ -1,0 +1,113 @@
+# Cloud Relay
+
+The cloud relay keeps the KB-1-style web, API, and MCP experience while moving
+durable content storage to the user's local server.
+
+## Responsibilities
+
+The cloud layer owns:
+
+- user and organization authentication
+- API key and device registration
+- active tunnel registry
+- per-vault routing
+- permissions and feature gates
+- billing and plan enforcement
+- cloud MCP/API endpoints
+- web app delivery
+- ephemeral presence, cursors, selections, and follow-mode state
+- relay observability that avoids storing content payloads
+
+It does not own customer vault content at rest.
+
+## Tunnel Model
+
+The local server establishes an outbound WebSocket connection to the cloud. The
+outbound connection avoids requiring users to expose inbound ports.
+
+```text
+Local Server -> Cloud Relay
+```
+
+The connection is authenticated by a key or credential generated for the owning
+user or organization. The cloud binds the tunnel to one or more vaults hosted by
+that server.
+
+## Active Authority
+
+For each vault, the cloud should accept only one active authoritative local
+server connection. If another server attempts to connect for the same vault, the
+cloud should reject it or require an explicit takeover flow.
+
+The server-level connection can host many vaults, but routing and authorization
+remain per vault.
+
+## Permission Checks
+
+Every edge should check permissions:
+
+- requester authentication
+- user or organization membership
+- vault access
+- operation permission: read, search, write, admin
+- feature gate: individual, paid collaboration, organization feature
+- tunnel authority for the target vault
+- request envelope validity at the local server
+
+Free users may still use the cloud relay for their own vaults, web UI, and own
+agents. Paid or organization plans can enable other users to read, write, or
+collaborate in shared vaults.
+
+## Content Plane
+
+Content operations route to the local server:
+
+```text
+Cloud API/MCP/Web request
+  -> auth and policy
+  -> relay envelope
+  -> active vault tunnel
+  -> local server operation
+  -> response
+```
+
+The cloud should avoid logging content payloads. It may need operation metadata
+for routing, authorization, metrics, and debugging.
+
+## Awareness Plane
+
+Presence, cursors, selections, and follow-mode can live in the cloud layer:
+
+```text
+Web client -> Cloud realtime service -> Web clients
+```
+
+The local server does not need cursor state to perform content writes. The cloud
+already knows authenticated users and connected browser sessions, making it the
+natural place for ephemeral awareness.
+
+## Collaboration Gates
+
+The cloud can enforce collaboration policy without changing the open-source
+local server:
+
+- individual owner access
+- owner-owned agents
+- read-only org members
+- write-capable org members
+- paid multi-user collaboration
+- paid org administration
+
+The local server still validates that relayed requests are well-formed and belong
+to a registered vault, but business-tier enforcement belongs in the cloud.
+
+## Open Questions
+
+- Are cloud relay envelopes content-visible to the cloud service, or can some
+  payloads be encrypted so the cloud only routes them?
+- What metadata can be safely logged for debugging without weakening the data
+  custody promise?
+- What does tunnel takeover look like in the web UI?
+- Should presence be available on the free plan for a single user plus their own
+  agents?
+- What guarantees do cloud APIs provide when a vault server is offline?
