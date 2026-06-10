@@ -1,0 +1,197 @@
+/* Redesign tokens — KB1 visual system, namespaced as --rd-* to stay isolated
+   from the main app's shadcn vars. Three palette swaps follow the reference
+   mockup: porcelain (default, cool neutral), shell (soft warm-grey), linen
+   (warm greige). Components reference vars semantically, so a future dark
+   mode is one more [data-rd-palette="dark"] block away — no component edits.
+
+   The font stacks name the preferred faces but do not load external font
+   resources; local-first review surfaces should not require a CDN. */
+
+:root {
+  /* surfaces — porcelain (default) */
+  --rd-bg: #f1f2f4;
+  --rd-bg-alt: #eef0f3;
+  --rd-panel: #ffffff;
+  --rd-panel-alt: #f5f6f9;
+
+  /* ink — five steps, darkest to lightest */
+  --rd-ink-1: #1a1d22;
+  --rd-ink-2: #353942;
+  --rd-ink-3: #636872;
+  --rd-ink-4: #9096a0;
+  --rd-ink-5: #c6c9d1;
+
+  /* hairlines + interactive states */
+  --rd-rule: rgba(26, 29, 34, 0.07);
+  --rd-rule-soft: rgba(26, 29, 34, 0.04);
+  --rd-rule-strong: rgba(26, 29, 34, 0.13);
+  --rd-hover: rgba(26, 29, 34, 0.032);
+  --rd-active: rgba(26, 29, 34, 0.052);
+  --rd-code-bg: rgba(0, 0, 0, 0.045);
+
+  /* syntax highlighting — saturated, dark-ish for legibility on white code-bg */
+  --rd-syntax-keyword: #6c3aa1;
+  --rd-syntax-string: #2c8a3a;
+  --rd-syntax-number: #b15c00;
+  --rd-syntax-function: #2b6cb0;
+  --rd-syntax-type: #0e7c6f;
+  --rd-syntax-property: #7b5d24;
+  --rd-syntax-comment: #6b7280;
+  --rd-syntax-operator: #5d626c;
+
+  /* live + favorite — semantic accents reused across the system */
+  --rd-live: #50b275;
+  --rd-live-bg: #b8e8c6;
+  --rd-live-on: #4a6b48;
+  --rd-favorite: #dcb653;
+
+  /* pastel scale — color + bg pair per accent */
+  --rd-coral: #ee8a91;
+  --rd-coral-bg: #f7d0d4;
+  --rd-peach: #e9a570;
+  --rd-peach-bg: #fbd5b1;
+  --rd-butter: #dcb653;
+  --rd-butter-bg: #fad780;
+  --rd-sage: #7dcb8e;
+  --rd-sage-bg: #b8e8c6;
+  --rd-mint: #70cdb4;
+  --rd-mint-bg: #b8eae0;
+  --rd-lime: #9ccf66;
+  --rd-lime-bg: #d4f09c;
+  /* sky — light-mode value matches Tailwind sky-700 (#0369a1), which the
+     History panel's `actionColor('update')` uses (`text-sky-700`). Editor
+     link / wikilink / footnote tints share this token so they read at the
+     same blue as History "update" labels. Dark-mode flips back to the
+     lighter sky-400-register pastel (see [data-rd-mode='dark'] below). */
+  --rd-sky: #0284c7;
+  --rd-sky-bg: #c4def5;
+  --rd-periwinkle: #8f8bd9;
+  --rd-periwinkle-bg: #d5d2f3;
+  --rd-lavender: #a48cd6;
+  --rd-lavender-bg: #e4c8f0;
+  --rd-rose: #e68ab2;
+  --rd-rose-bg: #f7dce7;
+  --rd-teal: #63bcc0;
+  --rd-teal-bg: #b8eae0;
+  --rd-slate: #8fa3b1;
+  --rd-slate-bg: #c4d2dc;
+
+  /* font families */
+  --rd-ui: 'Inter Tight', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --rd-serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
+  /* Prose body face for editor surfaces (plaintext + markdown). Geist
+     (Vercel's open-source sans, OFL-licensed, self-hosted via
+     `@fontsource-variable/geist` — imported once from `app.css`) is
+     under evaluation as a sans-serif replacement for the long-standing
+     `--rd-serif` body face. `--rd-serif` stays defined above so the
+     swap is one-line-reversible: re-point editor surfaces back at
+     `var(--rd-serif, …)` (PlaintextEditor.svelte's `.cm-content`
+     typography rules) to restore the serif preview. `--rd-ui` (Inter
+     Tight) is separate —
+     it's the UI / chip / system-label face and remains untouched. */
+  --rd-sans-prose: 'Geist Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter Tight', sans-serif;
+  --rd-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* layout widths */
+  --rd-rail-w: 214px;
+  --rd-rail-w-collapsed: 64px;
+  --rd-mid-w: 282px;
+}
+
+[data-rd-palette='shell'] {
+  --rd-bg: #efeeec;
+  --rd-bg-alt: #eceae7;
+  --rd-panel: #f8f7f5;
+  --rd-panel-alt: #ebeae7;
+  --rd-ink-1: #1e1d1b;
+  --rd-ink-2: #3b3a37;
+  --rd-ink-3: #686661;
+  --rd-ink-4: #959389;
+  --rd-ink-5: #c5c3bb;
+  --rd-rule: rgba(30, 29, 27, 0.07);
+  --rd-rule-soft: rgba(30, 29, 27, 0.04);
+  --rd-rule-strong: rgba(30, 29, 27, 0.13);
+  --rd-hover: rgba(30, 29, 27, 0.032);
+  --rd-active: rgba(30, 29, 27, 0.052);
+}
+
+[data-rd-palette='linen'] {
+  --rd-bg: #f3f1ee;
+  --rd-bg-alt: #f0ede8;
+  --rd-panel: #fbfaf8;
+  --rd-panel-alt: #efede8;
+  --rd-ink-1: #221f1c;
+  --rd-ink-2: #413d37;
+  --rd-ink-3: #6e6962;
+  --rd-ink-4: #9b968e;
+  --rd-ink-5: #cac6be;
+  --rd-rule: rgba(34, 31, 28, 0.07);
+  --rd-rule-soft: rgba(34, 31, 28, 0.04);
+  --rd-rule-strong: rgba(34, 31, 28, 0.13);
+  --rd-hover: rgba(34, 31, 28, 0.032);
+  --rd-active: rgba(34, 31, 28, 0.052);
+}
+
+/* dark mode — orthogonal to palette. Composes freely:
+   `[data-rd-palette='shell'][data-rd-mode='dark']` is valid (porcelain
+   is the default palette so the bare `[data-rd-mode='dark']` rule
+   overrides it). First-pass colors; iterate from feedback. */
+[data-rd-mode='dark'] {
+  /* surfaces — deep neutral, slight cool cast, not pure black */
+  --rd-bg: #0e1014;
+  --rd-bg-alt: #14171c;
+  --rd-panel: #1a1d24;
+  --rd-panel-alt: #20242c;
+
+  /* ink — inverted scale, ink-1 near-white through ink-5 weakest */
+  --rd-ink-1: #e8eaee;
+  --rd-ink-2: #c5c9d1;
+  --rd-ink-3: #8a8f9a;
+  --rd-ink-4: #5d626c;
+  --rd-ink-5: #3a3e46;
+
+  /* hairlines + interactive states — white-on-dark, lower alpha */
+  --rd-rule: rgba(255, 255, 255, 0.08);
+  --rd-rule-soft: rgba(255, 255, 255, 0.04);
+  --rd-rule-strong: rgba(255, 255, 255, 0.16);
+  --rd-hover: rgba(255, 255, 255, 0.04);
+  --rd-active: rgba(255, 255, 255, 0.07);
+  --rd-code-bg: rgba(255, 255, 255, 0.05);
+
+  /* syntax highlighting — lighter pastels for legibility on dark code-bg */
+  --rd-syntax-keyword: #c4b5f7;
+  --rd-syntax-string: #8fd99c;
+  --rd-syntax-number: #f0b070;
+  --rd-syntax-function: #8cc0e8;
+  --rd-syntax-type: #7ed8c0;
+  --rd-syntax-property: #d8c590;
+  --rd-syntax-comment: #8a8f9a;
+  --rd-syntax-operator: #8a8f9a;
+
+  /* live + favorite — keep accent hue, swap the bg for a deeper fill */
+  --rd-live: #5fc285;
+  --rd-live-bg: #1f3d2a;
+  --rd-live-on: #cdebd7;
+  --rd-favorite: #e8c46a;
+
+  /* pastel scale — accent colors stay (they're the highlight); bg pair
+     darkens into the same hue at low lightness so chips read as soft
+     tinted fills against the dark panel instead of glowing pastels. */
+  --rd-coral-bg: #4a2429;
+  --rd-peach-bg: #4a3220;
+  --rd-butter-bg: #4a3a18;
+  --rd-sage-bg: #214a2c;
+  --rd-mint-bg: #1f4a3f;
+  --rd-lime-bg: #344a1c;
+  /* sky — light-mode is darkened (sky-700) for legibility on white; on
+     dark surfaces we want the original lighter pastel back so links /
+     wikilinks / footnotes glow softly rather than sinking into the dark
+     panel. Matches the previous single-value behavior. */
+  --rd-sky: #7fb9e5;
+  --rd-sky-bg: #1f3a52;
+  --rd-periwinkle-bg: #2a2952;
+  --rd-lavender-bg: #3a2a4a;
+  --rd-rose-bg: #4a2538;
+  --rd-teal-bg: #1f4042;
+  --rd-slate-bg: #283540;
+}

@@ -1,0 +1,106 @@
+<script lang="ts" module>
+  import { cn } from '../utils';
+  import { DEFAULT_ICON_COLOR, normalizeHex } from './color-utils.js';
+
+  export type FolderIconSize = 'sm' | 'md' | 'lg';
+  export type FolderIconVariant = 'filled' | 'outline';
+
+  export function folderIconVariants({
+    size = 'md',
+    variant = 'filled',
+  }: {
+    size?: FolderIconSize;
+    variant?: FolderIconVariant;
+  } = {}): string {
+    return `folder-icon size-${size} variant-${variant}`;
+  }
+
+  export interface FolderIconProps {
+    color?: string | null;
+    icon?: string | null;
+    size?: FolderIconSize;
+    variant?: FolderIconVariant;
+    label?: string;
+    class?: string;
+  }
+</script>
+
+<script lang="ts">
+  let {
+    color = null,
+    icon = null,
+    size = 'md',
+    variant = 'filled',
+    label,
+    class: className,
+  }: FolderIconProps = $props();
+
+  const resolvedColor = $derived(
+    color ? normalizeHex(color) : DEFAULT_ICON_COLOR,
+  );
+</script>
+
+<span
+  role={label ? 'img' : 'presentation'}
+  aria-label={label}
+  aria-hidden={label ? undefined : true}
+  class={cn(folderIconVariants({ size, variant }), className)}
+  style:--folder-icon-bg={`light-dark(${resolvedColor}, color-mix(in srgb, ${resolvedColor} 40%, black))`}
+  style:--folder-icon-bg-outline="color-mix(in srgb, {resolvedColor} 35%, transparent)"
+  style:--folder-icon-border={`light-dark(color-mix(in srgb, ${resolvedColor} 75%, black), color-mix(in srgb, ${resolvedColor} 85%, black))`}
+>
+  {#if icon}
+    <span class="folder-icon-glyph" aria-hidden="true">{icon}</span>
+  {/if}
+</span>
+
+<style>
+  .folder-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    border: 1px solid var(--folder-icon-border);
+    border-radius: 6px;
+    background: var(--folder-icon-bg);
+    user-select: none;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .variant-outline {
+    background: var(--folder-icon-bg-outline);
+  }
+
+  .size-sm {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    font-size: 10px;
+  }
+
+  .size-md {
+    width: 18px;
+    height: 18px;
+    font-size: 12px;
+  }
+
+  .size-lg {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    font-size: 14px;
+  }
+
+  .folder-icon-glyph {
+    display: block;
+    font-size: 0.7em;
+    line-height: 1;
+    filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.2));
+  }
+
+  :global(.dark) .folder-icon-glyph {
+    filter: brightness(1.15) saturate(1.1) drop-shadow(0 0 1px rgb(0 0 0 / 0.4));
+  }
+</style>

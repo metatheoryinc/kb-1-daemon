@@ -13,6 +13,7 @@
     "dev:daemon": "pnpm --filter @kb-2/daemon dev",
     "dev:web": "pnpm --filter @kb-2/web dev",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
+    "storybook": "pnpm --filter @kb-2/ui storybook",
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck"
   },
