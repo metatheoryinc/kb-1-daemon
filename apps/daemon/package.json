@@ -6,6 +6,9 @@
   "bin": {
     "kb2d": "./dist/main.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/main.ts",

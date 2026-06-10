@@ -44,11 +44,12 @@ Compose builds the daemon image and runs the compiled `dist/main.js` inside the
 container. Source is copied into the image during `docker compose up --build`;
 code changes require rerunning `pnpm docker:up`.
 
-The Docker image does not reuse host `node_modules`. The Dockerfile copies only
-package metadata and source into the Linux image, runs
-`pnpm install --frozen-lockfile` inside that image, builds there, and then copies
-the Linux-installed dependencies into the runtime stage. Platform-specific npm
-packages are therefore selected for the container platform, not macOS.
+The Docker image does not reuse host `node_modules`. The Dockerfile installs and
+builds inside Linux, then the runtime stage performs a production-only
+`pnpm install --prod --frozen-lockfile --filter @kb-2/daemon` and copies only the
+compiled daemon output from the build stage. Platform-specific npm packages are
+therefore selected for the container platform, not macOS, and dev/build tools do
+not need to ship in the runtime image.
 
 For an outside-the-container smoke:
 

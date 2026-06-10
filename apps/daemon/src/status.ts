@@ -31,11 +31,27 @@ export async function writeDaemonStatus(config: DaemonConfig): Promise<DaemonSta
 
 export async function readDaemonStatus(statusFile: string): Promise<DaemonStatus> {
   const contents = await readFile(statusFile, 'utf8');
-  const parsed = JSON.parse(contents) as Partial<DaemonStatus>;
+  const parsed = JSON.parse(contents) as unknown;
 
-  if (!parsed.serviceName || !parsed.kb2Home || !parsed.daemonHome || !parsed.statusFile) {
+  if (!isDaemonStatus(parsed)) {
     throw new Error(`Daemon status file is missing required fields: ${statusFile}`);
   }
 
-  return parsed as DaemonStatus;
+  return parsed;
+}
+
+function isDaemonStatus(value: unknown): value is DaemonStatus {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const status = value as Record<string, unknown>;
+
+  return typeof status.serviceName === 'string'
+    && typeof status.startedAt === 'string'
+    && typeof status.kb2Home === 'string'
+    && typeof status.daemonHome === 'string'
+    && typeof status.statusFile === 'string'
+    && typeof status.pid === 'number'
+    && typeof status.nodeVersion === 'string';
 }

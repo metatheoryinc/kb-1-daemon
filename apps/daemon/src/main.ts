@@ -14,37 +14,56 @@ export interface StartedDaemon {
 
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
-  const status = await writeDaemonStatus(config);
   const app = createApp({ statusFile: config.statusFile });
 
-  const server = serve(
-    {
-      fetch: app.fetch,
-      hostname: config.host,
-      port: config.port
-    },
-    (info) => {
-      console.log(`${config.serviceName} listening on http://${info.address}:${info.port}`);
-      console.log(`KB2_HOME=${config.kb2Home}`);
-      console.log(`status=${config.statusFile}`);
-    }
-  );
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error: Error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    };
 
-  return {
-    config,
-    status,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
+    const server = serve(
+      {
+        fetch: app.fetch,
+        hostname: config.host,
+        port: config.port
+      },
+      async (info) => {
+        try {
+          const status = await writeDaemonStatus(config);
+          settled = true;
 
-          resolve();
-        });
-      })
-  };
+          console.log(`${config.serviceName} listening on http://${info.address}:${info.port}`);
+          console.log(`KB2_HOME=${config.kb2Home}`);
+          console.log(`status=${config.statusFile}`);
+
+          resolve({
+            config,
+            status,
+            close: () =>
+              new Promise((closeResolve, closeReject) => {
+                server.close((error) => {
+                  if (error) {
+                    closeReject(error);
+                    return;
+                  }
+
+                  closeResolve();
+                });
+              })
+          });
+        } catch (error) {
+          server.close();
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    );
+
+    server.once('error', fail);
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
