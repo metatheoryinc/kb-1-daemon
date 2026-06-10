@@ -23,7 +23,33 @@ The root `.env` only disables Nx implicit env loading with
 
 ## Docker
 
-The initial Docker path is a runnable daemon image:
+The initial Docker path supports both direct image runs and a Compose-backed
+development container.
+
+For the standard development container:
+
+```bash
+pnpm dev:docker
+```
+
+This starts `kb-2-daemon-dev`, maps host port `17382` to container port `7382`,
+and mounts the repo-local `.kb2-docker/` directory to `/data/kb2` inside the
+container. The daemon status file is therefore visible at:
+
+```text
+.kb2-docker/daemon/status.json
+```
+
+For a detached container that stays visible in Docker Desktop:
+
+```bash
+pnpm dev:docker:detached
+curl http://127.0.0.1:17382/health
+cat .kb2-docker/daemon/status.json
+pnpm dev:docker:down
+```
+
+The direct image path is also available:
 
 ```bash
 docker build -f apps/daemon/Dockerfile -t kb-2-daemon .
