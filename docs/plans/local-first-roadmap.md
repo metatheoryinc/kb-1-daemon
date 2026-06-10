@@ -47,6 +47,19 @@ prove local content authority and local UX before remote relay.
 Chunks 003 and 004 are independent (daemon substrate vs frontend library) and
 can be implemented in parallel once chunk 002 lands.
 
+## KB-1 As Reference
+
+KB-1 is mature and in daily production use, and most KB-2 concerns have a
+KB-1 counterpart. Every chunk should ask "what does KB-1 already do here?"
+before inventing: borrow algorithms, protocols, test patterns, and UI
+patterns where they fit, and adapt deliberately where the custody model
+differs (filesystem-canonical instead of hosted substrate). Chunk plans
+should name the relevant KB-1 areas, and implementers should read them before
+building. KB-1 is available as a sibling checkout of this repo; notable
+areas: the vault-channel Durable Object and its frame protocol (Yjs document
+sessions), `packages/@kb-1/collab-merge`, the MCP tools, the web app's
+component/Storybook system, and the e2e co-editing specs.
+
 ## Invariants
 
 - The local daemon/server remains the only legitimate runtime writer.
