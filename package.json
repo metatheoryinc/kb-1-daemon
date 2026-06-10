@@ -12,14 +12,20 @@
     "dev": "node scripts/dev.mjs",
     "dev:daemon": "pnpm --filter @kb-2/daemon dev",
     "dev:web": "pnpm --filter @kb-2/web dev",
+    "smoke:yjs": "node scripts/yjs-smoke.mjs",
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck"
   },
   "devDependencies": {
+    "@types/ws": "8.18.1",
     "@types/node": "25.9.2",
+    "lib0": "0.2.117",
     "nx": "22.7.5",
     "tsx": "4.22.4",
     "typescript": "6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "4.1.8",
+    "ws": "8.21.0",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   }
 }

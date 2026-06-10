@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { OneFileDocumentSession } from '@kb-2/doc-session';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -115,6 +116,50 @@ describe('daemon routing', () => {
     expect(body).toEqual({ ok: false, error: 'Not found' });
 
     await rm(webBuildDir, { force: true, recursive: true });
+  });
+
+  it('reads and resets the one-file demo document through the daemon API', async () => {
+    const config = createDaemonConfig({
+      env: {
+        KB2_HOME: kb2Home
+      }
+    });
+    const documentSession = new OneFileDocumentSession(config.demoDocumentFile, { defaultContent: 'route seed\n' });
+    await documentSession.open();
+
+    const app = createApp({
+      statusFile: config.statusFile,
+      demoDocumentSession: documentSession
+    });
+
+    const readResponse = await app.request('/api/demo-document');
+    const readBody = await readResponse.json();
+
+    expect(readResponse.status).toBe(200);
+    expect(readBody).toEqual({
+      ok: true,
+      document: 'demo-vault/hello-world.md',
+      content: 'route seed\n'
+    });
+
+    const resetResponse = await app.request('/api/demo-document/reset', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ content: 'route reset\n' })
+    });
+    const resetBody = await resetResponse.json();
+
+    expect(resetResponse.status).toBe(200);
+    expect(resetBody).toEqual({
+      ok: true,
+      document: 'demo-vault/hello-world.md',
+      content: 'route reset\n'
+    });
+    await expect(readFile(config.demoDocumentFile, 'utf8')).resolves.toBe('route reset\n');
+
+    await documentSession.close();
   });
 
   it('proxies non-API requests to the configured Vite dev server', async () => {

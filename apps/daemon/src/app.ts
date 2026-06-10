@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { OneFileDocumentSession } from '@kb-2/doc-session';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
@@ -7,6 +8,7 @@ import { readDaemonStatus } from './status.js';
 
 export interface CreateAppOptions {
   statusFile: string;
+  demoDocumentSession?: OneFileDocumentSession;
   webBuildDir?: string;
   webProxyTarget?: string;
 }
@@ -24,6 +26,29 @@ export function createApp(options: CreateAppOptions): Hono {
       status
     });
   });
+
+  if (options.demoDocumentSession) {
+    api.get('/demo-document', async (context) => {
+      const content = await options.demoDocumentSession!.getContent();
+
+      return context.json({
+        ok: true,
+        document: 'demo-vault/hello-world.md',
+        content
+      });
+    });
+
+    api.post('/demo-document/reset', async (context) => {
+      const requestedContent = await readOptionalJsonContent(context.req.raw);
+      const content = await options.demoDocumentSession!.reset(requestedContent);
+
+      return context.json({
+        ok: true,
+        document: 'demo-vault/hello-world.md',
+        content
+      });
+    });
+  }
 
   app.route('/api', api);
 
@@ -51,6 +76,15 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   return app;
+}
+
+async function readOptionalJsonContent(request: Request): Promise<string | undefined> {
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return undefined;
+  }
+
+  const body = await request.json().catch(() => undefined) as { content?: unknown } | undefined;
+  return typeof body?.content === 'string' ? body.content : undefined;
 }
 
 async function proxyUi(webProxyTarget: string, request: Request): Promise<Response> {

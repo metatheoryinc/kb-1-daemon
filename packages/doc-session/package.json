@@ -1,27 +1,32 @@
 {
-  "name": "@kb-2/daemon",
+  "name": "@kb-2/doc-session",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "kb2d": "./dist/main.js"
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/doc-session": "workspace:*",
-    "@hono/node-server": "2.0.4",
-    "hono": "4.12.25",
-    "ws": "8.21.0"
+    "lib0": "0.2.117",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   },
   "devDependencies": {
+    "vitest": "4.1.8",
+    "ws": "8.21.0",
     "@types/ws": "8.18.1"
   }
 }

@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +37,40 @@ describe('daemon startup', () => {
 
     await close(blocker);
   });
+
+  it('creates and serves the demo document on startup', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(port)
+    };
+
+    const started = await startDaemon();
+    const response = await fetch(`http://127.0.0.1:${port}/api/demo-document`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      document: 'demo-vault/hello-world.md'
+    });
+    expect(typeof body.content).toBe('string');
+    expect(body.content).toContain('Hello KB-2');
+    await expect(readFile(started.config.demoDocumentFile, 'utf8')).resolves.toBe(body.content);
+
+    await started.close();
+  });
 });
+
+async function reservePort(): Promise<number> {
+  const server = createServer();
+  await listen(server);
+  const port = (server.address() as AddressInfo).port;
+  await close(server);
+  return port;
+}
 
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
