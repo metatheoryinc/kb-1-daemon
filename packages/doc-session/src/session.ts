@@ -101,7 +101,9 @@ export class OneFileDocumentSession {
   }
 
   private readonly handleDocumentUpdate = (): void => {
-    void this.requestPersist();
+    this.requestPersist().catch((error: unknown) => {
+      console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
+    });
   };
 
   private requestPersist(): Promise<void> {
