@@ -17,7 +17,6 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from 'svelte';
   import Badge from '../primitives/Badge.svelte';
   import BrandMark from '../primitives/BrandMark.svelte';
   import { Button } from '../button';
@@ -25,35 +24,15 @@
 
   let {
     routeLabel = 'Local daemon',
-    health = $bindable<HealthResponse | null>(null),
-    error = $bindable<string | null>(null),
-    loading = $bindable(true),
-    fetchHealth = true,
+    health = null,
+    error = null,
+    loading = true,
   } = $props<{
     routeLabel?: string;
     health?: HealthResponse | null;
     error?: string | null;
     loading?: boolean;
-    fetchHealth?: boolean;
   }>();
-
-  onMount(async () => {
-    if (!fetchHealth) return;
-
-    try {
-      const response = await fetch('/api/health');
-
-      if (!response.ok) {
-        throw new Error(`Health request failed with ${response.status}`);
-      }
-
-      health = (await response.json()) as HealthResponse;
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      loading = false;
-    }
-  });
 </script>
 
 <main class="status-shell">

@@ -22,15 +22,6 @@
     tone?: AvatarTone;
     title?: string;
     ariaLabel?: string;
-    /**
-     * When true, draws a 2px accent-colored ring around the avatar
-     * via box-shadow. Lives on the avatar (not on a wrapper button)
-     * so the ring follows the avatar's natural rounded-square radius
-     * — earlier wrapper-level rings forced a 50% radius that didn't
-     * match the avatar inside, producing a visible "circle jammed on
-     * top of a rounded square" effect.
-     */
-    followed?: boolean;
   }
 
   let {
@@ -43,7 +34,6 @@
     tone,
     title,
     ariaLabel,
-    followed = false,
   }: Props = $props();
 
   let imageFailed = $state(false);
@@ -75,7 +65,6 @@
   class="avatar"
   class:soft={resolvedTone === 'soft'}
   class:pastel={resolvedTone === 'pastel'}
-  class:followed
   style="--rd-accent: var(--rd-{accent}); --rd-accent-bg: var(--rd-{accent}-bg); width: {size}px; height: {size}px; border-radius: {radius}px;"
   role={label ? 'img' : undefined}
   aria-label={label}
@@ -112,15 +101,6 @@
 </span>
 
 <style>
-  /* IMPORTANT: kb-1's plaintext mentions mount this component directly
-     via a CM6 WidgetType (see plaintext-mention-widget.ts). The
-     chip wrapper around the Avatar is `MentionChip.svelte`; the
-     accent is threaded via `accentForId(resolved.id)` — same hash
-     `<UserAvatar userId={...}>` uses — so the same person paints in
-     the same accent across the editor chip, HISTORY panel, byline,
-     and file rows. The Crepe-side mention chip in <MarkdownEditor>
-     still ships as CSS only (`mention-decoration-plugin.ts`); the
-     unification arc across both editors is the follow-on. */
   .avatar {
     position: relative;
     display: inline-grid;
@@ -178,17 +158,4 @@
     opacity: 0.55;
   }
 
-  /* Followed-ring: 2px halo in the accent color around the avatar.
-     Drawn via box-shadow on the avatar itself so the ring inherits
-     the avatar's rounded-square radius without any geometry hacks
-     on wrapper elements. The inner 1.5px white shadow gives a
-     small breathing gap so the ring reads as a band, not a fattened
-     border. `overflow: hidden` on the avatar would clip it; we
-     inset-clip the box-shadow inward instead by stacking two
-     shadows. */
-  .followed {
-    box-shadow:
-      0 0 0 1.5px var(--rd-panel),
-      0 0 0 3px color-mix(in srgb, var(--rd-accent) 70%, transparent);
-  }
 </style>

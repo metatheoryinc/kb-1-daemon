@@ -27,15 +27,13 @@ type Story = StoryObj<typeof meta>;
 export const Online: Story = {
   args: {
     health,
-    loading: false,
-    fetchHealth: false
+    loading: false
   }
 };
 
 export const Unavailable: Story = {
   args: {
     error: 'Health request failed with 503',
-    loading: false,
-    fetchHealth: false
+    loading: false
   }
 };

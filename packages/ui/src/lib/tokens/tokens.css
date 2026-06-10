@@ -4,14 +4,8 @@
    (warm greige). Components reference vars semantically, so a future dark
    mode is one more [data-rd-palette="dark"] block away — no component edits.
 
-   The fonts intentionally differ from the main app: the redesign reference
-   uses Inter Tight + Source Serif 4 + JetBrains Mono. Loaded once here so any
-   surface that imports tokens.css gets them. */
-
-/* Inter Tight + JetBrains Mono are CDN-loaded for now, matching the KB-1
-   token baseline. Source Serif falls back to local/system serif faces unless
-   a consuming app imports the font explicitly. */
-@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+   The font stacks name the preferred faces but do not load external font
+   resources; local-first review surfaces should not require a CDN. */
 
 :root {
   /* surfaces — porcelain (default) */
