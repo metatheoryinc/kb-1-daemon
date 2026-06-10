@@ -10,6 +10,7 @@
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@kb-2/ui": "workspace:*",
     "svelte": "catalog:"
   },
   "devDependencies": {
