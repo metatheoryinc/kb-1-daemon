@@ -7,10 +7,9 @@
   "scripts": {
     "build": "nx run-many -t build",
     "check": "pnpm typecheck && pnpm test",
+    "docker:down": "docker compose down",
+    "docker:up": "docker compose up --build -d daemon",
     "dev:daemon": "pnpm --filter @kb-2/daemon dev",
-    "dev:docker": "docker compose up --build daemon",
-    "dev:docker:detached": "docker compose up --build -d daemon",
-    "dev:docker:down": "docker compose down",
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck"
   },

@@ -29,7 +29,7 @@ development container.
 For the standard development container:
 
 ```bash
-pnpm dev:docker
+pnpm docker:up
 ```
 
 This starts `kb-2-daemon-dev`, maps host port `17382` to container port `7382`,
@@ -40,13 +40,23 @@ container. The daemon status file is therefore visible at:
 .kb2-docker/daemon/status.json
 ```
 
-For a detached container that stays visible in Docker Desktop:
+Compose builds the daemon image and runs the compiled `dist/main.js` inside the
+container. Source is copied into the image during `docker compose up --build`;
+code changes require rerunning `pnpm docker:up`.
+
+The Docker image does not reuse host `node_modules`. The Dockerfile copies only
+package metadata and source into the Linux image, runs
+`pnpm install --frozen-lockfile` inside that image, builds there, and then copies
+the Linux-installed dependencies into the runtime stage. Platform-specific npm
+packages are therefore selected for the container platform, not macOS.
+
+For an outside-the-container smoke:
 
 ```bash
-pnpm dev:docker:detached
+pnpm docker:up
 curl http://127.0.0.1:17382/health
 cat .kb2-docker/daemon/status.json
-pnpm dev:docker:down
+pnpm docker:down
 ```
 
 The direct image path is also available:
