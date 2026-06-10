@@ -141,6 +141,9 @@ After implementation is reported complete:
 
 - the implementer runs `pnpm check` and the manual verification flow above and
   reports actual output, not expected output
+- UI-facing criteria are verified in a real browser (rendered DOM observed,
+  via browser tooling or headless Chrome) — curl on the HTML shell does not
+  count as UI verification; the report states what was visibly rendered
 - a fresh reviewer who did not implement the chunk audits the diff against the
   acceptance criteria and the invariants in `docs/architecture/invariants/`
 - any deviation from this plan is listed explicitly in the review summary
