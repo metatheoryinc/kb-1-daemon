@@ -119,9 +119,20 @@ same UI/API from the exposed daemon port.
   Tailwind 4. This keeps the chunk 004 component import a copy, not a port.
 - The UI uses `@sveltejs/adapter-static` with a SPA fallback page so client
   routes survive browser refresh when served by the daemon (criterion 7).
-- Development runs two processes: the SvelteKit/Vite dev server proxies
-  `/api/*` to the daemon. The daemon serves the built static UI and contains
-  no dev-proxy code; dev-only plumbing stays out of the product.
+- The daemon is always the front door, in development and production alike:
+  one process the user starts, one port, UI and API together. When the
+  dev-only env var `KB2_WEB_PROXY_TARGET` is set (e.g. to the Vite dev server
+  URL), the daemon proxies non-`/api` HTTP requests there; otherwise it serves
+  the built static UI. Vite's HMR websocket connects directly to the Vite port
+  via `server.hmr.clientPort`, keeping the daemon proxy HTTP-only and small.
+  A root `pnpm dev` starts Vite and the daemon (with the proxy target set)
+  with one command, so the dev experience is: run one command, open the
+  daemon port. When neither a build nor a proxy target exists, non-API routes
+  return a clear instructional message, not a 500.
+  (Amended during review: the original decision kept proxy code out of the
+  daemon, but "the daemon port is the product, always" is the product
+  experience KB-2 wants, and the isomorphic dev/prod routing surfaces bugs
+  earlier.)
 - No UI build/version route in this chunk.
 
 ## Verification
