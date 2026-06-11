@@ -8,6 +8,13 @@
   (wrangler, Hono, DO mixins with storage/hibernation, better-auth,
   SvelteKit SPA), AGENTS.md submodule contract. Cloud chunks get their own
   numbering in the private repo.
+- **Cloud invariants convention** (right after cloud-001 merges): kb-1-cloud
+  gets its own `docs/architecture/invariants/` in the daemon's style —
+  shared engineering invariants apply verbatim (frontend/Storybook
+  especially), plus Cloudflare-specific ones: DOs compose the battle-tested
+  mixins (storage/hibernation/alarms never hand-rolled), DO concurrency
+  stays simple and unpoked, state survives eviction via the storage mixin.
+  Commander-authored; AGENTS.md points at them.
 - **Cloud-002 — relay de-risk spike**: prove the CF Worker/DO tunnel — HTTP
   through outbound WS, and the Yjs WebSocket relayed end-to-end with two
   browsers on the cloud URL. Deliverable: latency numbers + the list of CF
