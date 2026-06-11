@@ -47,7 +47,15 @@ inventing.
 - **Codex agents idle by default.** They end turns after acknowledging;
   inbox delivery doesn't reliably wake them. The working protocol: spawn,
   nudge immediately, keep nudging until the worktree shows actual changes.
-  Ground truth is files, not status lines.
+  Ground truth is files, not status lines. Verified harder on cloud-001:
+  a PARKED agent never wakes from messages at all — the fallback that works
+  is archive + respawn a fresh agent with a self-contained fix brief
+  (pickup was immediate, fixes landed in six minutes).
+- **The audit refuted a tooling-limitation claim.** Cloud-001's implementer
+  declared DO eviction untestable ("no primitive in vitest-pool-workers");
+  the independent auditor wrote a scratch test proving `state.abort()`
+  forces a real restart, and the required fix landed same-hour. Deviations
+  claiming "the tools can't" are now audit targets, not accepted facts.
 - **The user reviews against invariants and wins.** The gallery-story ruling
   (a component appearing in a gallery is not a per-component story) came from
   the user applying the Storybook invariant more strictly than the audit did;
