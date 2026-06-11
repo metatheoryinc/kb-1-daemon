@@ -67,8 +67,17 @@ with the previous commander so they do not have to repeat any of it.
   shows work ("your next status should say what you BUILT" is the phrasing
   that works).
 - **Agents park deaf after reporting waiting_for_review**: change requests
-  sit unread; always follow them with a "wake up, you have an unread change
-  request" message, and verify pickup within ~3 min.
+  sit unread; follow with a "wake up" message and verify pickup within ~3
+  min. VERIFIED 2026-06-11: inbox messages do NOT wake a parked Codex
+  session at all (3 nudges, 30 min, all unread). The working fallback:
+  archive the parked agent (its branch must be pushed first — verify), and
+  spawn a FRESH fix-round agent whose brief is fully self-contained (audit
+  findings inlined, fetch + worktree-add commands included). Pickup was
+  immediate.
+- **Worktrees containing submodules cannot be removed by git** (`git
+  worktree remove` hard-fails). Cleanup is `rm -rf <worktree-dir> && git -C
+  <main checkout> worktree prune` after verifying the tree is clean and the
+  branch is pushed. Applies to all kb-1-cloud worktrees.
 - **Poll checklist, every wakeup** (use background `sleep N` tasks, 150-300s,
   as timers): (1) `fleet_read_inbox` — delivery to this session is
   pull-based; notifications do NOT wake you (the user has attempted an
