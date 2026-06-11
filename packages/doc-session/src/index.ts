@@ -6,7 +6,9 @@ export {
   type OneFileDocumentSessionOptions
 } from './session.js';
 export {
+  DEFAULT_IDLE_SESSION_GRACE_MS,
   DocumentSessionManager,
+  type ClientDocumentSession,
   type DocumentSessionManagerOptions
 } from './manager.js';
 export {

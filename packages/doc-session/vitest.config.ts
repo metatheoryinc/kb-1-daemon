@@ -9,7 +9,7 @@ export default defineConfig({
       reporter: ['text'],
       include: ['src/manager.ts'],
       thresholds: {
-        lines: 90
+        lines: 95
       }
     }
   }

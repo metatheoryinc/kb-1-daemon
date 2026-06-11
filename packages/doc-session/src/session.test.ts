@@ -107,6 +107,66 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('issues baselines, rejects stale baseline edits with current content, and retries with the fresh baseline', async () => {
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'one two three\n' });
+    await session.open();
+
+    const firstRead = await session.readWithBaseline();
+    expect(firstRead).toMatchObject({ content: 'one two three\n' });
+    expect(firstRead.baseline.length).toBeGreaterThan(0);
+
+    await session.applyContentEdit((current) => current.replace('two', 'TWO'));
+    const stale = await session.applyBaselineEdit(firstRead.baseline, (current) => ({
+      ok: true,
+      content: current.replace('three', 'THREE')
+    }));
+
+    expect(stale).toMatchObject({
+      ok: false,
+      rejected: 'stale_doc',
+      current_content: 'one TWO three\n'
+    });
+    if (stale.ok || stale.rejected !== 'stale_doc') throw new Error('expected stale_doc');
+    if (typeof stale.baseline !== 'string') throw new Error('expected fresh baseline');
+    expect(stale.baseline).not.toBe(firstRead.baseline);
+
+    const retry = await session.applyBaselineEdit(stale.baseline, (current) => ({
+      ok: true,
+      content: current.replace('three', 'THREE')
+    }));
+    expect(retry).toMatchObject({
+      ok: true,
+      content: 'one TWO THREE\n'
+    });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('one TWO THREE\n');
+    await session.close();
+  });
+
+  it('applies a baseline edit through the session Y.Text so concurrent Yjs updates survive', async () => {
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'alpha\nomega\n' });
+    await session.open();
+    const read = await session.readWithBaseline();
+
+    const clientDoc = new Y.Doc();
+    Y.applyUpdate(clientDoc, Y.encodeStateAsUpdate(session.ydoc), session);
+    clientDoc.getText('markdown').insert('alpha\n'.length, 'typed while splice lands\n');
+    const inFlightUpdate = Y.encodeStateAsUpdate(clientDoc, Y.encodeStateVector(session.ydoc));
+
+    const splice = await session.applyBaselineEdit(read.baseline, (current) => ({
+      ok: true,
+      content: current.replace('omega', 'agent splice')
+    }));
+    expect(splice).toMatchObject({ ok: true, content: 'alpha\nagent splice\n' });
+
+    Y.applyUpdate(session.ydoc, inFlightUpdate, clientDoc);
+    await session.flush();
+
+    const persisted = await readFile(filePath, 'utf8');
+    expect(persisted).toContain('typed while splice lands\n');
+    expect(persisted).toContain('agent splice\n');
+    await session.close();
+  });
+
   it('rebuilds a fresh session from the last materialized content', async () => {
     const firstSession = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await firstSession.open();
@@ -403,6 +463,125 @@ describe('OneFileDocumentSession', () => {
     })).resolves.toEqual([]);
     expect(deleted).toBe(true);
     await manager.close();
+  });
+
+  it('keeps a released client session alive through the idle grace and closes it after', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 80
+    });
+    const first = manager.attachClientSession('idle.md');
+    await first.session.open();
+    first.release();
+
+    const second = manager.attachClientSession('idle.md');
+    expect(second.session).toBe(first.session);
+    second.release();
+
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for idle close; count=${manager.getOpenSessionCount()}`
+    );
+    await manager.close();
+  });
+
+  it('flushes a pending client edit before idle close removes the session', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: '',
+      idleSessionGraceMs: 1
+    });
+    const lease = manager.attachClientSession('flush-before-close.md');
+    await lease.session.open();
+    lease.session.ydoc.getText('markdown').insert(0, 'pending before close\n');
+    lease.release();
+
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for idle close; count=${manager.getOpenSessionCount()}`
+    );
+    await expect(readFile(join(kb2Home, 'demo-vault', 'flush-before-close.md'), 'utf8'))
+      .resolves.toBe('pending before close\n');
+    await manager.close();
+  });
+
+  it('hydrates API sessions with default content, keeps them through idle grace, then closes them', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      idleSessionGraceMs: 20
+    });
+
+    const result = await manager.withSession(
+      'api-created.md',
+      async (session) => {
+        await session.open();
+        return session.getContent();
+      },
+      { defaultContent: '' }
+    );
+
+    expect(result).toBe('');
+    expect(manager.getOpenSession('api-created.md')).toBeDefined();
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for API session idle close; count=${manager.getOpenSessionCount()}`
+    );
+    await manager.close();
+  });
+
+  it('does not idle-close an API-touched session while a client is attached', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: 'client\n',
+      idleSessionGraceMs: 10
+    });
+    const lease = manager.attachClientSession('client-held.md');
+    await lease.session.open();
+
+    await manager.withSession('client-held.md', async (session) => {
+      expect(session).toBe(lease.session);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(manager.getOpenSession('client-held.md')).toBe(lease.session);
+
+    lease.release();
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for released client idle close; count=${manager.getOpenSessionCount()}`
+    );
+    await manager.close();
+  });
+
+  it('moves a single live manager session and updates the path registry', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: ''
+    });
+    const session = manager.getSession('single-move.md');
+    await session.open();
+    session.ydoc.getText('markdown').insert(0, 'single\n');
+    await session.flush();
+
+    await expect(manager.moveSession('single-move.md', 'moved-single.md', async () => {
+      await rename(join(kb2Home, 'demo-vault', 'single-move.md'), join(kb2Home, 'demo-vault', 'moved-single.md'));
+    })).resolves.toBe(true);
+
+    expect(manager.getOpenSession('single-move.md')).toBeUndefined();
+    expect(manager.getOpenSession('moved-single.md')).toBe(session);
+    await expect(readFile(join(kb2Home, 'demo-vault', 'moved-single.md'), 'utf8')).resolves.toBe('single\n');
+    await manager.close();
+  });
+
+  it('clears pending idle timers when the manager closes', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: '',
+      idleSessionGraceMs: 10_000
+    });
+    await manager.withSession('timer.md', async (session) => {
+      await session.open();
+    });
+    expect(manager.getOpenSession('timer.md')).toBeDefined();
+
+    await manager.close();
+    expect(manager.getOpenSessionCount()).toBe(0);
   });
 
   it('deletes every live session under a folder subtree once after the disk delete', async () => {

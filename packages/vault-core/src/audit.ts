@@ -6,7 +6,15 @@ export interface VaultActor {
   client?: string;
 }
 
-export type AuditOperation = 'create' | 'write' | 'mkdir' | 'delete' | 'move';
+export type AuditOperation =
+  | 'create'
+  | 'write'
+  | 'mkdir'
+  | 'delete'
+  | 'move'
+  | 'splice'
+  | 'append'
+  | 'prepend';
 export type AuditEntityKind = 'file' | 'folder';
 
 export interface AuditEntry {

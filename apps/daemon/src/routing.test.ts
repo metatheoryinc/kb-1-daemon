@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as Y from 'yjs';
 
@@ -396,6 +396,148 @@ describe('daemon routing', () => {
     await sessions.close();
   });
 
+  it('serves baselines and applies agent splice with stale retry through live sessions', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    await writeFileWithParents(join(config.vaultRoot, 'notes', 'splice.md'), 'one two three\n');
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+
+    const read = await app.request('/api/files/notes/splice.md');
+    expect(read.status).toBe(200);
+    const readBody = await read.json() as { content: string; baseline: string };
+    expect(readBody.content).toBe('one two three\n');
+    expect(readBody.baseline.length).toBeGreaterThan(0);
+
+    const firstSplice = await app.request('/api/files/notes/splice.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseline: readBody.baseline,
+        old_text: 'two',
+        new_text: 'TWO'
+      })
+    });
+    expect(firstSplice.status).toBe(200);
+    const firstBody = await firstSplice.json() as { content: string; baseline: string };
+    expect(firstBody.content).toBe('one TWO three\n');
+    await expect(readFile(join(config.vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO three\n');
+
+    const stale = await app.request('/api/files/notes/splice.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseline: readBody.baseline,
+        old_text: 'three',
+        new_text: 'THREE'
+      })
+    });
+    expect(stale.status).toBe(409);
+    const staleBody = await stale.json() as { rejected: string; current_content: string; baseline: string };
+    expect(staleBody).toMatchObject({
+      rejected: 'stale_doc',
+      current_content: 'one TWO three\n'
+    });
+    expect(staleBody.baseline).not.toBe(readBody.baseline);
+
+    const retry = await app.request('/api/files/notes/splice.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseline: staleBody.baseline,
+        old_text: 'three',
+        new_text: 'THREE'
+      })
+    });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ ok: true, content: 'one TWO THREE\n' });
+    await expect(readFile(join(config.vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO THREE\n');
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(2);
+    expect(audit.map((row) => row.operation)).toEqual(['splice', 'splice']);
+    expect(audit.every((row) => (row.actor as { kind?: string }).kind === 'mcp_client')).toBe(true);
+    await sessions.close();
+  });
+
+  it('applies anchored splice disambiguation and structured rejections', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    await writeFileWithParents(join(config.vaultRoot, 'ambiguous.md'), 'foo bar foo baz foo');
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const read = await (await app.request('/api/files/ambiguous.md')).json() as { baseline: string };
+
+    const ambiguous = await app.request('/api/files/ambiguous.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseline: read.baseline, old_text: 'foo', new_text: 'FOO' })
+    });
+    expect(ambiguous.status).toBe(409);
+    await expect(ambiguous.json()).resolves.toMatchObject({ ok: false, rejected: 'ambiguous', match_count: 3 });
+
+    const occurrence = await app.request('/api/files/ambiguous.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseline: read.baseline, old_text: 'foo', new_text: 'FOO', occurrence: 2 })
+    });
+    expect(occurrence.status).toBe(200);
+    await expect(readFile(join(config.vaultRoot, 'ambiguous.md'), 'utf8')).resolves.toBe('foo bar FOO baz foo');
+
+    const reread = await (await app.request('/api/files/ambiguous.md')).json() as { baseline: string };
+    const notFound = await app.request('/api/files/ambiguous.md/splice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseline: reread.baseline, old_text: 'missing', new_text: 'x' })
+    });
+    expect(notFound.status).toBe(404);
+    await expect(notFound.json()).resolves.toMatchObject({ ok: false, rejected: 'not_found' });
+    await sessions.close();
+  });
+
+  it('appends missing files, prepends after frontmatter, searches with context, and does not audit search', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+
+    const append = await app.request('/api/files/notes/new.md/append', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'created by append\n' })
+    });
+    expect(append.status).toBe(200);
+    await expect(append.json()).resolves.toMatchObject({ ok: true, path: 'notes/new.md', content: 'created by append\n' });
+    await expect(readFile(join(config.vaultRoot, 'notes/new.md'), 'utf8')).resolves.toBe('created by append\n');
+
+    await writeFileWithParents(join(config.vaultRoot, 'notes/front.md'), '---\ntitle: Front\n---\nbody\n');
+    const prepend = await app.request('/api/files/notes/front.md/prepend', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'inserted\n' })
+    });
+    expect(prepend.status).toBe(200);
+    await expect(readFile(join(config.vaultRoot, 'notes/front.md'), 'utf8')).resolves.toBe(
+      '---\ntitle: Front\n---\ninserted\nbody\n'
+    );
+
+    await writeFileWithParents(join(config.vaultRoot, 'notes/deep/search.md'), 'before\nneedle here\nafter\n');
+    await writeFileWithParents(join(config.vaultRoot, '.kb2/trash/hidden.md'), 'needle hidden\n');
+    const search = await app.request('/api/search?q=NEEDLE&under=notes&context=1&limit=5');
+    expect(search.status).toBe(200);
+    await expect(search.json()).resolves.toMatchObject({
+      ok: true,
+      total: 1,
+      results: [{
+        path: 'notes/deep/search.md',
+        line: 2,
+        lineText: 'needle here',
+        context: { before: ['before'], after: ['after'] }
+      }]
+    });
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit.map((row) => row.operation)).toEqual(['append', 'prepend']);
+    await sessions.close();
+  });
+
   it('keeps live move failures classified and resumes old-path watching', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({
@@ -549,6 +691,11 @@ function close(server: ReturnType<typeof createServer>): Promise<void> {
 async function readAuditRows(root: string): Promise<Array<Record<string, unknown>>> {
   const content = await readFile(join(root, '.kb2/audit/changes.jsonl'), 'utf8');
   return content.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function writeFileWithParents(filePath: string, content: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, content, 'utf8');
 }
 
 async function waitUntil(
