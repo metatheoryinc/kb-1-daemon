@@ -8,12 +8,16 @@ export type DocumentSessionEventKind =
   | 'external-merge'
   | 'external-change'
   | 'persist-failure'
-  | 'persist-recovered';
+  | 'persist-recovered'
+  | 'doc-moved'
+  | 'doc-deleted';
 
 export interface DocumentSessionEvent {
   kind: DocumentSessionEventKind;
   path: string;
   ts: number;
+  fromPath?: string;
+  toPath?: string;
 }
 
 export function encodeSessionEvent(event: DocumentSessionEvent): Uint8Array {
@@ -31,7 +35,9 @@ export function decodeSessionEvent(
   if (
     !isSessionEventKind(parsed.kind) ||
     typeof parsed.path !== 'string' ||
-    typeof parsed.ts !== 'number'
+    typeof parsed.ts !== 'number' ||
+    (parsed.fromPath !== undefined && typeof parsed.fromPath !== 'string') ||
+    (parsed.toPath !== undefined && typeof parsed.toPath !== 'string')
   ) {
     return undefined;
   }
@@ -40,6 +46,8 @@ export function decodeSessionEvent(
     kind: parsed.kind,
     path: parsed.path,
     ts: parsed.ts,
+    ...(parsed.fromPath !== undefined ? { fromPath: parsed.fromPath } : {}),
+    ...(parsed.toPath !== undefined ? { toPath: parsed.toPath } : {}),
   };
 }
 
@@ -47,5 +55,7 @@ function isSessionEventKind(kind: unknown): kind is DocumentSessionEventKind {
   return kind === 'external-merge' ||
     kind === 'external-change' ||
     kind === 'persist-failure' ||
-    kind === 'persist-recovered';
+    kind === 'persist-recovered' ||
+    kind === 'doc-moved' ||
+    kind === 'doc-deleted';
 }

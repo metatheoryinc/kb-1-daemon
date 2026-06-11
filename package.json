@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "nx run-many -t build",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check": "node scripts/check.mjs",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build -d daemon",
     "dev": "node scripts/dev.mjs",

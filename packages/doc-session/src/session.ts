@@ -29,6 +29,7 @@ export interface DocumentSessionWarning {
 
 export interface OneFileDocumentSessionOptions {
   defaultContent?: string;
+  eventPath?: string;
   warn?: (warning: DocumentSessionWarning) => void;
   watchDebounceMs?: number;
   watchPollMs?: number;
@@ -37,9 +38,10 @@ export interface OneFileDocumentSessionOptions {
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 
 export class OneFileDocumentSession {
-  readonly filePath: string;
+  filePath: string;
 
   private readonly defaultContent: string;
+  private eventPath: string;
   private readonly warn: (warning: DocumentSessionWarning) => void;
   private readonly watchDebounceMs: number;
   private readonly watchPollMs: number;
@@ -59,9 +61,12 @@ export class OneFileDocumentSession {
   private watchDebounceTimer: NodeJS.Timeout | undefined;
   private watchPollTimer: NodeJS.Timeout | undefined;
   private externalCheckPromise: Promise<void> | undefined;
+  private pathTransitionPromise: Promise<void> | undefined;
+  private deleted = false;
 
   constructor(filePath: string, options: OneFileDocumentSessionOptions = {}) {
     this.filePath = filePath;
+    this.eventPath = options.eventPath ?? filePath;
     this.defaultContent = options.defaultContent ?? DEFAULT_DEMO_DOCUMENT_CONTENT;
     this.watchDebounceMs = options.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
     this.watchPollMs = options.watchPollMs ?? WATCH_POLL_MS;
@@ -116,6 +121,9 @@ export class OneFileDocumentSession {
 
   async reset(content = this.defaultContent): Promise<string> {
     await this.open();
+    if (this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
+    }
 
     this.doc.transact(() => {
       this.text.delete(0, this.text.length);
@@ -138,8 +146,100 @@ export class OneFileDocumentSession {
     this.stopWatching();
   }
 
+  async moveTo(
+    filePath: string,
+    eventPath: string,
+    moveOnDisk: () => Promise<void>
+  ): Promise<void> {
+    await this.prepareForPathTransition();
+    await this.completeMoveAfterTransition(filePath, eventPath, Promise.resolve().then(moveOnDisk));
+  }
+
+  async prepareForPathTransition(): Promise<void> {
+    await this.open();
+    if (this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
+    }
+    await this.flush();
+    this.stopWatching();
+  }
+
+  async completeMoveAfterTransition(
+    filePath: string,
+    eventPath: string,
+    transition: Promise<void>
+  ): Promise<void> {
+    const fromPath = this.eventPath;
+    let moved = false;
+    const completion = (async () => {
+      await transition;
+      moved = true;
+      this.filePath = filePath;
+      this.eventPath = eventPath;
+      const content = this.currentContent();
+      const contentHash = hashContent(content);
+      await atomicWriteFile(this.filePath, content);
+      this.lastWrittenHash = contentHash;
+      this.lastWrittenContent = content;
+      this.pendingWriteHash = undefined;
+      this.startWatching();
+      this.emitEvent({
+        kind: 'doc-moved',
+        path: eventPath,
+        fromPath,
+        toPath: eventPath,
+        ts: Date.now()
+      });
+    })();
+
+    this.pathTransitionPromise = completion;
+    try {
+      await completion;
+    } catch (error) {
+      if (!moved && !this.deleted) {
+        this.startWatching();
+      }
+      throw error;
+    } finally {
+      if (this.pathTransitionPromise === completion) {
+        this.pathTransitionPromise = undefined;
+      }
+    }
+  }
+
+  async deleteWith(deleteOnDisk: () => Promise<void>): Promise<void> {
+    await this.open();
+    if (this.deleted) {
+      return;
+    }
+    await this.flush();
+
+    const transition = (async () => {
+      this.stopWatching();
+      await deleteOnDisk();
+      this.markDeleted();
+    })();
+
+    this.pathTransitionPromise = transition;
+    try {
+      await transition;
+    } catch (error) {
+      if (!this.deleted) {
+        this.startWatching();
+      }
+      throw error;
+    } finally {
+      if (this.pathTransitionPromise === transition) {
+        this.pathTransitionPromise = undefined;
+      }
+    }
+  }
+
   private readonly handleDocumentUpdate = (_update: Uint8Array, origin: unknown): void => {
     if (origin === EXTERNAL_CHANGE_ORIGIN) {
+      return;
+    }
+    if (this.deleted) {
       return;
     }
 
@@ -172,6 +272,13 @@ export class OneFileDocumentSession {
   }
 
   private async materialize(): Promise<void> {
+    if (this.pathTransitionPromise) {
+      await this.pathTransitionPromise;
+    }
+    if (this.deleted) {
+      return;
+    }
+
     const content = this.currentContent();
     const diskContent = await readOptionalFile(this.filePath);
     const diskHash = diskContent === undefined ? undefined : hashContent(diskContent);
@@ -294,7 +401,11 @@ export class OneFileDocumentSession {
     }
 
     const diskContent = await readOptionalFile(this.filePath);
-    const diskHash = diskContent === undefined ? hashContent('') : hashContent(diskContent);
+    if (diskContent === undefined) {
+      this.markDeleted();
+      return;
+    }
+    const diskHash = hashContent(diskContent);
 
     if (diskHash === this.lastWrittenHash || diskHash === this.pendingWriteHash) {
       return;
@@ -308,6 +419,11 @@ export class OneFileDocumentSession {
     contentHash: string,
     missingFromDisk: boolean,
   ): Promise<void> {
+    if (missingFromDisk) {
+      this.markDeleted();
+      return;
+    }
+
     const current = this.currentContent();
     if (current === content) {
       this.lastWrittenHash = contentHash;
@@ -351,9 +467,19 @@ export class OneFileDocumentSession {
   private createEvent(kind: DocumentSessionEvent['kind']): DocumentSessionEvent {
     return {
       kind,
-      path: this.filePath,
+      path: this.eventPath,
       ts: Date.now()
     };
+  }
+
+  private markDeleted(): void {
+    if (this.deleted) {
+      return;
+    }
+    this.deleted = true;
+    this.stopWatching();
+    this.activePersistFailureEvent = undefined;
+    this.emitEvent('doc-deleted');
   }
 
   private emitEvent(eventOrKind: DocumentSessionEvent | DocumentSessionEvent['kind']): void {

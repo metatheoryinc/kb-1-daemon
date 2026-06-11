@@ -12,16 +12,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/main.ts",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/doc-session": "workspace:*",
     "@hono/node-server": "2.0.4",
+    "@kb-2/doc-session": "workspace:*",
+    "@kb-2/vault-core": "workspace:*",
     "hono": "4.12.25",
     "ws": "8.21.0"
   },
   "devDependencies": {
-    "@types/ws": "8.18.1"
+    "@types/ws": "8.18.1",
+    "@vitest/coverage-v8": "4.1.8"
   }
 }

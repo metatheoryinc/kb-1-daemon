@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { createDemoDocumentProvider } from '$lib/yjs/demo-document-provider';
+  import { goto } from '$app/navigation';
+  import { createDemoDocumentProvider, encodeVaultPath } from '$lib/yjs/demo-document-provider';
   import type {
     DemoDocumentProvider,
     DemoDocumentProviderStatus,
@@ -16,12 +17,14 @@
   let externalChangeVisible = $state(false);
   let persistFailureActive = $state(false);
   let persistRecoveredVisible = $state(false);
+  let docDeleted = $state(false);
+  let documentPath = $state('hello-world.md');
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const livePaths: LivePath[] = [
-    { path: 'demo-vault/hello-world.md', noteId: 'demo-document' },
-  ];
+  const livePaths = $derived<LivePath[]>([
+    { path: documentPath, noteId: documentPath },
+  ]);
 
   const orgPeople: OrgPerson[] = [
     {
@@ -43,6 +46,22 @@
   );
 
   function handleSessionEvent(event: DocumentSessionEvent): void {
+    if (event.kind === 'doc-moved') {
+      const nextPath = event.toPath ?? event.path;
+      documentPath = nextPath;
+      docDeleted = false;
+      void goto(`/${encodeVaultPath(nextPath)}`, { replaceState: true, noScroll: true });
+      return;
+    }
+
+    if (event.kind === 'doc-deleted') {
+      docDeleted = true;
+      persistFailureActive = false;
+      externalChangeVisible = false;
+      externalMergeVisible = false;
+      return;
+    }
+
     if (event.kind === 'external-merge') {
       externalMergeVisible = true;
       if (externalMergeTimer) {
@@ -87,7 +106,16 @@
   }
 
   onMount(() => {
+    const pathname = window.location.pathname;
+    if (pathname === '/') {
+      void goto('/hello-world.md', { replaceState: true, noScroll: true });
+      documentPath = 'hello-world.md';
+    } else {
+      documentPath = decodeURIComponent(pathname.replace(/^\/+/, ''));
+    }
+
     const nextProvider = createDemoDocumentProvider({
+      path: documentPath,
       onStatus: (nextStatus) => {
         status = nextStatus;
       },
@@ -121,14 +149,14 @@
   <header class="topbar">
     <div class="title-group">
       <span class="eyebrow">demo-vault</span>
-      <h1>hello-world.md</h1>
+      <h1>{documentPath}</h1>
     </div>
     <a class="status-link" href="/status" aria-label="Open daemon status">
       <LiveStatusChip label={statusLabel} />
     </a>
   </header>
 
-  {#if externalMergeVisible || externalChangeVisible || persistFailureActive || persistRecoveredVisible}
+  {#if externalMergeVisible || externalChangeVisible || persistFailureActive || persistRecoveredVisible || docDeleted}
     <section class="banner-strip" aria-label="Document save notifications">
       {#if externalMergeVisible}
         <DocumentSaveBanner
@@ -169,6 +197,14 @@
           message="KB-2 is saving changes to disk again."
         />
       {/if}
+
+      {#if docDeleted}
+        <DocumentSaveBanner
+          variant="doc-deleted"
+          title="Document deleted"
+          message="This file was deleted or moved to trash. The editor is read-only."
+        />
+      {/if}
     </section>
   {/if}
 
@@ -179,6 +215,7 @@
         ytext={provider.text}
         livePaths={livePaths}
         orgPeople={orgPeople}
+        readOnly={docDeleted}
         scroll="self"
       />
     {:else}
