@@ -18,11 +18,13 @@
   maps there too — deferred decision resolved), vault REST API, audit
   JSONL, UI path routing. One audit fix round (keepFocus keystroke drop,
   lying 404 on non-live folder ops, fast-diff PUT).
-- **Chunk 008 — agent write/read surface** (next to author): anchored
-  splice + append/prepend, search with context, structured read; MUST also
-  pay 007's accepted debt — idle-session GC (sessions currently resident
-  until shutdown, one watcher+poller each).
-- **Chunk 009 — local MCP server** over the same service boundary.
+- **Chunk 008 SHIPPED** (2026-06-11): anchored splice (KB-1 contract),
+  append/prepend, scan search, idle-session GC. Audit fix round closed a
+  real data-loss path: persist failures now surface as persist_failed (no
+  false audit rows) and GC refuses to drop undurable sessions.
+- **Chunk 009 — local MCP server** (next to author) over the same service
+  boundary: tools map 1:1 onto the API surface, actor attribution
+  mcp_client in the audit log.
 
 ## Mid horizon
 
