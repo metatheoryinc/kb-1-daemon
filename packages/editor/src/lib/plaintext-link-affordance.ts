@@ -88,7 +88,7 @@ import {
  * `posAtDOM` lands inside the textNode the label wraps), so this is
  * defensive rather than load-bearing.
  */
-export function resolveLinkAncestor(
+function resolveLinkAncestor(
   view: EditorView,
   pos: number,
 ): SyntaxNode | null {

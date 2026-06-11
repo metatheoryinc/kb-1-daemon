@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/doc-session",
+  "name": "@kb-2/vault-service",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./protocol": {
-      "types": "./dist/protocol.d.ts",
-      "import": "./dist/protocol.js"
     }
   },
   "files": [
@@ -24,16 +20,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/vault-core": "workspace:*",
-    "fast-diff": "1.3.0",
-    "lib0": "0.2.117",
-    "y-protocols": "1.0.7",
-    "yjs": "13.6.31"
+    "@kb-2/doc-session": "workspace:*",
+    "@kb-2/vault-core": "workspace:*"
   },
   "devDependencies": {
-    "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.8",
-    "vitest": "4.1.8",
-    "ws": "8.21.0"
+    "vitest": "4.1.8"
   }
 }

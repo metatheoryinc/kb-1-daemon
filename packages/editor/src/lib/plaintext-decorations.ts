@@ -184,10 +184,10 @@ import {
   parseWikilinkInner,
   resolveLinkTarget,
   resolvePerson,
-  accentForId,
   type LivePath,
   type OrgPerson,
 } from './markdown-core';
+import { accentForId } from '@kb-2/ui';
 import { MentionChipWidget, type MentionChipProps } from './plaintext-mention-widget';
 
 /* ---------------------------------------------------------------- *

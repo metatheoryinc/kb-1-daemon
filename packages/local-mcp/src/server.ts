@@ -75,12 +75,12 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     return client ? { kind: 'mcp_client', client } : unknownActor;
   };
 
-  registerTool(server, 'vault_info', {
+  registerTool<{}>(server, 'vault_info', {
     description: 'Return the vault root name plus file and folder counts. Read-only; writes no audit row.',
     inputSchema: {}
   }, async () => service.vaultInfo());
 
-  registerTool(server, 'list_files', {
+  registerTool<{ under?: string; depth?: number }>(server, 'list_files', {
     description: 'List files and folders under a vault folder. Depth and entry caps mirror the daemon API. Read-only; writes no audit row.',
     inputSchema: {
       under: z.string().optional().describe('Folder path to list under. Omit for the vault root.'),
@@ -88,14 +88,14 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.listFiles(input));
 
-  registerTool(server, 'read_note', {
+  registerTool<{ path: string }>(server, 'read_note', {
     description: 'Read a Markdown note and return content, stat fields, and baseline. Use baseline for edit_note retry loops. Read-only; writes no audit row.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path.')
     }
   }, async (input) => service.readNote(input));
 
-  registerTool(server, 'create_note', {
+  registerTool<{ path: string; content: string; overwrite?: boolean }>(server, 'create_note', {
     description: 'Create a Markdown note without clobbering by default. Set overwrite to replace existing content. Mutations are audited as mcp_client.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path to create.'),
@@ -104,7 +104,15 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.createNote({ ...input, actor: actor() }));
 
-  registerTool(server, 'edit_note', {
+  registerTool<{
+    path: string;
+    baseline: string;
+    old_text: string;
+    new_text: string;
+    before?: string;
+    after?: string;
+    occurrence?: number;
+  }>(server, 'edit_note', {
     description: 'Apply the Chunk 008 anchored splice contract verbatim. Requires a read_note baseline plus old_text/new_text and optional before/after/occurrence anchors. Rejected results are returned intact: stale_doc includes current_content and fresh baseline; ambiguous includes match_count; size rejects include limits; persist_failed means the edit was not durably saved and has no success audit row.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path to edit.'),
@@ -126,7 +134,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     actor: actor()
   }));
 
-  registerTool(server, 'append_note', {
+  registerTool<{ path: string; content: string }>(server, 'append_note', {
     description: 'Append content to a note, creating it when missing. Mutations flow through live sessions and are audited as mcp_client.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path.'),
@@ -134,7 +142,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.appendNote({ ...input, actor: actor() }));
 
-  registerTool(server, 'prepend_note', {
+  registerTool<{ path: string; content: string }>(server, 'prepend_note', {
     description: 'Prepend content to an existing note after frontmatter when present. Mutations flow through live sessions and are audited as mcp_client.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path.'),
@@ -142,7 +150,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.prependNote({ ...input, actor: actor() }));
 
-  registerTool(server, 'delete_note', {
+  registerTool<{ path: string; permanent?: boolean }>(server, 'delete_note', {
     description: 'Delete a note. By default it is moved into .kb2/trash; set permanent for an irreversible delete. Mutations are audited as mcp_client.',
     inputSchema: {
       path: z.string().describe('Vault-relative Markdown file path.'),
@@ -150,7 +158,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.deleteNote({ ...input, actor: actor() }));
 
-  registerTool(server, 'move_note', {
+  registerTool<{ from_path: string; to_path: string }>(server, 'move_note', {
     description: 'Move or rename a note and rekey any live session. Wikilinks are not rewritten. Mutations are audited as mcp_client.',
     inputSchema: {
       from_path: z.string().describe('Current vault-relative Markdown file path.'),
@@ -158,14 +166,14 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.moveNote({ fromPath: input.from_path, toPath: input.to_path, actor: actor() }));
 
-  registerTool(server, 'create_folder', {
+  registerTool<{ path: string }>(server, 'create_folder', {
     description: 'Create a folder. Mutations are audited as mcp_client when a folder is newly created.',
     inputSchema: {
       path: z.string().describe('Vault-relative folder path.')
     }
   }, async (input) => service.createFolder({ ...input, actor: actor() }));
 
-  registerTool(server, 'delete_folder', {
+  registerTool<{ path: string; recursive?: boolean; permanent?: boolean }>(server, 'delete_folder', {
     description: 'Delete a folder. Non-empty folders require recursive=true. By default deletion moves to .kb2/trash; permanent removes directly. Mutations are audited as mcp_client.',
     inputSchema: {
       path: z.string().describe('Vault-relative folder path.'),
@@ -174,7 +182,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.deleteFolder({ ...input, actor: actor() }));
 
-  registerTool(server, 'move_folder', {
+  registerTool<{ from_path: string; to_path: string }>(server, 'move_folder', {
     description: 'Move or rename a folder and rekey any live sessions below it. Wikilinks are not rewritten. Mutations are audited as mcp_client.',
     inputSchema: {
       from_path: z.string().describe('Current vault-relative folder path.'),
@@ -182,7 +190,7 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
     }
   }, async (input) => service.moveFolder({ fromPath: input.from_path, toPath: input.to_path, actor: actor() }));
 
-  registerTool(server, 'search', {
+  registerTool<{ query: string; under?: string; context?: number; limit?: number; offset?: number }>(server, 'search', {
     description: 'Search vault notes with optional folder scope, context lines, and pagination. Read-only; writes no audit row.',
     inputSchema: {
       query: z.string().describe('Search query.'),
@@ -196,14 +204,14 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
   return server;
 }
 
-function registerTool(
+function registerTool<TInput extends object>(
   server: McpServer,
   name: string,
   config: { description: string; inputSchema: Record<string, z.ZodType> },
-  handler: (input: any) => Promise<unknown>
+  handler: (input: TInput) => Promise<unknown>
 ): void {
   server.registerTool(name, config, async (input) => {
-    const result = await handler(input);
+    const result = await handler(input as TInput);
     if (isServiceFailure(result)) {
       return {
         isError: true,

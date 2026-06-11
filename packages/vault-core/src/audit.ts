@@ -40,7 +40,11 @@ export interface AuditInput {
   summary: string;
 }
 
-export async function appendAudit(input: AuditInput): Promise<AuditEntry> {
+export async function emitVaultAudit(input: AuditInput): Promise<AuditEntry> {
+  return writeAuditEntry(input);
+}
+
+async function writeAuditEntry(input: AuditInput): Promise<AuditEntry> {
   const entry: AuditEntry = {
     id: crypto.randomUUID(),
     ts: new Date().toISOString(),

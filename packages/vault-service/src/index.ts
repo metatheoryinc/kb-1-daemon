@@ -1,12 +1,11 @@
-import { PersistFailedError, type DocumentSessionManager } from '@kb-2/doc-session';
-import type { LocalMcpVaultService, ServiceFailure, ServiceResult } from '@kb-2/local-mcp';
+import { PersistFailedError, type DocumentSessionManager, type SessionSpliceReject } from '@kb-2/doc-session';
 import {
   InvalidPathError,
-  appendAudit,
   appendContent,
   applyAnchoredSplice,
   deleteVaultFile,
   deleteVaultFolder,
+  emitVaultAudit,
   getVaultInfo,
   listVaultTree,
   makeVaultFolder,
@@ -17,13 +16,65 @@ import {
   validateVaultPath,
   writeVaultFile,
   type AnchoredSpliceRequest,
+  type AuditEntry,
   type VaultActor,
+  type VaultErrorCode,
   type VaultResult
 } from '@kb-2/vault-core';
 
+export type { AuditEntry, VaultActor };
+
+export type ServiceErrorCode =
+  | VaultErrorCode
+  | 'stale_doc'
+  | 'ambiguous'
+  | 'too_large_splice'
+  | 'too_large_document'
+  | 'persist_failed'
+  | 'invalid_request';
+
+type SimpleServiceErrorCode = VaultErrorCode | 'persist_failed' | 'invalid_request';
+
+export type ServiceFailure =
+  | { ok: false; error: SimpleServiceErrorCode; message: string }
+  | { ok: false; error: 'stale_doc'; message: string; current_content: string; baseline: string; truncated?: boolean }
+  | { ok: false; error: 'ambiguous'; message: string; match_count: number }
+  | { ok: false; error: 'too_large_splice'; message: string; limit_bytes: number }
+  | { ok: false; error: 'too_large_document'; message: string; current_bytes: number; limit_bytes: number }
+  | { ok: false; error: 'persist_failed'; message: string }
+  | { ok: false; error: 'invalid_request'; message: string };
+
+export type ServiceResult<T extends object = object> = ({ ok: true } & T) | ServiceFailure;
+
+export interface EditNoteInput {
+  path: string;
+  baseline: string;
+  oldText: string;
+  newText: string;
+  before?: string;
+  after?: string;
+  occurrence?: number;
+}
+
+export interface LocalMcpVaultService {
+  vaultInfo(): Promise<ServiceResult>;
+  listFiles(input: { under?: string; depth?: number }): Promise<ServiceResult>;
+  readNote(input: { path: string }): Promise<ServiceResult>;
+  createNote(input: { path: string; content: string; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult>;
+  editNote(input: EditNoteInput & { actor: VaultActor }): Promise<ServiceResult>;
+  appendNote(input: { path: string; content: string; actor: VaultActor }): Promise<ServiceResult>;
+  prependNote(input: { path: string; content: string; actor: VaultActor }): Promise<ServiceResult>;
+  deleteNote(input: { path: string; permanent?: boolean; actor: VaultActor }): Promise<ServiceResult>;
+  moveNote(input: { fromPath: string; toPath: string; actor: VaultActor }): Promise<ServiceResult>;
+  createFolder(input: { path: string; actor: VaultActor }): Promise<ServiceResult>;
+  deleteFolder(input: { path: string; recursive?: boolean; permanent?: boolean; actor: VaultActor }): Promise<ServiceResult>;
+  moveFolder(input: { fromPath: string; toPath: string; actor: VaultActor }): Promise<ServiceResult>;
+  search(input: { query: string; under?: string; context?: number; limit?: number; offset?: number }): Promise<ServiceResult>;
+}
+
 export interface VaultServiceOptions {
   vaultRoot: string;
-  documentSessions?: DocumentSessionManager;
+  documentSessions: DocumentSessionManager;
 }
 
 export function createVaultService(options: VaultServiceOptions): LocalMcpVaultService {
@@ -40,7 +91,7 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
 
     async readNote(input) {
       const diskRead = await readVaultFile(ctx(), input.path);
-      if (!diskRead.ok || !options.documentSessions) {
+      if (!diskRead.ok) {
         return serviceResult(diskRead);
       }
 
@@ -63,7 +114,7 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         }
         const applied = await mapWriteFailure(() => liveSession.applyContent(input.content));
         if (!applied.ok) return applied;
-        const audit = await appendAudit({
+        const audit = await emitVaultAudit({
           root: options.vaultRoot,
           actor: input.actor,
           operation: 'write',
@@ -90,10 +141,6 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     async editNote(input) {
       const diskRead = await readVaultFile(ctx(), input.path);
       if (!diskRead.ok) return serviceResult(diskRead);
-      if (!options.documentSessions) {
-        return failure('session_unavailable', 'document sessions are unavailable');
-      }
-
       const request: AnchoredSpliceRequest = {
         oldText: input.oldText,
         newText: input.newText,
@@ -101,13 +148,13 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         ...(input.after !== undefined ? { after: input.after } : {}),
         ...(input.occurrence !== undefined ? { occurrence: input.occurrence } : {})
       };
-      const result = await mapWriteFailure(() => options.documentSessions!.withSession(input.path, (session) =>
+      const result = await mapWriteFailure(() => options.documentSessions.withSession(input.path, (session) =>
         session.applyBaselineEdit(input.baseline, (currentContent) => applyAnchoredSplice(currentContent, request))
       ));
       if (!result.ok) return result;
-      if (!result.value.ok) return { ok: false, ...withoutOk(result.value) };
+      if (!result.value.ok) return sessionFailureResult(result.value);
 
-      const audit = await appendAudit({
+      const audit = await emitVaultAudit({
         root: options.vaultRoot,
         actor: input.actor,
         operation: 'splice',
@@ -127,17 +174,13 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     async appendNote(input) {
       const validPath = validateServiceFilePath(input.path);
       if (!validPath.ok) return validPath;
-      if (!options.documentSessions) {
-        return failure('session_unavailable', 'document sessions are unavailable');
-      }
-
-      const result = await mapWriteFailure(() => options.documentSessions!.withSession(
+      const result = await mapWriteFailure(() => options.documentSessions.withSession(
         input.path,
         (session) => session.applyContentEdit((currentContent) => appendContent(currentContent, input.content)),
         { defaultContent: '' }
       ));
       if (!result.ok) return result;
-      const audit = await appendAudit({
+      const audit = await emitVaultAudit({
         root: options.vaultRoot,
         actor: input.actor,
         operation: 'append',
@@ -157,15 +200,11 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     async prependNote(input) {
       const diskRead = await readVaultFile(ctx(), input.path);
       if (!diskRead.ok) return serviceResult(diskRead);
-      if (!options.documentSessions) {
-        return failure('session_unavailable', 'document sessions are unavailable');
-      }
-
-      const result = await mapWriteFailure(() => options.documentSessions!.withSession(input.path, (session) =>
+      const result = await mapWriteFailure(() => options.documentSessions.withSession(input.path, (session) =>
         session.applyContentEdit((currentContent) => prependContent(currentContent, input.content))
       ));
       if (!result.ok) return result;
-      const audit = await appendAudit({
+      const audit = await emitVaultAudit({
         root: options.vaultRoot,
         actor: input.actor,
         operation: 'prepend',
@@ -183,14 +222,17 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     },
 
     async deleteNote(input) {
-      const deleteOnDisk = () => expectOk(deleteVaultFile(ctx(input.actor), {
-        path: input.path,
-        permanent: input.permanent
-      }));
-      const deletedLive = await mapVaultFailure(() => options.documentSessions?.deleteSession(input.path, deleteOnDisk));
+      let deleted: Awaited<ReturnType<typeof deleteVaultFile>> extends VaultResult<infer T> ? T : never;
+      const deleteOnDisk = async () => {
+        deleted = await expectOkValue(deleteVaultFile(ctx(input.actor), {
+          path: input.path,
+          permanent: input.permanent
+        }));
+      };
+      const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSession(input.path, deleteOnDisk));
       if (!deletedLive.ok) return deletedLive;
       if (deletedLive.value) {
-        return { ok: true, path: input.path, live: true };
+        return { ok: true, ...deleted!, live: true };
       }
       return serviceResult(await deleteVaultFile(ctx(input.actor), {
         path: input.path,
@@ -199,15 +241,18 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     },
 
     async moveNote(input) {
-      const moveOnDisk = () => expectOk(moveVaultPath(ctx(input.actor), {
-        kind: 'file',
-        fromPath: input.fromPath,
-        toPath: input.toPath
-      }));
-      const movedLive = await mapVaultFailure(() => options.documentSessions?.moveSession(input.fromPath, input.toPath, moveOnDisk));
+      let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      const moveOnDisk = async () => {
+        moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
+          kind: 'file',
+          fromPath: input.fromPath,
+          toPath: input.toPath
+        }));
+      };
+      const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
       if (movedLive.value) {
-        return { ok: true, fromPath: input.fromPath, toPath: input.toPath, live: true };
+        return { ok: true, ...moved!, live: true };
       }
       return serviceResult(await moveVaultPath(ctx(input.actor), {
         kind: 'file',
@@ -221,39 +266,31 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     },
 
     async deleteFolder(input) {
-      const deleteOnDisk = () => expectOk(deleteVaultFolder(ctx(input.actor), {
-        path: input.path,
-        recursive: input.recursive,
-        permanent: input.permanent
-      }));
-      if (options.documentSessions) {
-        const deletedLive = await mapVaultFailure(() => options.documentSessions!.deleteSessionSubtree(input.path, deleteOnDisk));
-        if (!deletedLive.ok) return deletedLive;
-        return { ok: true, path: input.path, liveDeleted: deletedLive.value };
-      }
-      return serviceResult(await deleteVaultFolder(ctx(input.actor), {
-        path: input.path,
-        recursive: input.recursive,
-        permanent: input.permanent
-      }));
+      let deleted: Awaited<ReturnType<typeof deleteVaultFolder>> extends VaultResult<infer T> ? T : never;
+      const deleteOnDisk = async () => {
+        deleted = await expectOkValue(deleteVaultFolder(ctx(input.actor), {
+          path: input.path,
+          recursive: input.recursive,
+          permanent: input.permanent
+        }));
+      };
+      const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSessionSubtree(input.path, deleteOnDisk));
+      if (!deletedLive.ok) return deletedLive;
+      return { ok: true, ...deleted!, liveDeleted: deletedLive.value };
     },
 
     async moveFolder(input) {
-      const moveOnDisk = () => expectOk(moveVaultPath(ctx(input.actor), {
-        kind: 'folder',
-        fromPath: input.fromPath,
-        toPath: input.toPath
-      }));
-      if (options.documentSessions) {
-        const movedLive = await mapVaultFailure(() => options.documentSessions!.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
-        if (!movedLive.ok) return movedLive;
-        return { ok: true, fromPath: input.fromPath, toPath: input.toPath, liveMoved: movedLive.value };
-      }
-      return serviceResult(await moveVaultPath(ctx(input.actor), {
-        kind: 'folder',
-        fromPath: input.fromPath,
-        toPath: input.toPath
-      }));
+      let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      const moveOnDisk = async () => {
+        moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
+          kind: 'folder',
+          fromPath: input.fromPath,
+          toPath: input.toPath
+        }));
+      };
+      const movedLive = await mapVaultFailure(() => options.documentSessions.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
+      if (!movedLive.ok) return movedLive;
+      return { ok: true, ...moved!, liveMoved: movedLive.value };
     },
 
     async search(input) {
@@ -272,6 +309,7 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         if (error instanceof InvalidPathError) {
           return failure('invalid_path', error.message);
         }
+        /* v8 ignore next -- Non-validation search failures must propagate; invalid-path mapping is covered with real inputs. */
         throw error;
       }
     }
@@ -286,7 +324,7 @@ function serviceResult<T extends object>(result: VaultResult<T>): ServiceResult<
   return failure(result.error, result.message);
 }
 
-function failure(error: string, message: string): ServiceFailure {
+function failure(error: SimpleServiceErrorCode, message: string): ServiceFailure {
   return { ok: false, error, message };
 }
 
@@ -297,15 +335,17 @@ function validateServiceFilePath(filePath: string): ServiceResult<{ path: string
     if (error instanceof InvalidPathError) {
       return failure('invalid_path', error.message);
     }
+    /* v8 ignore next -- validateVaultPath only throws InvalidPathError for user input; this guard protects future validators. */
     throw error;
   }
 }
 
-async function expectOk<T>(resultPromise: Promise<VaultResult<T>>): Promise<void> {
+async function expectOkValue<T>(resultPromise: Promise<VaultResult<T>>): Promise<T> {
   const result = await resultPromise;
   if (!result.ok) {
     throw new VaultResultFailure(result);
   }
+  return result.value;
 }
 
 async function mapVaultFailure<T>(operation: () => T | Promise<T>): Promise<{ ok: true; value: T } | ServiceFailure> {
@@ -315,6 +355,7 @@ async function mapVaultFailure<T>(operation: () => T | Promise<T>): Promise<{ ok
     if (error instanceof VaultResultFailure) {
       return vaultFailureResult(error.result);
     }
+    /* v8 ignore next -- Non-vault exceptions must propagate; callers only synthesize VaultResultFailure in tests and live disk callbacks. */
     throw error;
   }
 }
@@ -326,6 +367,7 @@ async function mapWriteFailure<T>(operation: () => T | Promise<T>): Promise<{ ok
     if (error instanceof PersistFailedError) {
       return failure('persist_failed', 'Document edit could not be durably saved to disk.');
     }
+    /* v8 ignore next -- Non-persist exceptions must propagate; coverage exercises the PersistFailedError mapping path. */
     throw error;
   }
 }
@@ -337,13 +379,49 @@ class VaultResultFailure extends Error {
 }
 
 function vaultFailureResult(result: VaultResult<unknown>): ServiceFailure {
+  /* v8 ignore next -- VaultResultFailure is constructed only from failed VaultResult values. */
   if (result.ok) {
     throw new Error('Expected failed vault result');
   }
   return failure(result.error, result.message);
 }
 
-function withoutOk<T extends { ok: false }>(value: T): Omit<T, 'ok'> {
-  const { ok: _ok, ...rest } = value;
-  return rest;
+function sessionFailureResult(value: SessionSpliceReject): ServiceFailure {
+  switch (value.rejected) {
+    case 'not_found':
+      return failure('not_found', 'text to replace was not found');
+    case 'stale_doc':
+      return {
+        ok: false,
+        error: 'stale_doc',
+        message: 'document changed since the provided baseline',
+        current_content: value.current_content,
+        baseline: value.baseline,
+        ...(value.truncated === true ? { truncated: true } : {})
+      };
+    case 'ambiguous':
+      return {
+        ok: false,
+        error: 'ambiguous',
+        message: 'text to replace matched multiple locations',
+        match_count: value.match_count
+      };
+    case 'too_large_splice':
+      return {
+        ok: false,
+        error: 'too_large_splice',
+        message: 'splice text exceeds the byte limit',
+        limit_bytes: value.limit_bytes
+      };
+    case 'too_large_document':
+      return {
+        ok: false,
+        error: 'too_large_document',
+        message: 'document would exceed the byte limit',
+        current_bytes: value.current_bytes,
+        limit_bytes: value.limit_bytes
+      };
+  }
+  /* v8 ignore next -- Exhaustive switch guard for future session rejection codes. */
+  throw new Error(`Unhandled service failure: ${JSON.stringify(value)}`);
 }

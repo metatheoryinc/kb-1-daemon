@@ -8,20 +8,22 @@ import {
   SPLICE_BYTES_LIMIT,
   appendContent,
   applyAnchoredSplice,
+  lfNormalize,
+  prependContent
+} from './splice.js';
+import {
   deleteVaultFile,
   deleteVaultFolder,
   getVaultInfo,
   listVaultTree,
-  lfNormalize,
   makeVaultFolder,
   moveVaultPath,
-  prependContent,
   readVaultFile,
-  searchVaultFiles,
-  validateVaultPath,
   writeVaultFile,
   type VaultContext
-} from './index.js';
+} from './vault-ops.js';
+import { searchVaultFiles } from './search.js';
+import { validateVaultPath } from './path.js';
 import { anchoredSpliceContractCases } from './splice-contract-cases.test-support.js';
 
 describe('vault path validation', () => {
@@ -432,7 +434,7 @@ describe('anchored splice and positioned content helpers', () => {
     })).toEqual({ ok: true, content: 'AB\rc' });
   });
 
-  it('appends and prepends after YAML frontmatter using gray-matter detection', () => {
+  it('appends and prepends after frontmatter using the offset scanner', () => {
     expect(appendContent('a\r\n', 'b\r\n')).toBe('a\r\nb\n');
     expect(prependContent('body\n', 'top\r\n')).toBe('top\nbody\n');
     expect(prependContent('---\ntitle: Test\n---\nbody\n', 'inserted\n')).toBe(

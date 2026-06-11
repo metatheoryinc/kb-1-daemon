@@ -36,7 +36,7 @@ import { extractLinkUrl } from './plaintext-link-affordance';
  * Exported for unit testing — production callers go through the
  * keymap's `run` handlers below.
  */
-export function findMentionAt(
+function findMentionAt(
   state: EditorState,
   pos: number,
   side: -1 | 1,

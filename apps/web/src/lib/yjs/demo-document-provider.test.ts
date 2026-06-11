@@ -24,6 +24,12 @@ import {
 } from './demo-document-provider';
 
 const messageSync = 0;
+const DEFAULT_DEMO_DOCUMENT_CONTENT = [
+  '# Hello KB-2',
+  '',
+  'This Markdown file is served by the local KB-2 daemon.',
+  '',
+].join('\n');
 
 describe('demo document provider', () => {
   let kb2Home: string;
@@ -58,7 +64,7 @@ describe('demo document provider', () => {
 
   it('converges with a raw y-protocols client through the daemon and persists to disk', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    session = new OneFileDocumentSession(filePath);
+    session = new OneFileDocumentSession(filePath, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
     await session.open();
 
     server = createServer();

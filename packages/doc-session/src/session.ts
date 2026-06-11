@@ -5,22 +5,15 @@ import { basename, dirname, join } from 'node:path';
 
 import diff from 'fast-diff';
 import * as Y from 'yjs';
+import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-2/vault-core';
 
 import type { DocumentSessionEvent } from './protocol.js';
-
-export const DEFAULT_DEMO_DOCUMENT_CONTENT = [
-  '# Hello KB-2',
-  '',
-  'This Markdown file is served by the local KB-2 daemon.',
-  ''
-].join('\n');
 
 const Y_TEXT_NAME = 'markdown';
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb2.external-change');
 const AGENT_SPLICE_ORIGIN = Symbol('kb2.agent-splice');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
-const DOCUMENT_BYTES_LIMIT = 1024 * 1024;
 
 export interface DocumentSessionWarning {
   type: 'external-change-detected';
@@ -39,10 +32,12 @@ export interface OneFileDocumentSessionOptions {
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 
-export type SessionContentEditResult =
-  | { ok: true; content: string }
-  | ({ ok: false; rejected: string } & Record<string, unknown>);
-export type SessionContentEditReject = Exclude<SessionContentEditResult, { ok: true }>;
+export type SessionContentEditReject =
+  | { ok: false; rejected: 'not_found' }
+  | { ok: false; rejected: 'ambiguous'; match_count: number }
+  | { ok: false; rejected: 'too_large_splice'; limit_bytes: number }
+  | { ok: false; rejected: 'too_large_document'; current_bytes: number; limit_bytes: number };
+export type SessionContentEditResult = { ok: true; content: string } | SessionContentEditReject;
 
 export type SessionSpliceResult =
   | { ok: true; content: string; baseline: string }
@@ -54,6 +49,7 @@ export type SessionSpliceResult =
       truncated?: boolean;
     }
   | SessionContentEditReject;
+export type SessionSpliceReject = Exclude<SessionSpliceResult, { ok: true }>;
 
 export class PersistFailedError extends Error {
   constructor(
@@ -80,6 +76,7 @@ export class OneFileDocumentSession {
   private openPromise: Promise<void> | undefined;
   private lastWrittenHash: string | undefined;
   private lastWrittenContent: string | undefined;
+  // Set only around this session's own atomic write so file-watch echoes can be distinguished from external edits.
   private pendingWriteHash: string | undefined;
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
@@ -96,7 +93,7 @@ export class OneFileDocumentSession {
   constructor(filePath: string, options: OneFileDocumentSessionOptions = {}) {
     this.filePath = filePath;
     this.eventPath = options.eventPath ?? filePath;
-    this.defaultContent = options.defaultContent ?? DEFAULT_DEMO_DOCUMENT_CONTENT;
+    this.defaultContent = options.defaultContent ?? '';
     this.watchDebounceMs = options.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
     this.watchPollMs = options.watchPollMs ?? WATCH_POLL_MS;
     this.warn = options.warn ?? ((warning) => {
@@ -253,6 +250,7 @@ export class OneFileDocumentSession {
     await this.completeMoveAfterTransition(filePath, eventPath, Promise.resolve().then(moveOnDisk));
   }
 
+  // Path transitions are two-phase: flush and stop watching first, then every caller awaits the same disk move before rebinding paths.
   async prepareForPathTransition(): Promise<void> {
     await this.open();
     if (this.deleted) {
@@ -360,6 +358,7 @@ export class OneFileDocumentSession {
 
   private async persistLoop(): Promise<void> {
     let failure: PersistFailedError | undefined;
+    // Coalesce writes requested while a persist is in flight; the loop drains until no newer request remains.
     while (this.persistRequested) {
       this.persistRequested = false;
       try {
@@ -385,6 +384,7 @@ export class OneFileDocumentSession {
     const diskContent = await readOptionalFile(this.filePath);
     const diskHash = diskContent === undefined ? undefined : hashContent(diskContent);
 
+    // Re-check disk immediately before writing so external edits observed between debounce and persist are merged first.
     if (this.lastWrittenHash !== undefined && diskHash !== this.lastWrittenHash) {
       this.warn({
         type: 'external-change-detected',
@@ -582,7 +582,7 @@ export class OneFileDocumentSession {
       return;
     }
 
-    const truncatedToEmpty = current.length > 0 && (missingFromDisk || content.length === 0);
+    const truncatedToEmpty = current.length > 0 && content.length === 0;
     const eventKind: DocumentSessionEvent['kind'] =
       !truncatedToEmpty && current === this.lastWrittenContent
         ? 'external-merge'
@@ -684,19 +684,12 @@ function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
-
 function encodeBase64Bytes(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
 }
 
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
 function truncateUtf8(value: string, limitBytes: number): string {
+  // Iterate by code point so truncation never splits a surrogate pair while honoring the byte cap.
   let output = '';
   let bytes = 0;
   for (const char of value) {

@@ -1,5 +1,6 @@
 export const SPLICE_BYTES_LIMIT = 64 * 1024;
 export const DOCUMENT_BYTES_LIMIT = 1024 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 
 export interface AnchoredSpliceRequest {
   oldText: string;
@@ -97,6 +98,7 @@ export function prependContent(content: string, addition: string): string {
 }
 
 function frontmatterInsertionPoint(content: string): number | undefined {
+  // This scanner preserves insertion offsets; YAML/frontmatter parsers discard the raw delimiter position we need here.
   const opening = /^---(?:\r\n|\n|\r)/.exec(content);
   if (!opening) return undefined;
 
@@ -119,7 +121,7 @@ export function lfNormalize(value: string): string {
 }
 
 export function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+  return UTF8_ENCODER.encode(value).length;
 }
 
 function findAllSubstringOffsets(haystack: string, needle: string): number[] {
@@ -136,6 +138,7 @@ function findAllSubstringOffsets(haystack: string, needle: string): number[] {
 }
 
 function normalizeWithRawOffsets(content: string): { value: string; rawOffsets: number[] } {
+  // Keep normalization beside raw offsets so splice ranges can be mapped back without reconstructing parser state.
   let value = '';
   const rawOffsets: number[] = [];
   let rawIndex = 0;

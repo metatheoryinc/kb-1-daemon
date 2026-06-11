@@ -1,10 +1,13 @@
 export {
-  DEFAULT_DEMO_DOCUMENT_CONTENT,
   OneFileDocumentSession,
   PersistFailedError,
   type DocumentSessionEventHandler,
   type DocumentSessionWarning,
-  type OneFileDocumentSessionOptions
+  type OneFileDocumentSessionOptions,
+  type SessionContentEditReject,
+  type SessionContentEditResult,
+  type SessionSpliceReject,
+  type SessionSpliceResult
 } from './session.js';
 export {
   DEFAULT_IDLE_SESSION_GRACE_MS,
@@ -13,7 +16,6 @@ export {
   type DocumentSessionManagerOptions
 } from './manager.js';
 export {
-  DEMO_DOCUMENT_YJS_PATH,
   bindYjsWebSocket,
   type YjsWebSocketLike
 } from './websocket.js';

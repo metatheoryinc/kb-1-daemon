@@ -17,7 +17,9 @@ import {
   decodeSessionEvent,
   type DocumentSessionEvent
 } from './index.js';
-import { DEMO_DOCUMENT_YJS_PATH, bindYjsWebSocket } from './websocket.js';
+import { bindYjsWebSocket } from './websocket.js';
+
+const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
 describe('Yjs WebSocket session', () => {
   let kb2Home: string;
