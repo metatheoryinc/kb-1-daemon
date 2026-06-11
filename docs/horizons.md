@@ -13,11 +13,16 @@
   `docs/architecture/invariants/` with cloud-never-stores-vault-content and
   durable-objects-compose-mixins; daemon engineering invariants inherited
   verbatim; AGENTS.md points at them.
-- **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
-  browsable vault; wikilinks get somewhere to go. Carries two deferred
-  decisions: external file-deletion semantics, persist-failure state in
-  late-joining clients beyond the bind replay.
-- **Chunk 008 — local MCP tools** over the same vault service boundary.
+- **Chunk 007 SHIPPED** (2026-06-11): vault-core service layer, multi-file
+  sessions with rekey-on-move and loud doc-deleted (external deletion now
+  maps there too — deferred decision resolved), vault REST API, audit
+  JSONL, UI path routing. One audit fix round (keepFocus keystroke drop,
+  lying 404 on non-live folder ops, fast-diff PUT).
+- **Chunk 008 — agent write/read surface** (next to author): anchored
+  splice + append/prepend, search with context, structured read; MUST also
+  pay 007's accepted debt — idle-session GC (sessions currently resident
+  until shutdown, one watcher+poller each).
+- **Chunk 009 — local MCP server** over the same service boundary.
 
 ## Mid horizon
 

@@ -79,6 +79,15 @@ inventing.
   zero-fix-round chunk). Standing instruction: spot these on the user's
   behalf; "it's only 40 lines" is the canonical size of the mistake.
 
+- **The vault arrived, and the audit caught a one-word bug.** Chunk 007
+  (2026-06-11) turned one file into a vault: vault-core service layer,
+  sessions that follow renames live. The implementer's browser test showed
+  type-during-rename surviving; the auditor typed CONTINUOUSLY across the
+  move instant and watched half the marker vanish — `goto()` without
+  `keepFocus` was silently eating every keystroke after navigation. Same
+  audit caught folder ops succeeding on disk while returning 404. Straddle
+  the boundary you're testing; don't finish before it.
+
 ## What we've decided not to do
 
 - No presence, cursors, selections, or follow mode in the local product —
