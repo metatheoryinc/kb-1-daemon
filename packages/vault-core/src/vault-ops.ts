@@ -218,7 +218,7 @@ export async function readVaultFile(ctx: VaultContext, filePath: string): Promis
     };
   } catch (err) {
     const pathResult = classifyPathError(err);
-    /* v8 ignore next -- Defensive false branch rethrows unexpected write errors; invalid-path classification is covered. */
+    /* v8 ignore next -- Defensive false branch rethrows unexpected read errors; invalid-path classification is covered. */
     if (pathResult) return pathResult;
     /* v8 ignore next -- Defensive rethrow for unexpected read failures outside classified path/not-found errors. */
     throw err;
@@ -277,7 +277,7 @@ export async function makeVaultFolder(ctx: VaultContext, folderPath: string): Pr
     return { ok: true, value: { path: rel, audit } };
   } catch (err) {
     const pathResult = classifyPathError(err);
-    /* v8 ignore next -- Defensive false branch rethrows unexpected delete errors; invalid-path classification is covered. */
+    /* v8 ignore next -- Defensive false branch rethrows unexpected mkdir errors; invalid-path classification is covered. */
     if (pathResult) return pathResult;
     const collisionResult = classifyFsCollision(err);
     if (collisionResult) return collisionResult;

@@ -107,7 +107,7 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     },
 
     async createNote(input) {
-      const liveSession = options.documentSessions?.getOpenSession(input.path);
+      const liveSession = options.documentSessions.getOpenSession(input.path);
       if (liveSession) {
         if (!input.overwrite) {
           return failure('already_exists', 'file already exists');
