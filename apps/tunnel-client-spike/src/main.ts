@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   const pendingHttp = new Map<string, PendingHttp>();
 
   control.on("open", () => {
-    control.send(encodeTunnelMessage({
+    control.send(encodeJsonBytes({
       type: "control.hello",
       version: TUNNEL_PROTOCOL_VERSION,
       token: config.token
@@ -93,7 +93,7 @@ async function handleControlMessage(
       return;
     case "http.request":
       pendingHttp.set(message.id, { request: message });
-      control.send(encodeTunnelMessage(await proxyHttp(config.daemonUrl, message)));
+      control.send(encodeJsonBytes(await proxyHttp(config.daemonUrl, message)));
       pendingHttp.delete(message.id);
       return;
     case "ws.open":
@@ -153,7 +153,7 @@ function openDialback(config: Config, envelope: TunnelWebSocketOpenEnvelope): vo
   });
 
   relaySocket.on("open", () => {
-    relaySocket.send(encodeTunnelMessage({
+    relaySocket.send(encodeJsonBytes({
       type: "ws.dialback.hello",
       version: TUNNEL_PROTOCOL_VERSION,
       token: config.token,
@@ -226,6 +226,10 @@ function readConfig(): Config {
   }
 
   return { relayUrl, daemonUrl, token };
+}
+
+function encodeJsonBytes(message: Parameters<typeof encodeTunnelMessage>[0]): Buffer {
+  return Buffer.from(encodeTunnelMessage(message));
 }
 
 function requiredUrl(name: string): URL {
