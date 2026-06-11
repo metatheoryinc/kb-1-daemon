@@ -140,15 +140,40 @@ All under `~/Development/Metatheory/kb-1` (READ-ONLY):
 
 ## Testing Expectations
 
-- vault-core unit suite (the path-validation table is the workhorse).
-- Session rekey under concurrent edits (criterion 3) — the heart of the
-  chunk; include the folder-move variant.
-- External-delete → `doc-deleted` migration tests (replacing the 006
-  reconcile-to-empty expectations).
-- API integration tests for the full route surface and error taxonomy.
-- Audit-row shape tests.
-- Existing 006/006.5 suites stay green (adjusted only where the external-
-  delete decision changes them).
+The test suite is a first-class deliverable of this chunk (user directive
+2026-06-11), not an accompaniment. The bar:
+
+- **Real filesystem, always.** Every test runs against a real temp
+  directory (`mktemp`-style, created/destroyed per test or suite). No
+  in-memory fs shims — vault-core's entire job is real filesystem
+  behavior, so the tests must exercise the real thing. (This also keeps
+  the tests honest about platform behaviors like rename semantics.)
+- **Dual assertion on every operation.** Each mutation is verified BOTH
+  ways: through the service/API read path (read-to-confirm) AND by direct
+  filesystem inspection (`fs.readFile`/`stat`/`readdir` asserts on the
+  temp vault — file exists at new path, absent at old, trash contains the
+  original relative path, audit JSONL has the row). One without the other
+  is half a test.
+- **Coverage is gated, not reported.** Vitest v8 coverage thresholds wired
+  into `pnpm check` so the build FAILS below them: `packages/vault-core`
+  at 100% statements/functions/lines and ≥95% branches (it is pure logic;
+  100% is achievable and required — uncovered error branches are exactly
+  where vault bugs live); new API route code and session-manager
+  rekey/teardown code ≥90% lines via integration tests. Unreachable-by-
+  design lines need an explicit istanbul-ignore comment WITH a reason,
+  and the auditor reviews every ignore.
+- **Property-based tests** (fast-check, exact-pinned — battle-tested, same
+  spirit as 006.5's fast-diff property test) for path validation: valid
+  paths normalize idempotently; no generated traversal/absolute/empty-
+  segment input ever validates; validated paths never escape the vault
+  root when resolved.
+- Specifics: the path-validation table; session rekey under concurrent
+  edits (criterion 3, the heart) including the folder-move variant;
+  external-delete → `doc-deleted` migration tests (replacing 006's
+  reconcile-to-empty expectations); full route-surface + error-taxonomy
+  integration tests including every 4xx; audit-row shape tests; trash
+  round-trip (delete then restore-by-hand path integrity); 006/006.5
+  suites stay green (adjusted only for the external-delete decision).
 
 ## Manual Verification
 

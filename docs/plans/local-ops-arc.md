@@ -77,3 +77,13 @@ the committed surface; tier 2 by demand; tier 3 deferred.
   actor attribution `mcp_client`. Plan authored when 008 ships.
 
 UI file tree, tier-2 ops, and link index are separate later chunks.
+
+## Arc-wide testing bar
+
+Per user directive (2026-06-11): every chunk in this arc ships an
+exhaustive test suite as a first-class deliverable — real temp
+filesystems (no in-memory shims), dual assertion on every operation
+(read-to-confirm through the API and direct fs inspection), and gated
+coverage thresholds wired into `pnpm check` (100% on pure-logic service
+packages, ≥90% on route/session glue). Chunk plans carry the binding
+detail; 007's Testing Expectations section is the template.
