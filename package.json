@@ -11,6 +11,7 @@
     "docker:up": "docker compose up --build -d daemon",
     "dev": "node scripts/dev.mjs",
     "dev:daemon": "pnpm --filter @kb-2/daemon dev",
+    "dev:tunnel-client-spike": "pnpm --filter @kb-2/tunnel-client-spike dev",
     "dev:web": "pnpm --filter @kb-2/web dev",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
     "storybook": "pnpm --filter @kb-2/ui storybook",
