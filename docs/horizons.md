@@ -19,6 +19,11 @@
   through outbound WS, and the Yjs WebSocket relayed end-to-end with two
   browsers on the cloud URL. Deliverable: latency numbers + the list of CF
   limits hit. Needs the user's Cloudflare/wrangler auth; owns first deploy.
+  Placement (decided 2026-06-11): daemon-side spike code
+  (`packages/tunnel-protocol` + spike tunnel client) lives on a
+  `cloud-002-spike` branch off daemon; the cloud submodule pointer pins to
+  it for the spike; the cloud worker imports tunnel-protocol through
+  `local/`. Branch graduates to a daemon PR if the spike proves out.
 - **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
   browsable vault; wikilinks get somewhere to go. Carries two deferred
   decisions: external file-deletion semantics, persist-failure state in
