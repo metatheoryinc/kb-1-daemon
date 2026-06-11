@@ -175,13 +175,13 @@ function openDialback(config: Config, envelope: TunnelWebSocketOpenEnvelope): vo
 
   relaySocket.on("close", (code, reason) => {
     if (daemonSocket.readyState === WebSocket.OPEN || daemonSocket.readyState === WebSocket.CONNECTING) {
-      daemonSocket.close(code, reason.toString());
+      daemonSocket.close(sendableCloseCode(code), reason.toString());
     }
   });
 
   daemonSocket.on("close", (code, reason) => {
     if (relaySocket.readyState === WebSocket.OPEN || relaySocket.readyState === WebSocket.CONNECTING) {
-      relaySocket.close(code, reason.toString());
+      relaySocket.close(sendableCloseCode(code), reason.toString());
     }
   });
 
@@ -238,6 +238,12 @@ function requiredUrl(name: string): URL {
     throw new Error(`${name} is required`);
   }
   return new URL(value);
+}
+
+function sendableCloseCode(code: number): number {
+  return code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006
+    ? code
+    : 1011;
 }
 
 main().catch((error: unknown) => {
