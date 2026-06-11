@@ -17,7 +17,7 @@ shutdown (007's disclosed debt — one fs watcher + 2s poller each).
 
 ## KB-1 Reference (read before building)
 
-All under `~/Development/Metatheory/kb-1` (READ-ONLY):
+Paths refer to the private KB-1 reference codebase (read-only):
 
 - `apps/@kb-1/mcp/src/tools/edit-note.tool.ts` and the plaintext-splice
   types/service — the baseline-anchored splice contract this chunk adapts:

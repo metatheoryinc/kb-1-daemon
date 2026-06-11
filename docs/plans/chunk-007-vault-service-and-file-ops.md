@@ -20,7 +20,7 @@ serial coalesced persistence with `lastWrittenHash`/`lastWrittenContent`.
 
 ## KB-1 Reference (read before building)
 
-All under `~/Development/Metatheory/kb-1` (READ-ONLY):
+Paths refer to the private KB-1 reference codebase (read-only):
 
 - `apps/@kb-1/api/src/lib/note/note-service.ts` and
   `lib/folder/folder-service.ts` — the service-function shape (create,
