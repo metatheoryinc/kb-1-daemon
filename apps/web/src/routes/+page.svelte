@@ -155,9 +155,10 @@
     /* Heading gutter chips render in a box reaching 40px left of the text
        (see PlaintextEditor's ::before rules), so the left padding must
        exceed that for the chips to sit inside the panel. */
+    padding-top: 28px;
     padding-left: 56px;
     padding-right: 32px;
-    padding-bottom: 48px;
+    padding-bottom: 64px;
   }
 
   .loading {
