@@ -12,9 +12,11 @@
   let provider = $state<DemoDocumentProvider | null>(null);
   let status = $state<DemoDocumentProviderStatus>('connecting');
   let error = $state<string | null>(null);
+  let externalMergeVisible = $state(false);
   let externalChangeVisible = $state(false);
   let persistFailureActive = $state(false);
   let persistRecoveredVisible = $state(false);
+  let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const livePaths: LivePath[] = [
@@ -41,8 +43,25 @@
   );
 
   function handleSessionEvent(event: DocumentSessionEvent): void {
+    if (event.kind === 'external-merge') {
+      externalMergeVisible = true;
+      if (externalMergeTimer) {
+        clearTimeout(externalMergeTimer);
+      }
+      externalMergeTimer = setTimeout(() => {
+        externalMergeVisible = false;
+        externalMergeTimer = undefined;
+      }, 4000);
+      return;
+    }
+
     if (event.kind === 'external-change') {
       externalChangeVisible = true;
+      externalMergeVisible = false;
+      if (externalMergeTimer) {
+        clearTimeout(externalMergeTimer);
+        externalMergeTimer = undefined;
+      }
       return;
     }
 
@@ -80,6 +99,10 @@
     provider = nextProvider;
 
     return () => {
+      if (externalMergeTimer) {
+        clearTimeout(externalMergeTimer);
+        externalMergeTimer = undefined;
+      }
       if (recoveryTimer) {
         clearTimeout(recoveryTimer);
         recoveryTimer = undefined;
@@ -105,8 +128,23 @@
     </a>
   </header>
 
-  {#if externalChangeVisible || persistFailureActive || persistRecoveredVisible}
+  {#if externalMergeVisible || externalChangeVisible || persistFailureActive || persistRecoveredVisible}
     <section class="banner-strip" aria-label="Document save notifications">
+      {#if externalMergeVisible}
+        <DocumentSaveBanner
+          variant="external-merge"
+          title="External edit merged"
+          message="Merged an edit made outside KB-2."
+          ondismiss={() => {
+            externalMergeVisible = false;
+            if (externalMergeTimer) {
+              clearTimeout(externalMergeTimer);
+              externalMergeTimer = undefined;
+            }
+          }}
+        />
+      {/if}
+
       {#if externalChangeVisible}
         <DocumentSaveBanner
           variant="external-change"

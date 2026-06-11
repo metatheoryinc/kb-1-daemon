@@ -115,7 +115,7 @@ describe('demo document provider', () => {
 
       webSocketServer!.handleUpgrade(request, socket, head, (webSocket) => {
         webSocket.send(encodeSessionEvent({
-          kind: 'persist-failure',
+          kind: 'external-merge',
           path: join(kb2Home, 'demo-vault', 'hello-world.md'),
           ts: 123,
         }));
@@ -129,7 +129,7 @@ describe('demo document provider', () => {
       onSessionEvent: (event) => events.push(event),
     });
 
-    await waitUntil(() => events.some((event) => event.kind === 'persist-failure'), () =>
+    await waitUntil(() => events.some((event) => event.kind === 'external-merge'), () =>
       `Timed out waiting for provider session event: ${JSON.stringify(events)}`
     );
 

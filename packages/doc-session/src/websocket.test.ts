@@ -71,7 +71,7 @@ describe('Yjs WebSocket session', () => {
     await session.close();
   });
 
-  it('reconciles external file changes and broadcasts the event to every client', async () => {
+  it('reconciles idle external file changes and broadcasts the quiet merge event to every client', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, {
       defaultContent: 'initial\n',
@@ -103,7 +103,7 @@ describe('Yjs WebSocket session', () => {
     await writeFile(filePath, 'changed outside\n', 'utf8');
 
     await waitForSharedContent([clientA, clientB], (content) => content === 'changed outside\n');
-    await waitForSessionEvent([clientA, clientB], 'external-change');
+    await waitForSessionEvent([clientA, clientB], 'external-merge');
 
     clientA.close();
     clientB.close();
