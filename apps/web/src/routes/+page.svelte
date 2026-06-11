@@ -152,8 +152,12 @@
   }
 
   .document-shell :global(.plaintext-editor .cm-content) {
-    padding-left: 18px;
-    padding-right: 18px;
+    /* Heading gutter chips render in a box reaching 40px left of the text
+       (see PlaintextEditor's ::before rules), so the left padding must
+       exceed that for the chips to sit inside the panel. */
+    padding-left: 56px;
+    padding-right: 32px;
+    padding-bottom: 48px;
   }
 
   .loading {
