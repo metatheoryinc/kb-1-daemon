@@ -51,6 +51,13 @@ inventing.
   (a component appearing in a gallery is not a per-component story) came from
   the user applying the Storybook invariant more strictly than the audit did;
   the invariant text was tightened the same hour.
+- **The hand-rolled differ catch.** Chunk 006 shipped a 39-line fresh
+  prefix/suffix differ; the audit even named it ("fresh implementation") and
+  the commander graded it acceptable. The user rejected it on principle —
+  battle-tested library or nothing — which became the
+  battle-tested-over-hand-rolled invariant and chunk 006.5 (fast-diff +
+  applyDelta, net-negative code). Standing instruction: spot these on the
+  user's behalf; "it's only 40 lines" is the canonical size of the mistake.
 
 ## What we've decided not to do
 

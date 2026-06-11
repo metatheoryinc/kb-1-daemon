@@ -21,6 +21,7 @@ Engineering invariants — how the codebase stays healthy:
 - [Frontend components and Storybook](./engineering/frontend-components-and-storybook.md)
 - [Tests never touch real user data](./engineering/tests-never-touch-real-user-data.md)
 - [UI packages own no transport](./engineering/ui-packages-own-no-transport.md)
+- [Battle-tested over hand-rolled](./engineering/battle-tested-over-hand-rolled.md)
 
 ## How To Read These
 
