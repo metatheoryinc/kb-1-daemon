@@ -7,8 +7,8 @@
   HTTP through outbound WS, and the Yjs WebSocket relayed end-to-end with
   two browsers on the cloud URL. Deliverable: latency numbers + the list of
   CF limits hit. Needs the user's Cloudflare/wrangler auth.
-- **Repo rename step 1**: kb-2 → kb-1-daemon (awaiting user go; zero-risk
-  via redirects).
+- **Session handoff in progress**: local directory rename + commander
+  recreation; incoming commander starts at `docs/commander-handoff.md`.
 - **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
   browsable vault; wikilinks get somewhere to go. Carries two deferred
   decisions: external file-deletion semantics, persist-failure state in

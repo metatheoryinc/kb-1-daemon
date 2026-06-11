@@ -9,7 +9,8 @@ KB-2 is the local-first, open-source rebuild of the KB-1 product (the repo is
 named kb-2; the product's real name is KB-1 — rename deferred). The user's
 filesystem is the durable truth; a daemon is the only runtime writer; the
 cloud arrives later as relay/identity/collaboration, never as the content
-store. Six chunks in, the core thesis is proven and demoable: one command
+store. Seven increments in (001-006.5), the core thesis is proven and
+demoable: one command
 starts a daemon that serves KB-1's production CM6 editor over a Yjs session,
 every keystroke materializes into a plain Markdown file the user owns, and
 the unhappy path is loud — external file edits reconcile-and-warn in every
@@ -56,8 +57,9 @@ inventing.
   the commander graded it acceptable. The user rejected it on principle —
   battle-tested library or nothing — which became the
   battle-tested-over-hand-rolled invariant and chunk 006.5 (fast-diff +
-  applyDelta, net-negative code). Standing instruction: spot these on the
-  user's behalf; "it's only 40 lines" is the canonical size of the mistake.
+  applyDelta, net-negative code — shipped same day, clean audit, the first
+  zero-fix-round chunk). Standing instruction: spot these on the user's
+  behalf; "it's only 40 lines" is the canonical size of the mistake.
 
 ## What we've decided not to do
 
