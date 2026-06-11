@@ -68,8 +68,9 @@ inventing.
 
 ## Live tensions
 
-- Repo naming sequence (agreed 2026-06-11, partially pending): public repo →
-  `kb-1-daemon` soon; private cloud repo born as `kb-1-cloud`; production
+- Repo naming sequence (agreed 2026-06-11; step 1 DONE — public repo renamed
+  to `kb-1-daemon`, remote updated, local dir still `kb-2` until a context
+  reset): private cloud repo born as `kb-1-cloud`; production
   `kb-1` renamed later with team coordination; only after a cooling period
   can `kb-1-daemon` take the bare `kb-1` name — GitHub redirects die when a
   freed name is reused, which would silently misdirect the team's stale
