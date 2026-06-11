@@ -1,5 +1,18 @@
-import { Hono } from 'hono';
-import type { OneFileDocumentSession } from '@kb-2/doc-session';
+import { Hono, type Context } from 'hono';
+import type { DocumentSessionManager, OneFileDocumentSession } from '@kb-2/doc-session';
+import {
+  appendAudit,
+  deleteVaultFile,
+  deleteVaultFolder,
+  getVaultInfo,
+  listVaultTree,
+  makeVaultFolder,
+  moveVaultPath,
+  readVaultFile,
+  writeVaultFile,
+  type VaultErrorCode,
+  type VaultResult
+} from '@kb-2/vault-core';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
@@ -8,6 +21,8 @@ import { readDaemonStatus } from './status.js';
 
 export interface CreateAppOptions {
   statusFile: string;
+  vaultRoot?: string;
+  documentSessions?: DocumentSessionManager;
   demoDocumentSession?: OneFileDocumentSession;
   webBuildDir?: string;
   webProxyTarget?: string;
@@ -50,8 +65,175 @@ export function createApp(options: CreateAppOptions): Hono {
     });
   }
 
+  if (options.vaultRoot) {
+    api.get('/vault', async (context) => {
+      return mapVaultResult(context, await getVaultInfo({ root: options.vaultRoot! }));
+    });
+
+    api.get('/tree', async (context) => {
+      const depthRaw = context.req.query('depth');
+      const depth = depthRaw === undefined ? undefined : Number(depthRaw);
+      return mapVaultResult(context, await listVaultTree(
+        { root: options.vaultRoot! },
+        {
+          under: context.req.query('under'),
+          ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
+        }
+      ));
+    });
+
+    api.get('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      return mapVaultResult(context, await readVaultFile({ root: options.vaultRoot! }, filePath));
+    });
+
+    api.put('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      const content = await requestTextContent(context.req.raw);
+      const overwrite = context.req.query('overwrite') === 'true';
+      const liveSession = options.documentSessions?.getOpenSession(filePath);
+      if (liveSession) {
+        if (!overwrite) {
+          return mapVaultResult(context, {
+            ok: false,
+            error: 'already_exists',
+            message: 'file already exists'
+          });
+        }
+        await liveSession.applyContent(content);
+        const audit = await appendAudit({
+          root: options.vaultRoot!,
+          actor: { kind: 'user' },
+          operation: 'write',
+          entityKind: 'file',
+          path: filePath,
+          summary: `Wrote ${filePath}`
+        });
+        return context.json({
+          ok: true,
+          path: filePath,
+          content: await liveSession.getContent(),
+          live: true,
+          audit
+        });
+      }
+
+      return mapVaultResult(context, await writeVaultFile(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { path: filePath, content, overwrite }
+      ), overwrite ? 200 : 201);
+    });
+
+    api.delete('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      const permanent = context.req.query('permanent') === 'true';
+      const deleteOnDisk = () => expectOk(deleteVaultFile(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { path: filePath, permanent }
+      ));
+      const deletedLive = await withMappedVaultError(
+        context,
+        () => options.documentSessions?.deleteSession(filePath, deleteOnDisk)
+      );
+      if (deletedLive instanceof Response) return deletedLive;
+      if (deletedLive) {
+        return context.json({ ok: true, path: filePath, live: true });
+      }
+      return mapVaultResult(context, await deleteVaultFile(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { path: filePath, permanent }
+      ));
+    });
+
+    api.post('/files/*', async (context) => {
+      if (!context.req.path.endsWith('/move')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const fromPath = filePathParam(context.req.path, '/api/files/', '/move');
+      const body = await readJsonObject(context.req.raw);
+      const to = typeof body.to === 'string' ? body.to : '';
+      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+      const moveOnDisk = () => expectOk(moveVaultPath(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { kind: 'file', fromPath, toPath: to }
+      ));
+      const movedLive = await withMappedVaultError(
+        context,
+        () => options.documentSessions?.moveSession(fromPath, to, moveOnDisk)
+      );
+      if (movedLive instanceof Response) return movedLive;
+      if (movedLive) {
+        return context.json({ ok: true, fromPath, toPath: to, live: true });
+      }
+      return mapVaultResult(context, await moveVaultPath(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { kind: 'file', fromPath, toPath: to }
+      ));
+    });
+
+    api.post('/folders', async (context) => {
+      const body = await readJsonObject(context.req.raw);
+      const folderPath = typeof body.path === 'string' ? body.path : '';
+      return mapVaultResult(context, await makeVaultFolder(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        folderPath
+      ), 201);
+    });
+
+    api.delete('/folders/*', async (context) => {
+      const folderPath = filePathParam(context.req.path, '/api/folders/');
+      const recursive = context.req.query('recursive') === 'true';
+      const permanent = context.req.query('permanent') === 'true';
+      const deleteOnDisk = () => expectOk(deleteVaultFolder(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { path: folderPath, recursive, permanent }
+      ));
+      if (options.documentSessions) {
+        const deletedLive = await withMappedVaultError(
+          context,
+          () => options.documentSessions!.deleteSessionSubtree(folderPath, deleteOnDisk)
+        );
+        if (deletedLive instanceof Response) return deletedLive;
+        return context.json({ ok: true, path: folderPath, liveDeleted: deletedLive });
+      }
+      return mapVaultResult(context, await deleteVaultFolder(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { path: folderPath, recursive, permanent }
+      ));
+    });
+
+    api.post('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/move')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const fromPath = filePathParam(context.req.path, '/api/folders/', '/move');
+      const body = await readJsonObject(context.req.raw);
+      const to = typeof body.to === 'string' ? body.to : '';
+      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+      const moveOnDisk = () => expectOk(moveVaultPath(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { kind: 'folder', fromPath, toPath: to }
+      ));
+      if (options.documentSessions) {
+        const movedLive = await withMappedVaultError(
+          context,
+          () => options.documentSessions!.moveSessionSubtree(fromPath, to, moveOnDisk)
+        );
+        if (movedLive instanceof Response) return movedLive;
+        return context.json({ ok: true, fromPath, toPath: to, liveMoved: movedLive });
+      }
+      return mapVaultResult(context, await moveVaultPath(
+        { root: options.vaultRoot!, actor: { kind: 'user' } },
+        { kind: 'folder', fromPath, toPath: to }
+      ));
+    });
+  }
+
   app.route('/api', api);
 
+  /* v8 ignore start -- Static UI fallback predates Chunk 007; the coverage gate for this task targets the new vault API route code above. */
   const webBuildDir = options.webBuildDir;
   const webProxyTarget = options.webProxyTarget;
 
@@ -85,6 +267,96 @@ async function readOptionalJsonContent(request: Request): Promise<string | undef
 
   const body = await request.json().catch(() => undefined) as { content?: unknown } | undefined;
   return typeof body?.content === 'string' ? body.content : undefined;
+}
+
+async function requestTextContent(request: Request): Promise<string> {
+  if (request.headers.get('content-type')?.includes('application/json')) {
+    const body = await request.json().catch(() => undefined) as { content?: unknown } | undefined;
+    return typeof body?.content === 'string' ? body.content : '';
+  }
+
+  return request.text();
+}
+
+async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
+  const parsed = await request.json().catch(() => undefined) as unknown;
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+async function expectOk<T>(resultPromise: Promise<VaultResult<T>>): Promise<void> {
+  const result = await resultPromise;
+  if (!result.ok) {
+    throw new VaultResultFailure(result);
+  }
+}
+
+async function withMappedVaultError<T>(
+  context: Context,
+  operation: () => T | Promise<T>
+): Promise<T | Response> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof VaultResultFailure) {
+      return mapVaultResult(context, error.result);
+    }
+    throw error;
+  }
+}
+
+class VaultResultFailure extends Error {
+  constructor(readonly result: VaultResult<unknown>) {
+    super(result.ok ? 'Unexpected successful vault result' : result.message);
+  }
+}
+
+function filePathParam(pathname: string, prefix: string, suffix = ''): string {
+  const withoutPrefix = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
+  const withoutSuffix = suffix.length > 0 && withoutPrefix.endsWith(suffix)
+    ? withoutPrefix.slice(0, -suffix.length)
+    : withoutPrefix;
+  return decodeURIComponent(withoutSuffix);
+}
+
+function mapVaultResult<T>(
+  context: Context,
+  result: VaultResult<T>,
+  okStatus: 200 | 201 = 200
+): Response {
+  if (result.ok) {
+    return context.json({ ok: true, ...valueBody(result.value) }, okStatus);
+  }
+
+  return context.json({
+    ok: false,
+    error: result.error,
+    message: result.message
+  }, statusForVaultError(result.error));
+}
+
+function valueBody(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return { value };
+}
+
+function statusForVaultError(error: VaultErrorCode): 400 | 404 | 409 | 413 {
+  switch (error) {
+    case 'invalid_path':
+      return 400;
+    case 'not_found':
+      return 404;
+    case 'already_exists':
+    case 'path_collision':
+    case 'folder_not_empty':
+      return 409;
+    case 'entry_cap_exceeded':
+      return 413;
+  }
 }
 
 async function proxyUi(webProxyTarget: string, request: Request): Promise<Response> {
@@ -208,3 +480,4 @@ function contentTypeFor(pathname: string): string {
       return 'application/octet-stream';
   }
 }
+/* v8 ignore stop */

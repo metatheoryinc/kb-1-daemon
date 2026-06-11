@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -7,6 +7,7 @@ import * as Y from 'yjs';
 import { createFastDiffYTextDelta } from './session.js';
 import {
   OneFileDocumentSession,
+  DocumentSessionManager,
   type DocumentSessionEvent,
   type DocumentSessionWarning
 } from './index.js';
@@ -219,6 +220,28 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('treats external deletion of an open file as doc-deleted instead of reconciling to empty', async () => {
+    const events: DocumentSessionEvent[] = [];
+    await writeFileWithParents(filePath, 'do not silently empty me\n');
+    const session = new OneFileDocumentSession(filePath, {
+      eventPath: 'hello-world.md',
+      watchDebounceMs: 10,
+      watchPollMs: 50
+    });
+    session.onEvent((event) => events.push(event));
+    await session.open();
+
+    await rm(filePath);
+
+    await waitUntil(() => events.some((event) => event.kind === 'doc-deleted'), () =>
+      `Timed out waiting for doc-deleted; events=${JSON.stringify(events)}`
+    );
+
+    expect(eventKinds(events)).toEqual(['doc-deleted']);
+    await expect(session.getContent()).resolves.toBe('do not silently empty me\n');
+    await session.close();
+  });
+
   it('persists a client update that arrives after an idle external merge', async () => {
     const events: DocumentSessionEvent[] = [];
     const session = new OneFileDocumentSession(filePath, {
@@ -301,6 +324,108 @@ describe('OneFileDocumentSession', () => {
     });
     expect(events.some((event) => event.kind === 'external-change')).toBe(true);
     await session.close();
+  });
+
+  it('rekeys a live session on move and preserves edits made during the move at the new path', async () => {
+    const events: DocumentSessionEvent[] = [];
+    const targetPath = join(kb2Home, 'demo-vault', 'renamed.md');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: 'base\n',
+      eventPath: 'hello-world.md'
+    });
+    session.onEvent((event) => events.push(event));
+    await session.open();
+
+    const move = session.moveTo(targetPath, 'renamed.md', async () => {
+      session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'typed during rename\n');
+      await mkdir(dirname(targetPath), { recursive: true });
+      await rename(filePath, targetPath);
+    });
+    await move;
+    await session.flush();
+
+    await expect(readFile(targetPath, 'utf8')).resolves.toBe('base\ntyped during rename\n');
+    await expect(readFile(filePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'doc-moved',
+      path: 'renamed.md',
+      fromPath: 'hello-world.md',
+      toPath: 'renamed.md'
+    }));
+    await session.close();
+  });
+
+  it('rekeys every live session under a moved folder subtree', async () => {
+    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const first = manager.getSession('folder/a.md');
+    const second = manager.getSession('folder/deep/b.md');
+    const events: DocumentSessionEvent[] = [];
+    first.onEvent((event) => events.push(event));
+    second.onEvent((event) => events.push(event));
+    await first.open();
+    await second.open();
+    first.ydoc.getText('markdown').insert(0, 'a\n');
+    second.ydoc.getText('markdown').insert(0, 'b\n');
+    await Promise.all([first.flush(), second.flush()]);
+
+    const moved = await manager.moveSessionSubtree('folder', 'moved/folder', async () => {
+      await mkdir(join(kb2Home, 'demo-vault', 'moved'), { recursive: true });
+      await rename(join(kb2Home, 'demo-vault', 'folder'), join(kb2Home, 'demo-vault', 'moved', 'folder'));
+    });
+
+    expect(moved.sort()).toEqual(['moved/folder/a.md', 'moved/folder/deep/b.md']);
+    await expect(readFile(join(kb2Home, 'demo-vault', 'moved', 'folder', 'a.md'), 'utf8')).resolves.toBe('a\n');
+    await expect(readFile(join(kb2Home, 'demo-vault', 'moved', 'folder', 'deep', 'b.md'), 'utf8')).resolves.toBe('b\n');
+    expect(events.filter((event) => event.kind === 'doc-moved')).toHaveLength(2);
+    await manager.close();
+  });
+
+  it('runs move/delete fallbacks when no live session is open', async () => {
+    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    let moved = false;
+    let deleted = false;
+
+    await expect(manager.moveSession('missing.md', 'renamed.md', async () => {
+      moved = true;
+    })).resolves.toBe(false);
+    expect(moved).toBe(false);
+    await expect(manager.moveSessionSubtree('folder', 'moved/folder', async () => {
+      moved = true;
+    })).resolves.toEqual([]);
+    expect(moved).toBe(true);
+
+    await expect(manager.deleteSession('missing.md', async () => {
+      deleted = true;
+    })).resolves.toBe(false);
+    expect(deleted).toBe(false);
+    await expect(manager.deleteSessionSubtree('folder', async () => {
+      deleted = true;
+    })).resolves.toEqual([]);
+    expect(deleted).toBe(true);
+    await manager.close();
+  });
+
+  it('deletes every live session under a folder subtree once after the disk delete', async () => {
+    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const first = manager.getSession('folder/a.md');
+    const second = manager.getSession('folder/deep/b.md');
+    await first.open();
+    await second.open();
+    first.ydoc.getText('markdown').insert(0, 'a\n');
+    second.ydoc.getText('markdown').insert(0, 'b\n');
+    await Promise.all([first.flush(), second.flush()]);
+
+    let deleteCalls = 0;
+    const deleted = await manager.deleteSessionSubtree('folder', async () => {
+      deleteCalls += 1;
+      await rm(join(kb2Home, 'demo-vault', 'folder'), { recursive: true });
+    });
+
+    expect(deleted).toEqual(['folder/a.md', 'folder/deep/b.md']);
+    expect(deleteCalls).toBe(1);
+    expect(manager.getOpenSession('folder/a.md')).toBeUndefined();
+    expect(manager.getOpenSession('folder/deep/b.md')).toBeUndefined();
+    await manager.close();
   });
 });
 

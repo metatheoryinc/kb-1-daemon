@@ -6,6 +6,10 @@ export {
   type OneFileDocumentSessionOptions
 } from './session.js';
 export {
+  DocumentSessionManager,
+  type DocumentSessionManagerOptions
+} from './manager.js';
+export {
   DEMO_DOCUMENT_YJS_PATH,
   bindYjsWebSocket,
   type YjsWebSocketLike

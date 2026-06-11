@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { DEMO_DOCUMENT_YJS_PATH, OneFileDocumentSession, bindYjsWebSocket } from '@kb-2/doc-session';
+import { DEMO_DOCUMENT_YJS_PATH, DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
+import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -16,11 +17,14 @@ export interface StartedDaemon {
 
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
-  const demoDocumentSession = new OneFileDocumentSession(config.demoDocumentFile);
+  const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
+  const demoDocumentSession = documentSessions.getSession('hello-world.md');
   await demoDocumentSession.open();
 
   const app = createApp({
     statusFile: config.statusFile,
+    vaultRoot: config.vaultRoot,
+    documentSessions,
     demoDocumentSession,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget
@@ -61,7 +65,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
             close: async () => {
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
-              await demoDocumentSession.close();
+              await documentSessions.close();
             }
           });
         } catch (error) {
@@ -73,7 +77,8 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.on('upgrade', (request, socket, head) => {
       const pathname = request.url ? new URL(request.url, `http://${request.headers.host ?? 'localhost'}`).pathname : '';
-      if (pathname !== DEMO_DOCUMENT_YJS_PATH) {
+      const documentPath = documentPathFromWebSocketPath(pathname);
+      if (!documentPath) {
         socket.destroy();
         return;
       }
@@ -81,7 +86,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
         void (async () => {
           try {
-            const binding = await bindYjsWebSocket(demoDocumentSession, webSocket);
+            const binding = await bindYjsWebSocket(documentSessions.getSession(documentPath), webSocket);
             activeDocumentConnections.add(binding.closed);
             binding.closed.finally(() => {
               activeDocumentConnections.delete(binding.closed);
@@ -96,6 +101,25 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
+}
+
+function documentPathFromWebSocketPath(pathname: string): string | undefined {
+  if (pathname === DEMO_DOCUMENT_YJS_PATH) {
+    return 'hello-world.md';
+  }
+
+  const prefix = '/api/files/';
+  const suffix = '/yjs';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return undefined;
+  }
+
+  try {
+    const candidate = decodeURIComponent(pathname.slice(prefix.length, -suffix.length));
+    return validateVaultPath(candidate, 'file');
+  } catch {
+    return undefined;
+  }
 }
 
 async function closeWebSocketServer(server: WebSocketServer, activeDocumentConnections: Set<Promise<void>>): Promise<void> {

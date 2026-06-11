@@ -20,6 +20,11 @@ const fixtures = {
     onaction: noop,
     ondismiss: noop,
   },
+  docDeletedAlarm: {
+    variant: 'doc-deleted',
+    title: 'Document deleted',
+    message: 'This file was moved to trash while open. The editor is read-only.',
+  },
   persistFailureAlarm: {
     variant: 'persist-failure',
     title: 'Changes are not saving',
@@ -39,7 +44,7 @@ const meta = {
   argTypes: {
     variant: {
       control: 'select',
-      options: ['external-merge', 'external-change', 'persist-failure', 'persist-recovered'],
+      options: ['external-merge', 'external-change', 'doc-deleted', 'persist-failure', 'persist-recovered'],
     },
   },
 } satisfies Meta<typeof DocumentSaveBanner>;
@@ -57,6 +62,10 @@ export const ExternalMergeNotice: Story = {
 
 export const PersistFailureAlarm: Story = {
   args: fixtures.persistFailureAlarm,
+};
+
+export const DocDeletedAlarm: Story = {
+  args: fixtures.docDeletedAlarm,
 };
 
 export const PersistRecoveredConfirmation: Story = {

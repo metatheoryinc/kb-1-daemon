@@ -4,6 +4,7 @@
   export type DocumentSaveBannerVariant =
     | 'external-merge'
     | 'external-change'
+    | 'doc-deleted'
     | 'persist-failure'
     | 'persist-recovered';
 
@@ -40,6 +41,13 @@
       icon: 'refresh',
       role: 'status',
       ariaLive: 'polite',
+    },
+    'doc-deleted': {
+      title: 'Document deleted',
+      message: 'This file was deleted. The editor is read-only.',
+      icon: 'bell',
+      role: 'alert',
+      ariaLive: 'assertive',
     },
     'persist-failure': {
       title: 'Changes are not saving',
@@ -184,6 +192,13 @@
     --banner-bg: color-mix(in srgb, var(--destructive) 8%, var(--rd-panel));
     --banner-border: color-mix(in srgb, var(--destructive) 30%, var(--rd-rule));
     --banner-icon-bg: color-mix(in srgb, var(--destructive) 12%, var(--rd-panel));
+  }
+
+  .variant-doc-deleted {
+    --banner-accent: var(--destructive);
+    --banner-bg: color-mix(in srgb, var(--destructive) 10%, var(--rd-panel));
+    --banner-border: color-mix(in srgb, var(--destructive) 34%, var(--rd-rule));
+    --banner-icon-bg: color-mix(in srgb, var(--destructive) 14%, var(--rd-panel));
   }
 
   .variant-persist-recovered {
