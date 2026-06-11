@@ -49,7 +49,13 @@ state. Agents route on codes — codes must be types, not prose.
 
 ## Exceptions
 
-None currently accepted.
+- Success-shape live indicators (accepted 2026-06-11): live-session and
+  cold-disk paths return identical FAILURE shapes and identical audit
+  metadata, but success responses still differ by live-indicator keys
+  (`live: true`, `liveDeleted`/`liveMoved` present only on live paths) —
+  a pre-existing wire contract. Expires at the next deliberate
+  wire-breaking change, which should normalize (e.g. always-present
+  `live` boolean).
 
 ## Review Checklist
 
