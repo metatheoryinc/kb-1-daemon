@@ -2,6 +2,7 @@
   import type { IconName } from '../primitives/types';
 
   export type DocumentSaveBannerVariant =
+    | 'external-merge'
     | 'external-change'
     | 'persist-failure'
     | 'persist-recovered';
@@ -26,6 +27,13 @@
   }
 
   const variantConfig: Record<DocumentSaveBannerVariant, VariantConfig> = {
+    'external-merge': {
+      title: 'External edit merged',
+      message: 'Merged an edit made outside KB-2.',
+      icon: 'refresh',
+      role: 'status',
+      ariaLive: 'polite',
+    },
     'external-change': {
       title: 'Document changed elsewhere',
       message: 'A newer version is available. Review it before continuing to edit.',
@@ -162,6 +170,13 @@
     --banner-bg: color-mix(in srgb, var(--rd-sky-bg) 32%, var(--rd-panel));
     --banner-border: color-mix(in srgb, var(--rd-sky) 28%, var(--rd-rule));
     --banner-icon-bg: color-mix(in srgb, var(--rd-sky-bg) 70%, var(--rd-panel));
+  }
+
+  .variant-external-merge {
+    --banner-accent: var(--rd-live);
+    --banner-bg: color-mix(in srgb, var(--rd-live-bg) 34%, var(--rd-panel));
+    --banner-border: color-mix(in srgb, var(--rd-live) 24%, var(--rd-rule));
+    --banner-icon-bg: color-mix(in srgb, var(--rd-live-bg) 70%, var(--rd-panel));
   }
 
   .variant-persist-failure {

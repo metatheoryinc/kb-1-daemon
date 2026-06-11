@@ -3,6 +3,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
+import diff from 'fast-diff';
 import * as Y from 'yjs';
 
 import type { DocumentSessionEvent } from './protocol.js';
@@ -48,6 +49,7 @@ export class OneFileDocumentSession {
   private opened = false;
   private openPromise: Promise<void> | undefined;
   private lastWrittenHash: string | undefined;
+  private lastWrittenContent: string | undefined;
   private pendingWriteHash: string | undefined;
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
@@ -90,6 +92,7 @@ export class OneFileDocumentSession {
     const content = await this.readOrCreateFile();
     this.text.insert(0, content);
     this.lastWrittenHash = hashContent(content);
+    this.lastWrittenContent = content;
     this.doc.on('update', this.handleDocumentUpdate);
     this.opened = true;
     this.startWatching();
@@ -180,7 +183,7 @@ export class OneFileDocumentSession {
         expectedHash: this.lastWrittenHash,
         actualHash: diskHash
       });
-      await this.reconcileExternalContent(diskContent ?? '', diskHash ?? hashContent(''));
+      await this.reconcileExternalContent(diskContent ?? '', diskHash ?? hashContent(''), diskContent === undefined);
       return;
     }
 
@@ -189,6 +192,7 @@ export class OneFileDocumentSession {
     try {
       await atomicWriteFile(this.filePath, content);
       this.lastWrittenHash = contentHash;
+      this.lastWrittenContent = content;
       this.markPersistRecovered();
     } finally {
       if (this.pendingWriteHash === contentHash) {
@@ -296,19 +300,34 @@ export class OneFileDocumentSession {
       return;
     }
 
-    await this.reconcileExternalContent(diskContent ?? '', diskHash);
+    await this.reconcileExternalContent(diskContent ?? '', diskHash, diskContent === undefined);
   }
 
-  private async reconcileExternalContent(content: string, contentHash: string): Promise<void> {
+  private async reconcileExternalContent(
+    content: string,
+    contentHash: string,
+    missingFromDisk: boolean,
+  ): Promise<void> {
     const current = this.currentContent();
     if (current === content) {
       this.lastWrittenHash = contentHash;
+      this.lastWrittenContent = content;
       return;
     }
 
-    applyMinimalTextSplice(this.text, current, content, this.doc);
+    const truncatedToEmpty = current.length > 0 && (missingFromDisk || content.length === 0);
+    const eventKind: DocumentSessionEvent['kind'] =
+      !truncatedToEmpty && current === this.lastWrittenContent
+        ? 'external-merge'
+        : 'external-change';
+
+    this.doc.transact(() => {
+      this.text.applyDelta(createFastDiffYTextDelta(current, content));
+    }, EXTERNAL_CHANGE_ORIGIN);
     this.lastWrittenHash = contentHash;
-    this.emitEvent('external-change');
+    // Mirrors the last materialized string; revisit resident memory cost before multi-file sessions.
+    this.lastWrittenContent = content;
+    this.emitEvent(eventKind);
   }
 
   private markPersistFailed(error: unknown): void {
@@ -386,41 +405,21 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
 }
 
-function applyMinimalTextSplice(
-  text: Y.Text,
-  current: string,
-  next: string,
-  doc: Y.Doc,
-): void {
-  let prefixLength = 0;
-  const maxPrefixLength = Math.min(current.length, next.length);
-  while (
-    prefixLength < maxPrefixLength &&
-    current.charCodeAt(prefixLength) === next.charCodeAt(prefixLength)
-  ) {
-    prefixLength += 1;
-  }
+export type YTextDeltaOperation =
+  | { retain: number }
+  | { insert: string }
+  | { delete: number };
 
-  let suffixLength = 0;
-  const maxSuffixLength = maxPrefixLength - prefixLength;
-  while (
-    suffixLength < maxSuffixLength &&
-    current.charCodeAt(current.length - suffixLength - 1) ===
-      next.charCodeAt(next.length - suffixLength - 1)
-  ) {
-    suffixLength += 1;
-  }
-
-  const deleteLength = current.length - prefixLength - suffixLength;
-  const inserted = next.slice(prefixLength, next.length - suffixLength);
-
-  doc.transact(() => {
-    if (deleteLength > 0) {
-      text.delete(prefixLength, deleteLength);
+export function createFastDiffYTextDelta(current: string, next: string): YTextDeltaOperation[] {
+  return diff(current, next).map(([operation, value]) => {
+    if (operation === diff.EQUAL) {
+      return { retain: value.length };
     }
 
-    if (inserted.length > 0) {
-      text.insert(prefixLength, inserted);
+    if (operation === diff.INSERT) {
+      return { insert: value };
     }
-  }, EXTERNAL_CHANGE_ORIGIN);
+
+    return { delete: value.length };
+  });
 }

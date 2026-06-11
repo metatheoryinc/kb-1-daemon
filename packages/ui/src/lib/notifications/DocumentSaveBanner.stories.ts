@@ -6,6 +6,12 @@ import DocumentSaveBanner, {
 const noop = () => undefined;
 
 const fixtures = {
+  externalMergeNotice: {
+    variant: 'external-merge',
+    title: 'External edit merged',
+    message: 'Merged an edit made outside KB-2.',
+    ondismiss: noop,
+  },
   externalChangeNotice: {
     variant: 'external-change',
     title: 'Document changed elsewhere',
@@ -33,7 +39,7 @@ const meta = {
   argTypes: {
     variant: {
       control: 'select',
-      options: ['external-change', 'persist-failure', 'persist-recovered'],
+      options: ['external-merge', 'external-change', 'persist-failure', 'persist-recovered'],
     },
   },
 } satisfies Meta<typeof DocumentSaveBanner>;
@@ -43,6 +49,10 @@ type Story = StoryObj<typeof meta>;
 
 export const ExternalChangeNotice: Story = {
   args: fixtures.externalChangeNotice,
+};
+
+export const ExternalMergeNotice: Story = {
+  args: fixtures.externalMergeNotice,
 };
 
 export const PersistFailureAlarm: Story = {

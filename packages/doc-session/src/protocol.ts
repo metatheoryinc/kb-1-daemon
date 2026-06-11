@@ -5,6 +5,7 @@ export const MESSAGE_SYNC = 0;
 export const MESSAGE_SESSION_EVENT = 1;
 
 export type DocumentSessionEventKind =
+  | 'external-merge'
   | 'external-change'
   | 'persist-failure'
   | 'persist-recovered';
@@ -43,7 +44,8 @@ export function decodeSessionEvent(
 }
 
 function isSessionEventKind(kind: unknown): kind is DocumentSessionEventKind {
-  return kind === 'external-change' ||
+  return kind === 'external-merge' ||
+    kind === 'external-change' ||
     kind === 'persist-failure' ||
     kind === 'persist-recovered';
 }
