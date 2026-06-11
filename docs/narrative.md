@@ -50,7 +50,10 @@ inventing.
   Ground truth is files, not status lines. Verified harder on cloud-001:
   a PARKED agent never wakes from messages at all — the fallback that works
   is archive + respawn a fresh agent with a self-contained fix brief
-  (pickup was immediate, fixes landed in six minutes).
+  (pickup was immediate, fixes landed in six minutes). And they escape:
+  twice in one day an agent did work in a MAIN checkout instead of its
+  worktree (nx cache once; a real commit once — good work, wrong place).
+  The branch tripwire runs every poll, not just when suspicious.
 - **The audit refuted a tooling-limitation claim.** Cloud-001's implementer
   declared DO eviction untestable ("no primitive in vitest-pool-workers");
   the independent auditor wrote a scratch test proving `state.abort()`

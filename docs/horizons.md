@@ -22,9 +22,14 @@
   append/prepend, scan search, idle-session GC. Audit fix round closed a
   real data-loss path: persist failures now surface as persist_failed (no
   false audit rows) and GC refuses to drop undurable sessions.
-- **Chunk 009 — local MCP server** (next to author) over the same service
-  boundary: tools map 1:1 onto the API surface, actor attribution
-  mcp_client in the audit log.
+- **Chunk 009 SHIPPED — the local-ops arc is COMPLETE** (2026-06-11):
+  daemon hosts streamable-HTTP MCP at /mcp, 13 tier-1 tools over the same
+  shared vault service the REST routes use (single canonical path,
+  audit-verified live), mcp_client attribution, full error fidelity.
+  Agents are now first-class vault clients. Next candidates (user's call):
+  tier-2 ops (frontmatter keys, tags, outline), file-tree UI, link index +
+  move-updates-links, cloud-003 relay prototype (plan ready), dependabot
+  hygiene (daemon 6, cloud 14 incl. 3 high).
 
 ## Mid horizon
 

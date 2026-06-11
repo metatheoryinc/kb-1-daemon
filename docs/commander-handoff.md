@@ -78,6 +78,16 @@ with the previous commander so they do not have to repeat any of it.
   worktree remove` hard-fails). Cleanup is `rm -rf <worktree-dir> && git -C
   <main checkout> worktree prune` after verifying the tree is clean and the
   branch is pushed. Applies to all kb-1-cloud worktrees.
+- **The tripwire must check BRANCH, not just cleanliness, every poll**:
+  `git -C <main checkout> branch --show-current` must equal `main`. A 009
+  fix-round agent checked out the feature branch in the user's main
+  checkout and committed there (work was good; location was the breach —
+  caught late because polls had degraded to status-only). Same-day, another
+  agent dropped .nx cache in a main checkout. Pattern: agents whose
+  worktree needs a fetch+checkout sometimes fall back to the main checkout.
+  Brief language must pin the EXACT worktree path with "cd there first;
+  run pwd before every git command" phrasing, and the poll checklist runs
+  the branch tripwire every time.
 - **Poll checklist, every wakeup** (use background `sleep N` tasks, 150-300s,
   as timers): (1) `fleet_read_inbox` — delivery to this session is
   pull-based; notifications do NOT wake you (the user has attempted an
