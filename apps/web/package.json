@@ -12,6 +12,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource/source-serif-4": "5.2.9",
+    "@kb-2/doc-session": "workspace:*",
     "@kb-2/editor": "workspace:*",
     "@kb-2/ui": "workspace:*",
     "lib0": "0.2.117",
@@ -20,7 +21,6 @@
     "yjs": "13.6.31"
   },
   "devDependencies": {
-    "@kb-2/doc-session": "workspace:*",
     "@sveltejs/adapter-static": "catalog:",
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",

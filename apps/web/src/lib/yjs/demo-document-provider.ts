@@ -2,11 +2,15 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
+import {
+  MESSAGE_SESSION_EVENT,
+  MESSAGE_SYNC,
+  decodeSessionEvent,
+  type DocumentSessionEvent,
+} from '@kb-2/doc-session/protocol';
 
 export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 export const DEMO_DOCUMENT_TEXT_NAME = 'markdown';
-
-const messageSync = 0;
 
 export type DemoDocumentProviderStatus =
   | 'connecting'
@@ -24,6 +28,7 @@ export interface DemoDocumentProviderOptions {
   url?: string;
   onStatus?: (status: DemoDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
+  onSessionEvent?: (event: DocumentSessionEvent) => void;
 }
 
 export function createDemoDocumentProvider(
@@ -40,7 +45,7 @@ export function createDemoDocumentProvider(
   const sendSync = (write: (encoder: encoding.Encoder) => void): void => {
     if (socket.readyState !== WebSocket.OPEN) return;
     const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, messageSync);
+    encoding.writeVarUint(encoder, MESSAGE_SYNC);
     write(encoder);
     socket.send(encoding.toUint8Array(encoder));
   };
@@ -69,9 +74,17 @@ export function createDemoDocumentProvider(
       const decoder = decoding.createDecoder(message);
       const encoder = encoding.createEncoder();
       const messageType = decoding.readVarUint(decoder);
-      if (messageType !== messageSync) return;
+      if (messageType === MESSAGE_SESSION_EVENT) {
+        const event = decodeSessionEvent(decoder);
+        if (event) {
+          options.onSessionEvent?.(event);
+        }
+        return;
+      }
 
-      encoding.writeVarUint(encoder, messageSync);
+      if (messageType !== MESSAGE_SYNC) return;
+
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.readSyncMessage(decoder, encoder, doc, socket);
       if (encoding.length(encoder) > 1) {
         socket.send(encoding.toUint8Array(encoder));
