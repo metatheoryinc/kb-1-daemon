@@ -36,9 +36,9 @@ Recommended next chunks:
 | 003 | One-file Markdown Yjs service over local API/WebSocket |
 | 004 | Component library and Storybook seeded from KB-1 UI patterns/components |
 | 005 | Minimal local editor UI wired to the one-file Yjs service |
-| 006 | Vault root configuration plus file tree/list/read APIs |
-| 007 | Local MCP tools for read/search/edit against the same vault service |
-| 008 | Direct filesystem write detection and local UI warning events |
+| 006 | Direct filesystem write detection and loud save/conflict surfacing |
+| 007 | Vault root configuration plus file tree/list/read APIs |
+| 008 | Local MCP tools for read/search/edit against the same vault service |
 | Later | Cloud relay, auth, orgs, paid collaboration gates, and cloud presence |
 
 The exact chunk boundaries can change, but the ordering principle should hold:

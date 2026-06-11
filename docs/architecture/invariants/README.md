@@ -13,6 +13,7 @@ Product and domain invariants — what the product is and how it treats data:
 - [Single writer, one service boundary](./product/single-writer-service-boundary.md)
 - [Filesystem is durable truth](./product/filesystem-durable-truth.md)
 - [Content, not people (local product)](./product/content-not-people.md)
+- [Edits save or fail loudly](./product/edits-save-or-fail-loudly.md)
 
 Engineering invariants — how the codebase stays healthy:
 
