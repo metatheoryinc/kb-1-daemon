@@ -11,8 +11,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { afterEach, beforeEach, describe, it } from 'vitest';
 
-import { OneFileDocumentSession } from '../../../../../packages/doc-session/src/session';
-import { bindYjsWebSocket } from '../../../../../packages/doc-session/src/websocket';
+import { bindYjsWebSocket, OneFileDocumentSession } from '@kb-2/doc-session';
 import {
   createDemoDocumentProvider,
   DEMO_DOCUMENT_TEXT_NAME,

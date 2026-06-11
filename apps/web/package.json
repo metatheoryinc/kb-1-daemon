@@ -20,6 +20,7 @@
     "yjs": "13.6.31"
   },
   "devDependencies": {
+    "@kb-2/doc-session": "workspace:*",
     "@sveltejs/adapter-static": "catalog:",
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",

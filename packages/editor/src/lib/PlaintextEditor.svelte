@@ -1518,19 +1518,7 @@
     color: var(--rd-ink-4, rgba(0, 0, 0, 0.4));
   }
 
-  /* --- Pending-upload spinner (Slice 2 Apple lane) ---------------- *
-   * Inline spinner shown while a paste/drop image upload is in flight.
-   * The image widget renders `<span class="cm-md-image-spinner">…</span>`
-   * for any URL that starts with `pending-upload://` (sentinel scheme
-   * minted by plaintext-image-upload.ts). Once the upload resolves the
-   * URL is Y.Text-swapped to the real path and the widget rebuilds as
-   * a regular <img>.
-   *
-   * Minimal visual: a Phosphor CircleNotch arc, rotated via CSS
-   * keyframes. Sits in the same muted ink tone as the broken-image
-   * fallback so the optimistic / failed states share a visual register.
-   * Same vertical-align rule as the broken-image widget so the spinner
-   * tracks the surrounding text baseline. */
+  /* Documents may contain pending-upload:// sentinel URLs from KB-1 data or future upload support. */
   .plaintext-editor :global(.cm-md-image-widget[data-state='pending']) {
     display: inline-flex;
     align-items: center;

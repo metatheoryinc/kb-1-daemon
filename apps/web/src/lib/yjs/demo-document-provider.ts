@@ -88,7 +88,7 @@ export function createDemoDocumentProvider(
   });
 
   socket.addEventListener('close', () => {
-    options.onStatus?.(destroyed ? 'closed' : 'closed');
+    options.onStatus?.('closed');
   });
 
   return {
@@ -116,4 +116,3 @@ function toUint8Array(data: unknown): Uint8Array | undefined {
   if (data instanceof Blob) return undefined;
   return undefined;
 }
-
