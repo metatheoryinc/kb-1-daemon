@@ -192,6 +192,10 @@ describe('Yjs WebSocket session', () => {
       } finally {
         lateClient.close();
       }
+
+      await chmod(vaultDir, 0o700);
+      clientA.text.insert(clientA.text.length, 'saved after replay\n');
+      await waitForSessionEvent([clientA], 'persist-recovered');
     } finally {
       await chmod(vaultDir, 0o700).catch(() => undefined);
       clientA.close();

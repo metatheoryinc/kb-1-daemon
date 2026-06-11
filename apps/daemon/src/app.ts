@@ -1,15 +1,22 @@
 import { Hono, type Context } from 'hono';
-import type { DocumentSessionManager, OneFileDocumentSession } from '@kb-2/doc-session';
+import { PersistFailedError, type DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
 import {
+  InvalidPathError,
   appendAudit,
+  appendContent,
+  applyAnchoredSplice,
   deleteVaultFile,
   deleteVaultFolder,
   getVaultInfo,
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  prependContent,
   readVaultFile,
+  searchVaultFiles,
+  validateVaultPath,
   writeVaultFile,
+  type AnchoredSpliceRequest,
   type VaultErrorCode,
   type VaultResult
 } from '@kb-2/vault-core';
@@ -82,9 +89,43 @@ export function createApp(options: CreateAppOptions): Hono {
       ));
     });
 
+    api.get('/search', async (context) => {
+      try {
+        const result = await searchVaultFiles(options.vaultRoot!, {
+          q: context.req.query('q') ?? '',
+          under: context.req.query('under'),
+          context: queryNumber(context, 'context'),
+          limit: queryNumber(context, 'limit'),
+          offset: queryNumber(context, 'offset')
+        });
+        return context.json({ ok: true, ...result });
+      } catch (error) {
+        if (error instanceof InvalidPathError) {
+          return mapVaultResult(context, {
+            ok: false,
+            error: 'invalid_path',
+            message: error.message
+          });
+        }
+        throw error;
+      }
+    });
+
     api.get('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
-      return mapVaultResult(context, await readVaultFile({ root: options.vaultRoot! }, filePath));
+      const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
+      if (!diskRead.ok || !options.documentSessions) {
+        return mapVaultResult(context, diskRead);
+      }
+      const baselineRead = await options.documentSessions.withSession(filePath, (session) => session.readWithBaseline());
+      return context.json({
+        ok: true,
+        path: diskRead.value.path,
+        content: baselineRead.content,
+        baseline: baselineRead.baseline,
+        size: diskRead.value.size,
+        mtimeMs: diskRead.value.mtimeMs
+      });
     });
 
     api.put('/files/*', async (context) => {
@@ -100,7 +141,8 @@ export function createApp(options: CreateAppOptions): Hono {
             message: 'file already exists'
           });
         }
-        await liveSession.applyContent(content);
+        const applied = await withMappedWriteError(context, () => liveSession.applyContent(content));
+        if (applied instanceof Response) return applied;
         const audit = await appendAudit({
           root: options.vaultRoot!,
           actor: { kind: 'user' },
@@ -112,7 +154,7 @@ export function createApp(options: CreateAppOptions): Hono {
         return context.json({
           ok: true,
           path: filePath,
-          content: await liveSession.getContent(),
+          content: applied,
           live: true,
           audit
         });
@@ -146,6 +188,101 @@ export function createApp(options: CreateAppOptions): Hono {
     });
 
     api.post('/files/*', async (context) => {
+      if (context.req.path.endsWith('/splice')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/splice');
+        const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
+        if (!diskRead.ok) return mapVaultResult(context, diskRead);
+        if (!options.documentSessions) {
+          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
+        }
+        const body = await readJsonObject(context.req.raw);
+        const splice = readSpliceRequest(body);
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
+          session.applyBaselineEdit(splice.baseline, (currentContent) =>
+            applyAnchoredSplice(currentContent, splice.request)
+          )
+        ));
+        if (result instanceof Response) return result;
+        if (!result.ok) return mapSpliceReject(context, result);
+        const audit = await appendAudit({
+          root: options.vaultRoot!,
+          actor: { kind: 'mcp_client', client: 'api' },
+          operation: 'splice',
+          entityKind: 'file',
+          path: filePath,
+          summary: `Spliced ${filePath}`
+        });
+        return context.json({
+          ok: true,
+          path: filePath,
+          content: result.content,
+          baseline: result.baseline,
+          audit
+        });
+      }
+
+      if (context.req.path.endsWith('/append')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/append');
+        const validPath = validateRouteFilePath(context, filePath);
+        if (validPath instanceof Response) return validPath;
+        if (!options.documentSessions) {
+          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
+        }
+        const body = await readJsonObject(context.req.raw);
+        const content = typeof body.content === 'string' ? body.content : '';
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(
+          filePath,
+          (session) => session.applyContentEdit((currentContent) => appendContent(currentContent, content)),
+          { defaultContent: '' }
+        ));
+        if (result instanceof Response) return result;
+        const audit = await appendAudit({
+          root: options.vaultRoot!,
+          actor: { kind: 'mcp_client', client: 'api' },
+          operation: 'append',
+          entityKind: 'file',
+          path: filePath,
+          summary: `Appended to ${filePath}`
+        });
+        return context.json({
+          ok: true,
+          path: filePath,
+          content: result.content,
+          baseline: result.baseline,
+          audit
+        });
+      }
+
+      if (context.req.path.endsWith('/prepend')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/prepend');
+        const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
+        if (!diskRead.ok) return mapVaultResult(context, diskRead);
+        if (!options.documentSessions) {
+          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
+        }
+        const body = await readJsonObject(context.req.raw);
+        const content = typeof body.content === 'string' ? body.content : '';
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
+          session.applyContentEdit((currentContent) => prependContent(currentContent, content))
+        ));
+        if (result instanceof Response) return result;
+        const audit = await appendAudit({
+          root: options.vaultRoot!,
+          actor: { kind: 'mcp_client', client: 'api' },
+          operation: 'prepend',
+          entityKind: 'file',
+          path: filePath,
+          summary: `Prepended to ${filePath}`
+        });
+        return context.json({
+          ok: true,
+          path: filePath,
+          content: result.content,
+          baseline: result.baseline,
+          audit
+        });
+      }
+
       if (!context.req.path.endsWith('/move')) {
         return context.json({ ok: false, error: 'Not found' }, 404);
       }
@@ -260,6 +397,61 @@ export function createApp(options: CreateAppOptions): Hono {
   return app;
 }
 
+function readSpliceRequest(body: Record<string, unknown>): { baseline: string; request: AnchoredSpliceRequest } {
+  return {
+    baseline: typeof body.baseline === 'string' ? body.baseline : '',
+    request: {
+      oldText: typeof body.old_text === 'string' ? body.old_text : '',
+      newText: typeof body.new_text === 'string' ? body.new_text : '',
+      ...(typeof body.before === 'string' ? { before: body.before } : {}),
+      ...(typeof body.after === 'string' ? { after: body.after } : {}),
+      ...(typeof body.occurrence === 'number' && Number.isInteger(body.occurrence)
+        ? { occurrence: body.occurrence }
+        : {})
+    }
+  };
+}
+
+function mapSpliceReject(context: Context, result: Exclude<Awaited<ReturnType<OneFileDocumentSession['applyBaselineEdit']>>, { ok: true }>): Response {
+  const status = statusForSpliceReject(result.rejected);
+  const { ok: _ok, ...body } = result;
+  return context.json({ ok: false, ...body }, status);
+}
+
+function statusForSpliceReject(rejected: string): 404 | 409 | 413 {
+  switch (rejected) {
+    case 'not_found':
+      return 404;
+    case 'too_large_splice':
+    case 'too_large_document':
+      return 413;
+    default:
+      return 409;
+  }
+}
+
+function queryNumber(context: Context, name: string): number | undefined {
+  const raw = context.req.query(name);
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function validateRouteFilePath(context: Context, filePath: string): string | Response {
+  try {
+    return validateVaultPath(filePath, 'file');
+  } catch (error) {
+    if (error instanceof InvalidPathError) {
+      return mapVaultResult(context, {
+        ok: false,
+        error: 'invalid_path',
+        message: error.message
+      });
+    }
+    throw error;
+  }
+}
+
 async function readOptionalJsonContent(request: Request): Promise<string | undefined> {
   if (!request.headers.get('content-type')?.includes('application/json')) {
     return undefined;
@@ -301,6 +493,24 @@ async function withMappedVaultError<T>(
   } catch (error) {
     if (error instanceof VaultResultFailure) {
       return mapVaultResult(context, error.result);
+    }
+    throw error;
+  }
+}
+
+async function withMappedWriteError<T>(
+  context: Context,
+  operation: () => T | Promise<T>
+): Promise<T | Response> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof PersistFailedError) {
+      return context.json({
+        ok: false,
+        error: 'persist_failed',
+        message: 'Document edit could not be durably saved to disk.'
+      }, 500);
     }
     throw error;
   }

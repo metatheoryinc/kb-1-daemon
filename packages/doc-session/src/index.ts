@@ -1,12 +1,15 @@
 export {
   DEFAULT_DEMO_DOCUMENT_CONTENT,
   OneFileDocumentSession,
+  PersistFailedError,
   type DocumentSessionEventHandler,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions
 } from './session.js';
 export {
+  DEFAULT_IDLE_SESSION_GRACE_MS,
   DocumentSessionManager,
+  type ClientDocumentSession,
   type DocumentSessionManagerOptions
 } from './manager.js';
 export {

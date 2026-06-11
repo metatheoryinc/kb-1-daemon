@@ -85,13 +85,16 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
         void (async () => {
+          const bindingLease = documentSessions.attachClientSession(documentPath);
           try {
-            const binding = await bindYjsWebSocket(documentSessions.getSession(documentPath), webSocket);
+            const binding = await bindYjsWebSocket(bindingLease.session, webSocket);
             activeDocumentConnections.add(binding.closed);
             binding.closed.finally(() => {
               activeDocumentConnections.delete(binding.closed);
+              bindingLease.release();
             }).catch(() => undefined);
           } catch (error) {
+            bindingLease.release();
             console.error(error);
             webSocket.close(1011, 'Document session failed to open');
           }

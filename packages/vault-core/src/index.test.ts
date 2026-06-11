@@ -1,16 +1,23 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import fc from 'fast-check';
 
 import {
+  DOCUMENT_BYTES_LIMIT,
+  SPLICE_BYTES_LIMIT,
+  appendContent,
+  applyAnchoredSplice,
   deleteVaultFile,
   deleteVaultFolder,
   getVaultInfo,
   listVaultTree,
+  lfNormalize,
   makeVaultFolder,
   moveVaultPath,
+  prependContent,
   readVaultFile,
+  searchVaultFiles,
   validateVaultPath,
   writeVaultFile,
   type VaultContext
@@ -291,7 +298,315 @@ describe('vault-core filesystem operations', () => {
   });
 });
 
+describe('anchored splice and positioned content helpers', () => {
+  it('applies exact replacements with anchors, occurrence, LF normalization, and surrogate pairs', () => {
+    expect(applyAnchoredSplice('one two three', {
+      oldText: 'two',
+      newText: 'TWO'
+    })).toEqual({ ok: true, content: 'one TWO three' });
+
+    expect(applyAnchoredSplice('foo bar foo baz foo', {
+      oldText: 'foo',
+      newText: 'FOO',
+      occurrence: 2
+    })).toEqual({ ok: true, content: 'foo bar FOO baz foo' });
+
+    expect(applyAnchoredSplice('aa aa aa', {
+      before: 'aa ',
+      oldText: 'aa',
+      after: ' aa',
+      newText: 'XX'
+    })).toEqual({ ok: true, content: 'aa XX aa' });
+
+    expect(applyAnchoredSplice('line one\nline two', {
+      oldText: 'one\r\nline',
+      newText: 'ONE\nLINE'
+    })).toEqual({ ok: true, content: 'line ONE\nLINE two' });
+
+    expect(applyAnchoredSplice('before 😀 after', {
+      oldText: '😀',
+      newText: '🧪'
+    })).toEqual({ ok: true, content: 'before 🧪 after' });
+  });
+
+  it('rejects missing, ambiguous, out-of-range, and size-capped splices', () => {
+    expect(applyAnchoredSplice('hello', {
+      oldText: 'missing',
+      newText: 'x'
+    })).toEqual({ ok: false, rejected: 'not_found' });
+
+    expect(applyAnchoredSplice('hello', {
+      oldText: '',
+      newText: 'x'
+    })).toEqual({ ok: false, rejected: 'not_found' });
+
+    expect(applyAnchoredSplice('aaa', {
+      oldText: 'aa',
+      newText: 'b'
+    })).toEqual({ ok: false, rejected: 'ambiguous', match_count: 2 });
+
+    expect(applyAnchoredSplice('foo foo', {
+      oldText: 'foo',
+      newText: 'bar',
+      occurrence: 3
+    })).toEqual({ ok: false, rejected: 'not_found' });
+
+    expect(applyAnchoredSplice('x', {
+      oldText: 'x'.repeat(SPLICE_BYTES_LIMIT + 1),
+      newText: 'y'
+    })).toEqual({ ok: false, rejected: 'too_large_splice', limit_bytes: SPLICE_BYTES_LIMIT });
+
+    const base = `x${'a'.repeat(DOCUMENT_BYTES_LIMIT - 1)}`;
+    expect(applyAnchoredSplice(base, {
+      oldText: 'x',
+      newText: 'yy'
+    })).toEqual({
+      ok: false,
+      rejected: 'too_large_document',
+      current_bytes: DOCUMENT_BYTES_LIMIT + 1,
+      limit_bytes: DOCUMENT_BYTES_LIMIT
+    });
+  });
+
+  it('property: anchored splice result equals the direct string replacement for generated full-unicode documents', () => {
+    const unicodeFragment = fc.array(
+      fc.oneof(
+        fc.string({ maxLength: 4 }),
+        fc.constantFrom('😀', '🧪', '𝌆', 'é', '中', '\uD800', '\uDC00', '\r\n', '\r')
+      ),
+      { maxLength: 20 }
+    ).map((parts) => parts.join(''));
+    const boundary = fc.constantFrom('', '😀', '🧪', '𝌆', '\uD800', '\uDC00');
+
+    fc.assert(fc.property(
+      unicodeFragment,
+      unicodeFragment,
+      unicodeFragment,
+      unicodeFragment,
+      boundary,
+      boundary,
+      (left, oldText, right, replacement, edgeBefore, edgeAfter) => {
+        const splicedText = `${edgeBefore}${oldText}${edgeAfter}`;
+        fc.pre(splicedText.length > 0);
+        const before = '__KB2_LEFT__';
+        const after = '__KB2_RIGHT__';
+        fc.pre(!left.includes(before + splicedText + after));
+        fc.pre(!right.includes(before + splicedText + after));
+        const source = `${left}${before}${splicedText}${after}${right}`;
+        const expected = `${left}${before}${lfNormalize(replacement)}${after}${right}`;
+        const result = applyAnchoredSplice(source, {
+          before,
+          oldText: splicedText,
+          after,
+          newText: replacement
+        });
+        expect(result).toEqual({ ok: true, content: expected });
+      }
+    ));
+  });
+
+  it('splices across CRLF, CR, and mixed line boundaries while preserving surrounding bytes', () => {
+    expect(applyAnchoredSplice('alpha\r\nold\r\nomega', {
+      oldText: 'old\nomega',
+      newText: 'NEW'
+    })).toEqual({ ok: true, content: 'alpha\r\nNEW' });
+
+    expect(applyAnchoredSplice('alpha\r\nold\r\nomega', {
+      oldText: 'old\r\nomega',
+      newText: 'NEW'
+    })).toEqual({ ok: true, content: 'alpha\r\nNEW' });
+
+    expect(applyAnchoredSplice('a\r\nb\rc\nd', {
+      oldText: 'b\nc\nd',
+      newText: 'B'
+    })).toEqual({ ok: true, content: 'a\r\nB' });
+
+    expect(applyAnchoredSplice('a\rb\rc', {
+      oldText: 'a\nb',
+      newText: 'AB'
+    })).toEqual({ ok: true, content: 'AB\rc' });
+  });
+
+  it('appends and prepends after YAML frontmatter using gray-matter detection', () => {
+    expect(appendContent('a\r\n', 'b\r\n')).toBe('a\r\nb\n');
+    expect(prependContent('body\n', 'top\r\n')).toBe('top\nbody\n');
+    expect(prependContent('---\ntitle: Test\n---\nbody\n', 'inserted\n')).toBe(
+      '---\ntitle: Test\n---\ninserted\nbody\n'
+    );
+    expect(prependContent('---\nonly: front\n---', 'inserted\n')).toBe(
+      '---\nonly: front\n---\ninserted\n'
+    );
+    expect(prependContent('---\r\ntitle: Test\r\n---\r\nbody\r\n', 'inserted\n')).toBe(
+      '---\r\ntitle: Test\r\n---\r\ninserted\nbody\r\n'
+    );
+    expect(prependContent('---\ronly: front\r---\rbody\r', 'inserted\n')).toBe(
+      '---\ronly: front\r---\rinserted\nbody\r'
+    );
+    expect(prependContent('---\nonly: front\nbody\n', 'inserted\n')).toBe(
+      'inserted\n---\nonly: front\nbody\n'
+    );
+  });
+});
+
+describe('scan search', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'kb2-search-'));
+    await writeFileWithParents(path.join(root, 'notes', 'a.md'), 'alpha\nBeta target\ngamma\n', 'utf8');
+    await writeFileWithParents(path.join(root, 'notes', 'deep', 'b.txt'), 'target two\nnext\n', 'utf8');
+    await writeFileWithParents(path.join(root, 'notes', 'deep', 'c.markdown'), 'no hit\n', 'utf8');
+    await writeFileWithParents(path.join(root, 'notes', 'skip.json'), 'target ignored\n', 'utf8');
+    await writeFileWithParents(path.join(root, '.kb2', 'audit', 'hidden.md'), 'target hidden\n', 'utf8');
+    await writeFileWithParents(path.join(root, 'trash', 'old.md'), 'target trashed\n', 'utf8');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('finds case-insensitive line matches with context, filters, and pagination', async () => {
+    const result = await searchVaultFiles(root, {
+      q: 'TARGET',
+      under: 'notes',
+      context: 1,
+      limit: 1,
+      offset: 1
+    });
+
+    expect(result).toMatchObject({
+      q: 'TARGET',
+      under: 'notes',
+      limit: 1,
+      offset: 1,
+      total: 2
+    });
+    expect(result.results).toEqual([
+      {
+        path: 'notes/deep/b.txt',
+        line: 1,
+        lineText: 'target two',
+        context: { before: [], after: ['next'] }
+      }
+    ]);
+  });
+
+  it('searches from the vault root and excludes metadata and trash folders', async () => {
+    const result = await searchVaultFiles(root, { q: 'target', context: 0, limit: 10 });
+
+    expect(result.total).toBe(2);
+    expect(result.results.map((hit) => hit.path)).toEqual([
+      'notes/a.md',
+      'notes/deep/b.txt'
+    ]);
+    expect(result.results.every((hit) => hit.context.before.length === 0 && hit.context.after.length === 0)).toBe(true);
+  });
+
+  it('caps the searchable file walk before unbounded scans', async () => {
+    const cappedRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-cap-'));
+    const nestedRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-nested-cap-'));
+    try {
+      await Promise.all(Array.from({ length: 5001 }, async (_value, index) => {
+        await writeFile(path.join(cappedRoot, `file-${index}.md`), 'needle\n', 'utf8');
+      }));
+
+      const result = await searchVaultFiles(cappedRoot, { q: 'needle', limit: 10 });
+      expect(result.total).toBe(5000);
+      expect(result.truncated).toBe(true);
+      expect(result.results).toHaveLength(10);
+
+      await mkdir(path.join(nestedRoot, 'nested'), { recursive: true });
+      await Promise.all(Array.from({ length: 5000 }, async (_value, index) => {
+        await writeFile(path.join(nestedRoot, 'nested', `file-${index}.md`), 'needle\n', 'utf8');
+      }));
+      await writeFile(path.join(nestedRoot, 'after.md'), 'needle\n', 'utf8');
+      const nested = await searchVaultFiles(nestedRoot, { q: 'needle', limit: 10 });
+      expect(nested.total).toBe(5000);
+      expect(nested.truncated).toBe(true);
+    } finally {
+      await rm(cappedRoot, { recursive: true, force: true });
+      await rm(nestedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('property: every randomized search result references a real line in a real file', async () => {
+    const segment = fc.stringMatching(/^[a-z]{1,8}$/);
+    const relativeFile = fc.tuple(fc.array(segment, { maxLength: 2 }), segment)
+      .map(([folders, name]) => [...folders, `${name}.md`].join('/'));
+    const line = fc.string({ maxLength: 24 }).filter((value) => !value.includes('\n'));
+    const fileSet = fc.uniqueArray(
+      fc.record({
+        path: relativeFile,
+        lines: fc.array(line, { minLength: 1, maxLength: 8 })
+      }),
+      { minLength: 1, maxLength: 12, selector: (file) => file.path }
+    );
+
+    await fc.assert(fc.asyncProperty(fileSet, async (files) => {
+      const propertyRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-property-'));
+      try {
+        const expectedLines = new Map<string, string[]>();
+        for (const file of files) {
+          const lines = file.lines.length > 0 && file.lines.some((candidate) => candidate.includes('needle'))
+            ? file.lines
+            : ['needle', ...file.lines];
+          expectedLines.set(file.path, lines);
+          await writeFileWithParents(path.join(propertyRoot, file.path), `${lines.join('\n')}\n`, 'utf8');
+        }
+
+        const result = await searchVaultFiles(propertyRoot, { q: 'needle', limit: 100, context: 2 });
+        for (const hit of result.results) {
+          const lines = expectedLines.get(hit.path);
+          expect(lines).toBeDefined();
+          expect(hit.line).toBeGreaterThanOrEqual(1);
+          expect(hit.line).toBeLessThanOrEqual(lines!.length);
+          expect(hit.lineText).toBe(lines![hit.line - 1]);
+          expect(hit.lineText.toLocaleLowerCase()).toContain('needle');
+        }
+      } finally {
+        await rm(propertyRoot, { recursive: true, force: true });
+      }
+    }), { numRuns: 35 });
+  });
+
+  it('returns empty results for empty and missing-folder searches', async () => {
+    await expect(searchVaultFiles(root, { q: '   ' })).resolves.toMatchObject({
+      q: '   ',
+      total: 0,
+      results: []
+    });
+    await expect(searchVaultFiles(root, { q: 'target', under: 'missing' })).resolves.toMatchObject({
+      total: 0,
+      results: []
+    });
+    await expect(searchVaultFiles(root, {
+      q: 'target',
+      under: 'notes/a.md',
+      context: 50,
+      limit: -1,
+      offset: -1
+    })).resolves.toMatchObject({
+      limit: 20,
+      offset: 0,
+      total: 0,
+      results: []
+    });
+  });
+
+  it('rejects invalid folder filters through path validation', async () => {
+    await expect(searchVaultFiles(root, { q: 'target', under: '../outside' })).rejects.toThrow('Invalid vault path');
+  });
+});
+
 async function readAuditLines(root: string): Promise<unknown[]> {
   const content = await readFile(path.join(root, '.kb2/audit/changes.jsonl'), 'utf8');
   return content.trim().split('\n').map((line) => JSON.parse(line) as unknown);
+}
+
+async function writeFileWithParents(pathname: string, content: string, encoding: BufferEncoding): Promise<void> {
+  await writeFile(pathname, content, encoding).catch(async (error: unknown) => {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+    await mkdir(path.dirname(pathname), { recursive: true });
+    await writeFile(pathname, content, encoding);
+  });
 }

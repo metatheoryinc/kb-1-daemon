@@ -17,8 +17,10 @@ export const DEFAULT_DEMO_DOCUMENT_CONTENT = [
 
 const Y_TEXT_NAME = 'markdown';
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb2.external-change');
+const AGENT_SPLICE_ORIGIN = Symbol('kb2.agent-splice');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
+const DOCUMENT_BYTES_LIMIT = 1024 * 1024;
 
 export interface DocumentSessionWarning {
   type: 'external-change-detected';
@@ -36,6 +38,32 @@ export interface OneFileDocumentSessionOptions {
 }
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
+
+export type SessionContentEditResult =
+  | { ok: true; content: string }
+  | ({ ok: false; rejected: string } & Record<string, unknown>);
+export type SessionContentEditReject = Exclude<SessionContentEditResult, { ok: true }>;
+
+export type SessionSpliceResult =
+  | { ok: true; content: string; baseline: string }
+  | {
+      ok: false;
+      rejected: 'stale_doc';
+      current_content: string;
+      baseline: string;
+      truncated?: boolean;
+    }
+  | SessionContentEditReject;
+
+export class PersistFailedError extends Error {
+  constructor(
+    readonly filePath: string,
+    readonly cause: unknown
+  ) {
+    super(`Failed to persist document session for ${filePath}`);
+    this.name = 'PersistFailedError';
+  }
+}
 
 export class OneFileDocumentSession {
   filePath: string;
@@ -56,6 +84,7 @@ export class OneFileDocumentSession {
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
   private persistFailed = false;
+  private persistFailureError: PersistFailedError | undefined;
   private activePersistFailureEvent: DocumentSessionEvent | undefined;
   private watcher: FSWatcher | undefined;
   private watchDebounceTimer: NodeJS.Timeout | undefined;
@@ -108,6 +137,14 @@ export class OneFileDocumentSession {
     return this.currentContent();
   }
 
+  async readWithBaseline(): Promise<{ content: string; baseline: string }> {
+    await this.open();
+    return {
+      content: this.currentContent(),
+      baseline: this.currentBaseline()
+    };
+  }
+
   onEvent(handler: DocumentSessionEventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => {
@@ -117,6 +154,10 @@ export class OneFileDocumentSession {
 
   getActivePersistFailureEvent(): DocumentSessionEvent | undefined {
     return this.activePersistFailureEvent;
+  }
+
+  hasActivePersistFailure(): boolean {
+    return this.persistFailed;
   }
 
   async reset(content = this.defaultContent): Promise<string> {
@@ -151,9 +192,49 @@ export class OneFileDocumentSession {
     return this.currentContent();
   }
 
+  async applyBaselineEdit(
+    baseline: string,
+    edit: (currentContent: string) => SessionContentEditResult
+  ): Promise<SessionSpliceResult> {
+    await this.open();
+    if (this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
+    }
+
+    const currentBaseline = this.currentBaseline();
+    if (baseline !== currentBaseline) {
+      return this.staleDocResult(currentBaseline);
+    }
+
+    const current = this.currentContent();
+    const result = edit(current);
+    if (!result.ok) return result;
+
+    if (current !== result.content) {
+      this.doc.transact(() => {
+        this.text.applyDelta(createFastDiffYTextDelta(current, result.content));
+      }, AGENT_SPLICE_ORIGIN);
+    }
+
+    await this.flush();
+    return {
+      ok: true,
+      content: this.currentContent(),
+      baseline: this.currentBaseline()
+    };
+  }
+
+  async applyContentEdit(edit: (currentContent: string) => string): Promise<{ content: string; baseline: string }> {
+    await this.open();
+    return this.applyPositionedContent(edit(this.currentContentAfterOpen()));
+  }
+
   async flush(): Promise<void> {
     if (this.persistPromise) {
       await this.persistPromise;
+    }
+    if (this.persistFailureError) {
+      throw this.persistFailureError;
     }
   }
 
@@ -278,13 +359,17 @@ export class OneFileDocumentSession {
   }
 
   private async persistLoop(): Promise<void> {
+    let failure: PersistFailedError | undefined;
     while (this.persistRequested) {
       this.persistRequested = false;
       try {
         await this.materialize();
       } catch (error) {
-        this.markPersistFailed(error);
+        failure = this.markPersistFailed(error);
       }
+    }
+    if (failure) {
+      throw failure;
     }
   }
 
@@ -337,6 +422,55 @@ export class OneFileDocumentSession {
 
   private currentContent(): string {
     return this.text.toString();
+  }
+
+  private currentBaseline(): string {
+    return encodeBase64Bytes(Y.encodeStateVector(this.doc));
+  }
+
+  private currentContentAfterOpen(): string {
+    if (!this.opened || this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} is not open.`);
+    }
+    return this.currentContent();
+  }
+
+  private async applyPositionedContent(content: string): Promise<{ content: string; baseline: string }> {
+    await this.open();
+    if (this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
+    }
+    const current = this.currentContent();
+    if (current !== content) {
+      this.doc.transact(() => {
+        this.text.applyDelta(createFastDiffYTextDelta(current, content));
+      }, AGENT_SPLICE_ORIGIN);
+    }
+    await this.flush();
+    return {
+      content: this.currentContent(),
+      baseline: this.currentBaseline()
+    };
+  }
+
+  private staleDocResult(currentBaseline: string): Extract<SessionSpliceResult, { rejected: 'stale_doc' }> {
+    const content = this.currentContent();
+    if (utf8ByteLength(content) <= DOCUMENT_BYTES_LIMIT) {
+      return {
+        ok: false,
+        rejected: 'stale_doc',
+        current_content: content,
+        baseline: currentBaseline
+      };
+    }
+
+    return {
+      ok: false,
+      rejected: 'stale_doc',
+      current_content: truncateUtf8(content, DOCUMENT_BYTES_LIMIT),
+      baseline: currentBaseline,
+      truncated: true
+    };
   }
 
   private startWatching(): void {
@@ -463,12 +597,17 @@ export class OneFileDocumentSession {
     this.emitEvent(eventKind);
   }
 
-  private markPersistFailed(error: unknown): void {
+  private markPersistFailed(error: unknown): PersistFailedError {
     this.persistFailed = true;
+    const persistError = error instanceof PersistFailedError
+      ? error
+      : new PersistFailedError(this.filePath, error);
+    this.persistFailureError = persistError;
     const event = this.createEvent('persist-failure');
     this.activePersistFailureEvent = event;
     this.emitEvent(event);
     console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
+    return persistError;
   }
 
   private markPersistRecovered(): void {
@@ -477,6 +616,7 @@ export class OneFileDocumentSession {
     }
 
     this.persistFailed = false;
+    this.persistFailureError = undefined;
     this.activePersistFailureEvent = undefined;
     this.emitEvent('persist-recovered');
   }
@@ -546,6 +686,26 @@ function hashContent(content: string): string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function truncateUtf8(value: string, limitBytes: number): string {
+  let output = '';
+  let bytes = 0;
+  for (const char of value) {
+    const next = utf8ByteLength(char);
+    if (bytes + next > limitBytes) break;
+    output += char;
+    bytes += next;
+  }
+  return output;
 }
 
 export type YTextDeltaOperation =

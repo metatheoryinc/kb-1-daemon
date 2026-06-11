@@ -20,6 +20,23 @@ import {
 
 export { appendAudit, InvalidPathError, validateVaultPath };
 export type { AuditEntry, VaultActor };
+export {
+  DOCUMENT_BYTES_LIMIT,
+  SPLICE_BYTES_LIMIT,
+  appendContent,
+  applyAnchoredSplice,
+  lfNormalize,
+  prependContent,
+  utf8ByteLength,
+  type AnchoredSpliceRequest,
+  type AnchoredSpliceResult
+} from './splice.js';
+export {
+  searchVaultFiles,
+  type SearchHit,
+  type SearchInput,
+  type SearchResult
+} from './search.js';
 
 export type VaultErrorCode =
   | 'invalid_path'
