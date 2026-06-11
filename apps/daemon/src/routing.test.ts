@@ -1,5 +1,8 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Hono } from 'hono';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -455,7 +458,148 @@ describe('daemon routing', () => {
     const audit = await readAuditRows(config.vaultRoot);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => row.operation)).toEqual(['splice', 'splice']);
-    expect(audit.every((row) => (row.actor as { kind?: string }).kind === 'mcp_client')).toBe(true);
+    expect(audit.every((row) => (row.actor as { kind?: string }).kind === 'user')).toBe(true);
+    await sessions.close();
+  });
+
+  it('exercises every MCP tool end-to-end through the SDK client with mcp_client audit attribution', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { client, transport } = await connectMcpClient(app, 'daemon-sdk-test');
+
+    await expect(mcpToolJson(client, 'create_note', { path: 'notes/a.md', content: 'alpha beta alpha\n' }))
+      .resolves.toMatchObject({ ok: true, path: 'notes/a.md' });
+    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha beta alpha\n');
+
+    await expect(mcpToolJson(client, 'vault_info', {})).resolves.toMatchObject({ ok: true, fileCount: 1 });
+    await expect(mcpToolJson(client, 'list_files', { under: 'notes', depth: 1 }))
+      .resolves.toMatchObject({ ok: true, entries: [{ path: 'notes/a.md', kind: 'file' }] });
+
+    const read = await mcpToolJson(client, 'read_note', { path: 'notes/a.md' }) as { content: string; baseline: string };
+    expect(read.content).toBe('alpha beta alpha\n');
+    expect(read.baseline.length).toBeGreaterThan(0);
+
+    await expect(mcpToolJson(client, 'edit_note', {
+      path: 'notes/a.md',
+      baseline: read.baseline,
+      old_text: 'beta',
+      new_text: 'BETA'
+    })).resolves.toMatchObject({ ok: true, content: 'alpha BETA alpha\n' });
+    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha BETA alpha\n');
+
+    const stale = await client.callTool({
+      name: 'edit_note',
+      arguments: {
+        path: 'notes/a.md',
+        baseline: read.baseline,
+        old_text: 'alpha',
+        new_text: 'ALPHA'
+      }
+    });
+    expect(stale.isError).toBe(true);
+    expect(mcpText(stale)).toContain('"rejected":"stale_doc"');
+    expect(mcpText(stale)).toContain('"current_content":"alpha BETA alpha\\n"');
+    expect(mcpText(stale)).toContain('"baseline"');
+
+    const fresh = await mcpToolJson(client, 'read_note', { path: 'notes/a.md' }) as { baseline: string };
+    const ambiguous = await client.callTool({
+      name: 'edit_note',
+      arguments: {
+        path: 'notes/a.md',
+        baseline: fresh.baseline,
+        old_text: 'alpha',
+        new_text: 'ALPHA'
+      }
+    });
+    expect(ambiguous.isError).toBe(true);
+    expect(mcpText(ambiguous)).toContain('"rejected":"ambiguous"');
+    expect(mcpText(ambiguous)).toContain('"match_count":2');
+
+    await expect(mcpToolJson(client, 'append_note', { path: 'notes/a.md', content: 'tail\n' }))
+      .resolves.toMatchObject({ ok: true, content: 'alpha BETA alpha\ntail\n' });
+    await expect(mcpToolJson(client, 'prepend_note', { path: 'notes/a.md', content: 'head\n' }))
+      .resolves.toMatchObject({ ok: true, content: 'head\nalpha BETA alpha\ntail\n' });
+    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
+
+    await expect(mcpToolJson(client, 'create_folder', { path: 'moved' })).resolves.toMatchObject({ ok: true, path: 'moved' });
+    await expect(mcpToolJson(client, 'move_note', { from_path: 'notes/a.md', to_path: 'moved/a.md' }))
+      .resolves.toMatchObject({ ok: true, fromPath: 'notes/a.md', toPath: 'moved/a.md', live: true });
+    await expect(readFile(join(config.vaultRoot, 'moved/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
+    await expect(stat(join(config.vaultRoot, 'notes/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(mcpToolJson(client, 'move_folder', { from_path: 'moved', to_path: 'archived' }))
+      .resolves.toMatchObject({ ok: true, fromPath: 'moved', toPath: 'archived', liveMoved: ['archived/a.md'] });
+    await expect(readFile(join(config.vaultRoot, 'archived/a.md'), 'utf8')).resolves.toContain('BETA');
+
+    await expect(mcpToolJson(client, 'search', { query: 'BETA', under: 'archived', context: 0 }))
+      .resolves.toMatchObject({ ok: true, total: 1, results: [{ path: 'archived/a.md' }] });
+
+    await expect(mcpToolJson(client, 'delete_note', { path: 'archived/a.md' }))
+      .resolves.toMatchObject({ ok: true, path: 'archived/a.md', live: true });
+    await expect(stat(join(config.vaultRoot, 'archived/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(mcpToolJson(client, 'delete_folder', { path: 'archived', recursive: true }))
+      .resolves.toMatchObject({ ok: true, path: 'archived', liveDeleted: [] });
+    await expect(stat(join(config.vaultRoot, 'archived'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit.map((row) => row.operation)).toEqual([
+      'create',
+      'splice',
+      'append',
+      'prepend',
+      'mkdir',
+      'move',
+      'move',
+      'delete',
+      'delete'
+    ]);
+    expect(audit.every((row) => {
+      const actor = row.actor as { kind?: string; client?: string };
+      return actor.kind === 'mcp_client' && actor.client === 'daemon-sdk-test';
+    })).toBe(true);
+
+    await transport.terminateSession();
+    await sessions.close();
+  });
+
+  it('surfaces MCP persist failures without a success audit row and recovers the live session', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { client, transport } = await connectMcpClient(app, 'mcp-persist-test');
+
+    await expect(mcpToolJson(client, 'create_note', { path: 'notes/readonly.md', content: 'base\n' }))
+      .resolves.toMatchObject({ ok: true, path: 'notes/readonly.md' });
+    await mcpToolJson(client, 'read_note', { path: 'notes/readonly.md' });
+
+    const beforeAudit = await readAuditRows(config.vaultRoot);
+    await chmod(join(config.vaultRoot, 'notes'), 0o500);
+    const failed = await client.callTool({
+      name: 'append_note',
+      arguments: { path: 'notes/readonly.md', content: 'unsaved\n' }
+    });
+
+    expect(failed.isError).toBe(true);
+    expect(mcpText(failed)).toBe('append_note rejected: {"ok":false,"error":"persist_failed","message":"Document edit could not be durably saved to disk."}');
+    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
+    expect(await readAuditRows(config.vaultRoot)).toHaveLength(beforeAudit.length);
+
+    await chmod(join(config.vaultRoot, 'notes'), 0o700);
+    await expect(mcpToolJson(client, 'append_note', { path: 'notes/readonly.md', content: 'recovered\n' }))
+      .resolves.toMatchObject({ ok: true, content: 'base\nunsaved\nrecovered\n' });
+    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nrecovered\n');
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(beforeAudit.length + 1);
+    expect(audit.at(-1)).toMatchObject({
+      operation: 'append',
+      actor: { kind: 'mcp_client', client: 'mcp-persist-test' },
+      path: 'notes/readonly.md'
+    });
+
+    await transport.terminateSession();
     await sessions.close();
   });
 
@@ -723,6 +867,33 @@ function listen(server: ReturnType<typeof createServer>): Promise<void> {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
   });
+}
+
+async function connectMcpClient(app: Hono, clientName: string): Promise<{
+  client: Client;
+  transport: StreamableHTTPClientTransport;
+}> {
+  const client = new Client({ name: clientName, version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1/mcp'), {
+    fetch: async (input, init) => app.fetch(input instanceof Request ? input : new Request(input, init))
+  });
+  await client.connect(transport);
+  return { client, transport };
+}
+
+async function mcpToolJson(client: Client, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return JSON.parse(mcpText(await client.callTool({ name, arguments: args }))) as Record<string, unknown>;
+}
+
+function mcpText(result: Awaited<ReturnType<Client['callTool']>>): string {
+  if (!Array.isArray(result.content)) {
+    throw new Error('Expected MCP content array');
+  }
+  const first = result.content[0] as { type?: unknown; text?: unknown } | undefined;
+  if (!first || first.type !== 'text' || typeof first.text !== 'string') {
+    throw new Error('Expected text MCP content');
+  }
+  return first.text;
 }
 
 function close(server: ReturnType<typeof createServer>): Promise<void> {

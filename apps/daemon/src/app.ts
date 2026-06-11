@@ -1,36 +1,25 @@
 import { Hono, type Context } from 'hono';
-import { PersistFailedError, type DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
+import type { DocumentSessionManager, OneFileDocumentSession } from '@kb-2/doc-session';
 import {
-  InvalidPathError,
-  appendAudit,
-  appendContent,
-  applyAnchoredSplice,
-  deleteVaultFile,
-  deleteVaultFolder,
-  getVaultInfo,
-  listVaultTree,
-  makeVaultFolder,
-  moveVaultPath,
-  prependContent,
-  readVaultFile,
-  searchVaultFiles,
-  validateVaultPath,
-  writeVaultFile,
-  type AnchoredSpliceRequest,
-  type VaultErrorCode,
-  type VaultResult
-} from '@kb-2/vault-core';
+  createLocalMcpEndpoint,
+  type LocalMcpEndpoint,
+  type LocalMcpVaultService,
+  type ServiceResult
+} from '@kb-2/local-mcp';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
 import { SERVICE_NAME } from './config.js';
 import { readDaemonStatus } from './status.js';
+import { createVaultService } from './vault-service.js';
 
 export interface CreateAppOptions {
   statusFile: string;
   vaultRoot?: string;
   documentSessions?: DocumentSessionManager;
+  vaultService?: LocalMcpVaultService;
   demoDocumentSession?: OneFileDocumentSession;
+  mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
   webProxyTarget?: string;
 }
@@ -73,214 +62,99 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   if (options.vaultRoot) {
+    const vaultService = options.vaultService ?? createVaultService({
+      vaultRoot: options.vaultRoot,
+      documentSessions: options.documentSessions
+    });
+    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
+
     api.get('/vault', async (context) => {
-      return mapVaultResult(context, await getVaultInfo({ root: options.vaultRoot! }));
+      return mapServiceResult(context, await vaultService.vaultInfo());
     });
 
     api.get('/tree', async (context) => {
       const depthRaw = context.req.query('depth');
       const depth = depthRaw === undefined ? undefined : Number(depthRaw);
-      return mapVaultResult(context, await listVaultTree(
-        { root: options.vaultRoot! },
-        {
-          under: context.req.query('under'),
-          ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
-        }
-      ));
+      return mapServiceResult(context, await vaultService.listFiles({
+        under: context.req.query('under'),
+        ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
+      }));
     });
 
     api.get('/search', async (context) => {
-      try {
-        const result = await searchVaultFiles(options.vaultRoot!, {
-          q: context.req.query('q') ?? '',
-          under: context.req.query('under'),
-          context: queryNumber(context, 'context'),
-          limit: queryNumber(context, 'limit'),
-          offset: queryNumber(context, 'offset')
-        });
-        return context.json({ ok: true, ...result });
-      } catch (error) {
-        if (error instanceof InvalidPathError) {
-          return mapVaultResult(context, {
-            ok: false,
-            error: 'invalid_path',
-            message: error.message
-          });
-        }
-        throw error;
-      }
+      return mapServiceResult(context, await vaultService.search({
+        query: context.req.query('q') ?? '',
+        under: context.req.query('under'),
+        context: queryNumber(context, 'context'),
+        limit: queryNumber(context, 'limit'),
+        offset: queryNumber(context, 'offset')
+      }));
     });
 
     api.get('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
-      const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
-      if (!diskRead.ok || !options.documentSessions) {
-        return mapVaultResult(context, diskRead);
-      }
-      const baselineRead = await options.documentSessions.withSession(filePath, (session) => session.readWithBaseline());
-      return context.json({
-        ok: true,
-        path: diskRead.value.path,
-        content: baselineRead.content,
-        baseline: baselineRead.baseline,
-        size: diskRead.value.size,
-        mtimeMs: diskRead.value.mtimeMs
-      });
+      return mapServiceResult(context, await vaultService.readNote({ path: filePath }));
     });
 
     api.put('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
       const content = await requestTextContent(context.req.raw);
       const overwrite = context.req.query('overwrite') === 'true';
-      const liveSession = options.documentSessions?.getOpenSession(filePath);
-      if (liveSession) {
-        if (!overwrite) {
-          return mapVaultResult(context, {
-            ok: false,
-            error: 'already_exists',
-            message: 'file already exists'
-          });
-        }
-        const applied = await withMappedWriteError(context, () => liveSession.applyContent(content));
-        if (applied instanceof Response) return applied;
-        const audit = await appendAudit({
-          root: options.vaultRoot!,
-          actor: { kind: 'user' },
-          operation: 'write',
-          entityKind: 'file',
-          path: filePath,
-          summary: `Wrote ${filePath}`
-        });
-        return context.json({
-          ok: true,
-          path: filePath,
-          content: applied,
-          live: true,
-          audit
-        });
-      }
-
-      return mapVaultResult(context, await writeVaultFile(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { path: filePath, content, overwrite }
-      ), overwrite ? 200 : 201);
+      return mapServiceResult(context, await vaultService.createNote({
+        path: filePath,
+        content,
+        overwrite,
+        actor: { kind: 'user' }
+      }), overwrite ? 200 : 201);
     });
 
     api.delete('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
       const permanent = context.req.query('permanent') === 'true';
-      const deleteOnDisk = () => expectOk(deleteVaultFile(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { path: filePath, permanent }
-      ));
-      const deletedLive = await withMappedVaultError(
-        context,
-        () => options.documentSessions?.deleteSession(filePath, deleteOnDisk)
-      );
-      if (deletedLive instanceof Response) return deletedLive;
-      if (deletedLive) {
-        return context.json({ ok: true, path: filePath, live: true });
-      }
-      return mapVaultResult(context, await deleteVaultFile(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { path: filePath, permanent }
-      ));
+      return mapServiceResult(context, await vaultService.deleteNote({
+        path: filePath,
+        permanent,
+        actor: { kind: 'user' }
+      }));
     });
 
     api.post('/files/*', async (context) => {
       if (context.req.path.endsWith('/splice')) {
         const filePath = filePathParam(context.req.path, '/api/files/', '/splice');
-        const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
-        if (!diskRead.ok) return mapVaultResult(context, diskRead);
-        if (!options.documentSessions) {
-          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
-        }
         const body = await readJsonObject(context.req.raw);
         const splice = readSpliceRequest(body);
-        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
-          session.applyBaselineEdit(splice.baseline, (currentContent) =>
-            applyAnchoredSplice(currentContent, splice.request)
-          )
-        ));
-        if (result instanceof Response) return result;
-        if (!result.ok) return mapSpliceReject(context, result);
-        const audit = await appendAudit({
-          root: options.vaultRoot!,
-          actor: { kind: 'mcp_client', client: 'api' },
-          operation: 'splice',
-          entityKind: 'file',
+        return mapServiceResult(context, await vaultService.editNote({
           path: filePath,
-          summary: `Spliced ${filePath}`
-        });
-        return context.json({
-          ok: true,
-          path: filePath,
-          content: result.content,
-          baseline: result.baseline,
-          audit
-        });
+          baseline: splice.baseline,
+          oldText: splice.request.oldText,
+          newText: splice.request.newText,
+          before: splice.request.before,
+          after: splice.request.after,
+          occurrence: splice.request.occurrence,
+          actor: { kind: 'user' }
+        }));
       }
 
       if (context.req.path.endsWith('/append')) {
         const filePath = filePathParam(context.req.path, '/api/files/', '/append');
-        const validPath = validateRouteFilePath(context, filePath);
-        if (validPath instanceof Response) return validPath;
-        if (!options.documentSessions) {
-          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
-        }
         const body = await readJsonObject(context.req.raw);
         const content = typeof body.content === 'string' ? body.content : '';
-        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(
-          filePath,
-          (session) => session.applyContentEdit((currentContent) => appendContent(currentContent, content)),
-          { defaultContent: '' }
-        ));
-        if (result instanceof Response) return result;
-        const audit = await appendAudit({
-          root: options.vaultRoot!,
-          actor: { kind: 'mcp_client', client: 'api' },
-          operation: 'append',
-          entityKind: 'file',
+        return mapServiceResult(context, await vaultService.appendNote({
           path: filePath,
-          summary: `Appended to ${filePath}`
-        });
-        return context.json({
-          ok: true,
-          path: filePath,
-          content: result.content,
-          baseline: result.baseline,
-          audit
-        });
+          content,
+          actor: { kind: 'user' }
+        }));
       }
 
       if (context.req.path.endsWith('/prepend')) {
         const filePath = filePathParam(context.req.path, '/api/files/', '/prepend');
-        const diskRead = await readVaultFile({ root: options.vaultRoot! }, filePath);
-        if (!diskRead.ok) return mapVaultResult(context, diskRead);
-        if (!options.documentSessions) {
-          return context.json({ ok: false, error: 'session_unavailable', message: 'document sessions are unavailable' }, 503);
-        }
         const body = await readJsonObject(context.req.raw);
         const content = typeof body.content === 'string' ? body.content : '';
-        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
-          session.applyContentEdit((currentContent) => prependContent(currentContent, content))
-        ));
-        if (result instanceof Response) return result;
-        const audit = await appendAudit({
-          root: options.vaultRoot!,
-          actor: { kind: 'mcp_client', client: 'api' },
-          operation: 'prepend',
-          entityKind: 'file',
+        return mapServiceResult(context, await vaultService.prependNote({
           path: filePath,
-          summary: `Prepended to ${filePath}`
-        });
-        return context.json({
-          ok: true,
-          path: filePath,
-          content: result.content,
-          baseline: result.baseline,
-          audit
-        });
+          content,
+          actor: { kind: 'user' }
+        }));
       }
 
       if (!context.req.path.endsWith('/move')) {
@@ -291,53 +165,32 @@ export function createApp(options: CreateAppOptions): Hono {
       const body = await readJsonObject(context.req.raw);
       const to = typeof body.to === 'string' ? body.to : '';
       // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
-      const moveOnDisk = () => expectOk(moveVaultPath(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { kind: 'file', fromPath, toPath: to }
-      ));
-      const movedLive = await withMappedVaultError(
-        context,
-        () => options.documentSessions?.moveSession(fromPath, to, moveOnDisk)
-      );
-      if (movedLive instanceof Response) return movedLive;
-      if (movedLive) {
-        return context.json({ ok: true, fromPath, toPath: to, live: true });
-      }
-      return mapVaultResult(context, await moveVaultPath(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { kind: 'file', fromPath, toPath: to }
-      ));
+      return mapServiceResult(context, await vaultService.moveNote({
+        fromPath,
+        toPath: to,
+        actor: { kind: 'user' }
+      }));
     });
 
     api.post('/folders', async (context) => {
       const body = await readJsonObject(context.req.raw);
       const folderPath = typeof body.path === 'string' ? body.path : '';
-      return mapVaultResult(context, await makeVaultFolder(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        folderPath
-      ), 201);
+      return mapServiceResult(context, await vaultService.createFolder({
+        path: folderPath,
+        actor: { kind: 'user' }
+      }), 201);
     });
 
     api.delete('/folders/*', async (context) => {
       const folderPath = filePathParam(context.req.path, '/api/folders/');
       const recursive = context.req.query('recursive') === 'true';
       const permanent = context.req.query('permanent') === 'true';
-      const deleteOnDisk = () => expectOk(deleteVaultFolder(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { path: folderPath, recursive, permanent }
-      ));
-      if (options.documentSessions) {
-        const deletedLive = await withMappedVaultError(
-          context,
-          () => options.documentSessions!.deleteSessionSubtree(folderPath, deleteOnDisk)
-        );
-        if (deletedLive instanceof Response) return deletedLive;
-        return context.json({ ok: true, path: folderPath, liveDeleted: deletedLive });
-      }
-      return mapVaultResult(context, await deleteVaultFolder(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { path: folderPath, recursive, permanent }
-      ));
+      return mapServiceResult(context, await vaultService.deleteFolder({
+        path: folderPath,
+        recursive,
+        permanent,
+        actor: { kind: 'user' }
+      }));
     });
 
     api.post('/folders/*', async (context) => {
@@ -349,22 +202,15 @@ export function createApp(options: CreateAppOptions): Hono {
       const body = await readJsonObject(context.req.raw);
       const to = typeof body.to === 'string' ? body.to : '';
       // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
-      const moveOnDisk = () => expectOk(moveVaultPath(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { kind: 'folder', fromPath, toPath: to }
-      ));
-      if (options.documentSessions) {
-        const movedLive = await withMappedVaultError(
-          context,
-          () => options.documentSessions!.moveSessionSubtree(fromPath, to, moveOnDisk)
-        );
-        if (movedLive instanceof Response) return movedLive;
-        return context.json({ ok: true, fromPath, toPath: to, liveMoved: movedLive });
-      }
-      return mapVaultResult(context, await moveVaultPath(
-        { root: options.vaultRoot!, actor: { kind: 'user' } },
-        { kind: 'folder', fromPath, toPath: to }
-      ));
+      return mapServiceResult(context, await vaultService.moveFolder({
+        fromPath,
+        toPath: to,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    app.all('/mcp', async (context) => {
+      return mcpEndpoint.handleRequest(context.req.raw);
     });
   }
 
@@ -397,7 +243,16 @@ export function createApp(options: CreateAppOptions): Hono {
   return app;
 }
 
-function readSpliceRequest(body: Record<string, unknown>): { baseline: string; request: AnchoredSpliceRequest } {
+function readSpliceRequest(body: Record<string, unknown>): {
+  baseline: string;
+  request: {
+    oldText: string;
+    newText: string;
+    before?: string;
+    after?: string;
+    occurrence?: number;
+  };
+} {
   return {
     baseline: typeof body.baseline === 'string' ? body.baseline : '',
     request: {
@@ -412,44 +267,11 @@ function readSpliceRequest(body: Record<string, unknown>): { baseline: string; r
   };
 }
 
-function mapSpliceReject(context: Context, result: Exclude<Awaited<ReturnType<OneFileDocumentSession['applyBaselineEdit']>>, { ok: true }>): Response {
-  const status = statusForSpliceReject(result.rejected);
-  const { ok: _ok, ...body } = result;
-  return context.json({ ok: false, ...body }, status);
-}
-
-function statusForSpliceReject(rejected: string): 404 | 409 | 413 {
-  switch (rejected) {
-    case 'not_found':
-      return 404;
-    case 'too_large_splice':
-    case 'too_large_document':
-      return 413;
-    default:
-      return 409;
-  }
-}
-
 function queryNumber(context: Context, name: string): number | undefined {
   const raw = context.req.query(name);
   if (raw === undefined) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function validateRouteFilePath(context: Context, filePath: string): string | Response {
-  try {
-    return validateVaultPath(filePath, 'file');
-  } catch (error) {
-    if (error instanceof InvalidPathError) {
-      return mapVaultResult(context, {
-        ok: false,
-        error: 'invalid_path',
-        message: error.message
-      });
-    }
-    throw error;
-  }
 }
 
 async function readOptionalJsonContent(request: Request): Promise<string | undefined> {
@@ -477,51 +299,6 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
     : {};
 }
 
-async function expectOk<T>(resultPromise: Promise<VaultResult<T>>): Promise<void> {
-  const result = await resultPromise;
-  if (!result.ok) {
-    throw new VaultResultFailure(result);
-  }
-}
-
-async function withMappedVaultError<T>(
-  context: Context,
-  operation: () => T | Promise<T>
-): Promise<T | Response> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof VaultResultFailure) {
-      return mapVaultResult(context, error.result);
-    }
-    throw error;
-  }
-}
-
-async function withMappedWriteError<T>(
-  context: Context,
-  operation: () => T | Promise<T>
-): Promise<T | Response> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (error instanceof PersistFailedError) {
-      return context.json({
-        ok: false,
-        error: 'persist_failed',
-        message: 'Document edit could not be durably saved to disk.'
-      }, 500);
-    }
-    throw error;
-  }
-}
-
-class VaultResultFailure extends Error {
-  constructor(readonly result: VaultResult<unknown>) {
-    super(result.ok ? 'Unexpected successful vault result' : result.message);
-  }
-}
-
 function filePathParam(pathname: string, prefix: string, suffix = ''): string {
   const withoutPrefix = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
   const withoutSuffix = suffix.length > 0 && withoutPrefix.endsWith(suffix)
@@ -530,31 +307,20 @@ function filePathParam(pathname: string, prefix: string, suffix = ''): string {
   return decodeURIComponent(withoutSuffix);
 }
 
-function mapVaultResult<T>(
+function mapServiceResult(
   context: Context,
-  result: VaultResult<T>,
+  result: ServiceResult,
   okStatus: 200 | 201 = 200
 ): Response {
   if (result.ok) {
-    return context.json({ ok: true, ...valueBody(result.value) }, okStatus);
+    return context.json(result, okStatus);
   }
 
-  return context.json({
-    ok: false,
-    error: result.error,
-    message: result.message
-  }, statusForVaultError(result.error));
+  const error = ('error' in result ? result.error : result.rejected) as string | undefined;
+  return context.json(result, statusForServiceError(error ?? 'unknown'));
 }
 
-function valueBody(value: unknown): Record<string, unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-
-  return { value };
-}
-
-function statusForVaultError(error: VaultErrorCode): 400 | 404 | 409 | 413 {
+function statusForServiceError(error: string): 400 | 404 | 409 | 413 | 500 | 503 {
   switch (error) {
     case 'invalid_path':
       return 400;
@@ -565,7 +331,15 @@ function statusForVaultError(error: VaultErrorCode): 400 | 404 | 409 | 413 {
     case 'folder_not_empty':
       return 409;
     case 'entry_cap_exceeded':
+    case 'too_large_splice':
+    case 'too_large_document':
       return 413;
+    case 'session_unavailable':
+      return 503;
+    case 'persist_failed':
+      return 500;
+    default:
+      return 409;
   }
 }
 
