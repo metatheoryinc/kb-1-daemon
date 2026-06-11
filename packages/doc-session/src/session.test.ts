@@ -108,6 +108,24 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('does not emit an external-change event when disk and session content already match', async () => {
+    const events: DocumentSessionEvent[] = [];
+    await writeFileWithParents(filePath, 'same content\n');
+    const session = new OneFileDocumentSession(filePath, {
+      watchDebounceMs: 10,
+      watchPollMs: 50
+    });
+    session.onEvent((event) => events.push(event));
+    await session.open();
+
+    await writeFile(filePath, 'same content\n', 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(events.filter((event) => event.kind === 'external-change')).toHaveLength(0);
+    await expect(session.getContent()).resolves.toBe('same content\n');
+    await session.close();
+  });
+
   it('coalesces rapid external writes into one reconciliation event', async () => {
     const events: DocumentSessionEvent[] = [];
     await writeFileWithParents(filePath, 'start\n');

@@ -158,6 +158,49 @@ describe('Yjs WebSocket session', () => {
     }
   });
 
+  it('replays active persist failure to clients that bind after the failure', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const clientA = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      clientA.text.insert(0, 'unsaved before joiner\n');
+      await waitForSessionEvent([clientA], 'persist-failure');
+
+      const lateClient = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+      try {
+        await waitForSessionEvent([lateClient], 'persist-failure');
+      } finally {
+        lateClient.close();
+      }
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      clientA.close();
+      await closeWebSocketServer(webSocketServer);
+      await closeServer(server);
+      await session.close();
+    }
+  });
+
   it('closes malformed sync frames without crashing the session', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });

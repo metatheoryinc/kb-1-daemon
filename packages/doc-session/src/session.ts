@@ -48,9 +48,11 @@ export class OneFileDocumentSession {
   private opened = false;
   private openPromise: Promise<void> | undefined;
   private lastWrittenHash: string | undefined;
+  private pendingWriteHash: string | undefined;
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
   private persistFailed = false;
+  private activePersistFailureEvent: DocumentSessionEvent | undefined;
   private watcher: FSWatcher | undefined;
   private watchDebounceTimer: NodeJS.Timeout | undefined;
   private watchPollTimer: NodeJS.Timeout | undefined;
@@ -103,6 +105,10 @@ export class OneFileDocumentSession {
     return () => {
       this.eventHandlers.delete(handler);
     };
+  }
+
+  getActivePersistFailureEvent(): DocumentSessionEvent | undefined {
+    return this.activePersistFailureEvent;
   }
 
   async reset(content = this.defaultContent): Promise<string> {
@@ -178,9 +184,17 @@ export class OneFileDocumentSession {
       return;
     }
 
-    await atomicWriteFile(this.filePath, content);
-    this.lastWrittenHash = hashContent(content);
-    this.markPersistRecovered();
+    const contentHash = hashContent(content);
+    this.pendingWriteHash = contentHash;
+    try {
+      await atomicWriteFile(this.filePath, content);
+      this.lastWrittenHash = contentHash;
+      this.markPersistRecovered();
+    } finally {
+      if (this.pendingWriteHash === contentHash) {
+        this.pendingWriteHash = undefined;
+      }
+    }
   }
 
   private async readOrCreateFile(): Promise<string> {
@@ -278,7 +292,7 @@ export class OneFileDocumentSession {
     const diskContent = await readOptionalFile(this.filePath);
     const diskHash = diskContent === undefined ? hashContent('') : hashContent(diskContent);
 
-    if (diskHash === this.lastWrittenHash) {
+    if (diskHash === this.lastWrittenHash || diskHash === this.pendingWriteHash) {
       return;
     }
 
@@ -287,17 +301,21 @@ export class OneFileDocumentSession {
 
   private async reconcileExternalContent(content: string, contentHash: string): Promise<void> {
     const current = this.currentContent();
-    if (current !== content) {
-      applyMinimalTextSplice(this.text, current, content, this.doc);
+    if (current === content) {
+      this.lastWrittenHash = contentHash;
+      return;
     }
 
+    applyMinimalTextSplice(this.text, current, content, this.doc);
     this.lastWrittenHash = contentHash;
     this.emitEvent('external-change');
   }
 
   private markPersistFailed(error: unknown): void {
     this.persistFailed = true;
-    this.emitEvent('persist-failure');
+    const event = this.createEvent('persist-failure');
+    this.activePersistFailureEvent = event;
+    this.emitEvent(event);
     console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
   }
 
@@ -307,15 +325,22 @@ export class OneFileDocumentSession {
     }
 
     this.persistFailed = false;
+    this.activePersistFailureEvent = undefined;
     this.emitEvent('persist-recovered');
   }
 
-  private emitEvent(kind: DocumentSessionEvent['kind']): void {
-    const event = {
+  private createEvent(kind: DocumentSessionEvent['kind']): DocumentSessionEvent {
+    return {
       kind,
       path: this.filePath,
       ts: Date.now()
-    } satisfies DocumentSessionEvent;
+    };
+  }
+
+  private emitEvent(eventOrKind: DocumentSessionEvent | DocumentSessionEvent['kind']): void {
+    const event = typeof eventOrKind === 'string'
+      ? this.createEvent(eventOrKind)
+      : eventOrKind;
 
     for (const handler of this.eventHandlers) {
       try {

@@ -88,6 +88,11 @@ export async function bindYjsWebSocket(
     sendBytes(socket, encodeSessionEvent(event));
   });
 
+  const activePersistFailure = session.getActivePersistFailureEvent();
+  if (activePersistFailure) {
+    sendBytes(socket, encodeSessionEvent(activePersistFailure));
+  }
+
   sendSync(socket, (encoder) => {
     syncProtocol.writeSyncStep1(encoder, session.ydoc);
   });
