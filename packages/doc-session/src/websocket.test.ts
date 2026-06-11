@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -110,6 +110,52 @@ describe('Yjs WebSocket session', () => {
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
     await session.close();
+  });
+
+  it('broadcasts persist failure and recovery events to every client', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const clientA = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    const clientB = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      clientA.text.insert(0, 'unsaved while readonly\n');
+      await waitForSessionEvent([clientA, clientB], 'persist-failure');
+
+      await chmod(vaultDir, 0o700);
+      clientA.text.insert(clientA.text.length, 'saved after recovery\n');
+      await waitForSessionEvent([clientA, clientB], 'persist-recovered');
+
+      await waitForDiskContent(filePath, (content) =>
+        content === 'unsaved while readonly\nsaved after recovery\n'
+      );
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      clientA.close();
+      clientB.close();
+      await closeWebSocketServer(webSocketServer);
+      await closeServer(server);
+      await session.close();
+    }
   });
 
   it('closes malformed sync frames without crashing the session', async () => {
@@ -279,6 +325,15 @@ async function waitForSessionEvent(
 ): Promise<void> {
   await waitUntil(() => clients.every((client) => client.events.some((event) => event.kind === kind)), () =>
     `Timed out waiting for ${kind}: ${clients.map((client) => JSON.stringify(client.events)).join(' | ')}`
+  );
+}
+
+async function waitForDiskContent(
+  filePath: string,
+  predicate: (content: string) => boolean,
+): Promise<void> {
+  await waitUntil(async () => predicate(await readFile(filePath, 'utf8')), () =>
+    `Timed out waiting for disk content at ${filePath}`
   );
 }
 

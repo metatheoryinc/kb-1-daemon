@@ -109,6 +109,27 @@ describe('PlaintextEditor undo gate (substrate contract)', () => {
     expect(ytext.toJSON()).toBe('AGENT: hello');
   });
 
+  it('preserves a remote external-change transaction when user undo runs', () => {
+    // The daemon reconciles external disk writes through Yjs and clients
+    // receive them as remote socket-origin updates. The editor's undo
+    // stack tracks only local user origin, so Ctrl-Z must leave that
+    // external content intact.
+    const { doc, ytext, undoManager } = setup('hello');
+    const remoteExternalChangeOrigin = { source: 'external-change-socket' };
+    doc.transact(() => {
+      ytext.insert(ytext.length, ' from disk');
+    }, remoteExternalChangeOrigin);
+    doc.transact(() => {
+      ytext.insert(ytext.length, '!');
+    }, PLAINTEXT_USER_ORIGIN);
+
+    expect(ytext.toJSON()).toBe('hello from disk!');
+    undoManager.undo();
+    expect(ytext.toJSON()).toBe('hello from disk');
+    undoManager.undo();
+    expect(ytext.toJSON()).toBe('hello from disk');
+  });
+
   it('redoes a previously undone user edit', () => {
     const { doc, ytext, undoManager } = setup('hello');
     doc.transact(() => {
