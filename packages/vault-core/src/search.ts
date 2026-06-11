@@ -27,6 +27,7 @@ export interface SearchResult {
   limit: number;
   offset: number;
   total: number;
+  truncated: boolean;
   results: SearchHit[];
 }
 
@@ -45,6 +46,7 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
       limit: clampPositiveInteger(input.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT),
       offset: clampNonNegativeInteger(input.offset),
       total: 0,
+      truncated: false,
       results: []
     };
   }
@@ -54,7 +56,7 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
   const offset = clampNonNegativeInteger(input.offset);
   const context = clampNonNegativeInteger(input.context, DEFAULT_CONTEXT_LINES, MAX_CONTEXT_LINES);
   const allHits: SearchHit[] = [];
-  const files = await collectSearchableFiles(root, under);
+  const { files, truncated } = await collectSearchableFiles(root, under);
   const lowerQuery = query.toLocaleLowerCase();
 
   for (const filePath of files) {
@@ -81,39 +83,39 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
     limit,
     offset,
     total: allHits.length,
+    truncated,
     results: allHits.slice(offset, offset + limit)
   };
 }
 
-async function collectSearchableFiles(root: string, under: string): Promise<string[]> {
+async function collectSearchableFiles(root: string, under: string): Promise<{ files: string[]; truncated: boolean }> {
   const start = under.length === 0 ? root : vaultPath(root, under);
   const startStat = await stat(start).catch((error: unknown) => {
     if (isNodeError(error) && error.code === 'ENOENT') return null;
-    /* v8 ignore next -- Defensive rethrow for unexpected fs.stat failures; ENOENT classification is covered with real temp files. */
+    /* v8 ignore next */
     throw error;
   });
-  if (!startStat?.isDirectory()) return [];
+  if (!startStat?.isDirectory()) return { files: [], truncated: false };
 
   const files: string[] = [];
-  await walk(root, under, files);
-  return files.sort((left, right) => left.localeCompare(right));
+  const truncated = await walk(root, under, files);
+  return { files: files.sort((left, right) => left.localeCompare(right)), truncated };
 }
 
-async function walk(root: string, relDir: string, files: string[]): Promise<void> {
-  /* v8 ignore next -- The post-push cap return is covered; this pre-entry guard protects future recursive call shapes. */
-  if (files.length >= SEARCH_ENTRY_CAP) return;
+async function walk(root: string, relDir: string, files: string[]): Promise<boolean> {
   const absDir = relDir.length === 0 ? root : vaultPath(root, relDir);
   const dirents = await readdir(absDir, { withFileTypes: true });
   for (const dirent of dirents) {
     const rel = relDir.length === 0 ? dirent.name : path.posix.join(relDir, dirent.name);
     if (isExcludedSearchPath(rel)) continue;
     if (dirent.isDirectory()) {
-      await walk(root, rel, files);
+      if (await walk(root, rel, files)) return true;
     } else if (dirent.isFile() && isMarkdownLikePath(rel)) {
       files.push(rel);
-      if (files.length >= SEARCH_ENTRY_CAP) return;
+      if (files.length >= SEARCH_ENTRY_CAP) return true;
     }
   }
+  return false;
 }
 
 function vaultPath(root: string, relPath: string): string {

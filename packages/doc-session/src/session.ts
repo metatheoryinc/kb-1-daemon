@@ -55,6 +55,16 @@ export type SessionSpliceResult =
     }
   | SessionContentEditReject;
 
+export class PersistFailedError extends Error {
+  constructor(
+    readonly filePath: string,
+    readonly cause: unknown
+  ) {
+    super(`Failed to persist document session for ${filePath}`);
+    this.name = 'PersistFailedError';
+  }
+}
+
 export class OneFileDocumentSession {
   filePath: string;
 
@@ -74,6 +84,7 @@ export class OneFileDocumentSession {
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
   private persistFailed = false;
+  private persistFailureError: PersistFailedError | undefined;
   private activePersistFailureEvent: DocumentSessionEvent | undefined;
   private watcher: FSWatcher | undefined;
   private watchDebounceTimer: NodeJS.Timeout | undefined;
@@ -143,6 +154,10 @@ export class OneFileDocumentSession {
 
   getActivePersistFailureEvent(): DocumentSessionEvent | undefined {
     return this.activePersistFailureEvent;
+  }
+
+  hasActivePersistFailure(): boolean {
+    return this.persistFailed;
   }
 
   async reset(content = this.defaultContent): Promise<string> {
@@ -217,6 +232,9 @@ export class OneFileDocumentSession {
   async flush(): Promise<void> {
     if (this.persistPromise) {
       await this.persistPromise;
+    }
+    if (this.persistFailureError) {
+      throw this.persistFailureError;
     }
   }
 
@@ -341,13 +359,17 @@ export class OneFileDocumentSession {
   }
 
   private async persistLoop(): Promise<void> {
+    let failure: PersistFailedError | undefined;
     while (this.persistRequested) {
       this.persistRequested = false;
       try {
         await this.materialize();
       } catch (error) {
-        this.markPersistFailed(error);
+        failure = this.markPersistFailed(error);
       }
+    }
+    if (failure) {
+      throw failure;
     }
   }
 
@@ -575,12 +597,17 @@ export class OneFileDocumentSession {
     this.emitEvent(eventKind);
   }
 
-  private markPersistFailed(error: unknown): void {
+  private markPersistFailed(error: unknown): PersistFailedError {
     this.persistFailed = true;
+    const persistError = error instanceof PersistFailedError
+      ? error
+      : new PersistFailedError(this.filePath, error);
+    this.persistFailureError = persistError;
     const event = this.createEvent('persist-failure');
     this.activePersistFailureEvent = event;
     this.emitEvent(event);
     console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
+    return persistError;
   }
 
   private markPersistRecovered(): void {
@@ -589,6 +616,7 @@ export class OneFileDocumentSession {
     }
 
     this.persistFailed = false;
+    this.persistFailureError = undefined;
     this.activePersistFailureEvent = undefined;
     this.emitEvent('persist-recovered');
   }

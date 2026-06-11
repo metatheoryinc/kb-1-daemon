@@ -126,7 +126,9 @@ describe('OneFileDocumentSession', () => {
       rejected: 'stale_doc',
       current_content: 'one TWO three\n'
     });
-    if (stale.ok || stale.rejected !== 'stale_doc') throw new Error('expected stale_doc');
+    if (stale.ok || stale.rejected !== 'stale_doc' || typeof stale.current_content !== 'string') {
+      throw new Error('expected stale_doc');
+    }
     if (typeof stale.baseline !== 'string') throw new Error('expected fresh baseline');
     expect(stale.baseline).not.toBe(firstRead.baseline);
 
@@ -139,6 +141,31 @@ describe('OneFileDocumentSession', () => {
       content: 'one TWO THREE\n'
     });
     await expect(readFile(filePath, 'utf8')).resolves.toBe('one TWO THREE\n');
+    await session.close();
+  });
+
+  it('truncates stale baseline echoes for oversized resident documents', async () => {
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'small\n' });
+    await session.open();
+    const firstRead = await session.readWithBaseline();
+
+    await session.applyContent(`${'x'.repeat(1024 * 1024 + 32)}\n`);
+    const stale = await session.applyBaselineEdit(firstRead.baseline, (current) => ({
+      ok: true,
+      content: `${current}unreachable`
+    }));
+
+    expect(stale).toMatchObject({
+      ok: false,
+      rejected: 'stale_doc',
+      truncated: true
+    });
+    if (stale.ok || stale.rejected !== 'stale_doc') {
+      throw new Error('expected stale_doc');
+    }
+    const staleContent = stale.current_content;
+    if (typeof staleContent !== 'string') throw new Error('expected current_content');
+    expect(new TextEncoder().encode(staleContent).length).toBeLessThanOrEqual(1024 * 1024);
     await session.close();
   });
 
@@ -197,6 +224,38 @@ describe('OneFileDocumentSession', () => {
     );
 
     expect(eventKinds(events)).toEqual(['external-merge']);
+    await session.close();
+  });
+
+  it('uses the default external-change warning and keeps notifying after a handler throws', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const events: DocumentSessionEvent[] = [];
+    await writeFileWithParents(filePath, 'active\n');
+    const session = new OneFileDocumentSession(filePath, {
+      watchDebounceMs: 10,
+      watchPollMs: 50
+    });
+    session.onEvent(() => {
+      throw new Error('handler failed');
+    });
+    session.onEvent((event) => events.push(event));
+    await session.open();
+
+    await writeFile(filePath, 'external edit\n', 'utf8');
+
+    await waitUntil(() => events.some((event) => event.kind === 'external-merge'), () =>
+      `Timed out waiting for external merge; events=${JSON.stringify(events)}`
+    );
+
+    await writeFile(filePath, 'racing disk edit\n', 'utf8');
+    await session.reset('session edit\n');
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('external document change detected'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('document session event handler failed'),
+      expect.any(Error)
+    );
+    warnSpy.mockRestore();
     await session.close();
   });
 
@@ -362,6 +421,33 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('fails explicit flushes until a later write successfully persists', async () => {
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const vaultDir = dirname(filePath);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      session.ydoc.getText('markdown').insert(0, 'unsaved\n');
+      await expect(session.flush()).rejects.toThrow('Failed to persist document session');
+      await expect(session.flush()).rejects.toThrow('Failed to persist document session');
+      expect(session.hasActivePersistFailure()).toBe(true);
+
+      await chmod(vaultDir, 0o700);
+      session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'saved\n');
+      await session.flush();
+      expect(session.hasActivePersistFailure()).toBe(false);
+      await expect(readFile(filePath, 'utf8')).resolves.toBe('unsaved\nsaved\n');
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      if (session.hasActivePersistFailure()) {
+        session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'cleanup\n');
+        await session.flush().catch(() => undefined);
+      }
+      await session.close();
+    }
+  });
+
   it('reconciles direct filesystem changes before materializing a racing session edit', async () => {
     const events: DocumentSessionEvent[] = [];
     const warnings: DocumentSessionWarning[] = [];
@@ -485,6 +571,31 @@ describe('OneFileDocumentSession', () => {
     await manager.close();
   });
 
+  it('keeps a session open until every simultaneous client lease is released', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: '',
+      idleSessionGraceMs: 30
+    });
+    const first = manager.attachClientSession('leased.md');
+    const second = manager.attachClientSession('leased.md');
+    await first.session.open();
+
+    try {
+      first.release();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(manager.getOpenSession('leased.md')).toBe(first.session);
+
+      second.release();
+      await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+        `Timed out waiting for all leases to release; count=${manager.getOpenSessionCount()}`
+      );
+    } finally {
+      second.release();
+      await manager.close();
+    }
+  });
+
   it('flushes a pending client edit before idle close removes the session', async () => {
     const manager = new DocumentSessionManager({
       root: join(kb2Home, 'demo-vault'),
@@ -502,6 +613,41 @@ describe('OneFileDocumentSession', () => {
     await expect(readFile(join(kb2Home, 'demo-vault', 'flush-before-close.md'), 'utf8'))
       .resolves.toBe('pending before close\n');
     await manager.close();
+  });
+
+  it('does not idle-close a session whose latest content failed to persist', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 20
+    });
+    const lease = manager.attachClientSession('readonly.md');
+    await lease.session.open();
+    const vaultDir = join(kb2Home, 'demo-vault');
+
+    try {
+      await chmod(vaultDir, 0o500);
+      lease.session.ydoc.getText('markdown').insert(lease.session.ydoc.getText('markdown').length, 'unsaved\n');
+      await expect(lease.session.flush()).rejects.toThrow('Failed to persist document session');
+      lease.release();
+
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      expect(manager.getOpenSession('readonly.md')).toBe(lease.session);
+      await expect(lease.session.getContent()).resolves.toBe('base\nunsaved\n');
+
+      await chmod(vaultDir, 0o700);
+      lease.session.ydoc.getText('markdown').insert(lease.session.ydoc.getText('markdown').length, 'saved\n');
+      await lease.session.flush();
+      await expect(readFile(join(kb2Home, 'demo-vault', 'readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nsaved\n');
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      if (lease.session.hasActivePersistFailure()) {
+        lease.session.ydoc.getText('markdown').insert(lease.session.ydoc.getText('markdown').length, 'cleanup recovery\n');
+        await lease.session.flush().catch(() => undefined);
+      }
+      lease.release();
+      await manager.close();
+    }
   });
 
   it('hydrates API sessions with default content, keeps them through idle grace, then closes them', async () => {
@@ -527,6 +673,29 @@ describe('OneFileDocumentSession', () => {
     await manager.close();
   });
 
+  it('cancels a pending idle close when an API session is acquired again', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      idleSessionGraceMs: 30
+    });
+
+    const result = await manager.withSession(
+      'api-retained.md',
+      async (session) => {
+        await session.open();
+        return session;
+      },
+      { defaultContent: '' }
+    );
+
+    expect(manager.getOpenSession('api-retained.md')).toBe(result);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(manager.getSession('api-retained.md')).toBe(result);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(manager.getOpenSession('api-retained.md')).toBe(result);
+    await manager.close();
+  });
+
   it('does not idle-close an API-touched session while a client is attached', async () => {
     const manager = new DocumentSessionManager({
       root: join(kb2Home, 'demo-vault'),
@@ -547,6 +716,116 @@ describe('OneFileDocumentSession', () => {
       `Timed out waiting for released client idle close; count=${manager.getOpenSessionCount()}`
     );
     await manager.close();
+  });
+
+  it('hydrates a fresh session when a client attaches while idle close is in flight', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 1
+    });
+    const original = manager.getSession('closing.md');
+    await original.open();
+    let closeStarted!: () => void;
+    let allowClose!: () => void;
+    const closeStartedPromise = new Promise<void>((resolve) => {
+      closeStarted = resolve;
+    });
+    const allowClosePromise = new Promise<void>((resolve) => {
+      allowClose = resolve;
+    });
+    const originalClose = original.close.bind(original);
+    original.close = async () => {
+      closeStarted();
+      await allowClosePromise;
+      await originalClose();
+    };
+
+    await manager.withSession('closing.md', async (session) => {
+      expect(session).toBe(original);
+    });
+    await closeStartedPromise;
+
+    const attachedDuringClose = manager.attachClientSession('closing.md');
+    try {
+      expect(attachedDuringClose.session).not.toBe(original);
+      await attachedDuringClose.session.open();
+      expect(manager.getOpenSession('closing.md')).toBe(attachedDuringClose.session);
+    } finally {
+      allowClose();
+      attachedDuringClose.release();
+      await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+        `Timed out waiting for fresh attached session to close; count=${manager.getOpenSessionCount()}`
+      );
+      await manager.close();
+    }
+  });
+
+  it('logs unexpected idle close failures without keeping the failed session registered', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: '',
+      idleSessionGraceMs: 1
+    });
+    const session = manager.getSession('close-error.md');
+    await session.open();
+    session.close = async () => {
+      throw new Error('unexpected close failure');
+    };
+
+    try {
+      await manager.withSession('close-error.md', async (active) => {
+        expect(active).toBe(session);
+      });
+      await waitUntil(() => manager.getOpenSession('close-error.md') === undefined, () =>
+        'Timed out waiting for failed close to unregister session'
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('failed to close idle document session'),
+        expect.any(Error)
+      );
+    } finally {
+      warnSpy.mockRestore();
+      await manager.close();
+    }
+  });
+
+  it('restores an idle-closing session when close discovers a persist failure', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      defaultContent: '',
+      idleSessionGraceMs: 1
+    });
+    const session = manager.getSession('late-persist-failure.md');
+    await session.open();
+    const originalClose = session.close.bind(session);
+    session.close = async () => {
+      (session as unknown as { persistFailed: boolean }).persistFailed = true;
+      throw new Error('late persist failure');
+    };
+
+    try {
+      await manager.withSession('late-persist-failure.md', async (active) => {
+        expect(active).toBe(session);
+      });
+      await waitUntil(() => warnSpy.mock.calls.length > 0, () =>
+        'Timed out waiting for failed-persist close warning'
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('refused to close idle document session'),
+        expect.any(Error)
+      );
+      expect(manager.getOpenSession('late-persist-failure.md')).toBe(session);
+      (session as unknown as { persistFailed: boolean }).persistFailed = false;
+      session.close = originalClose;
+    } finally {
+      warnSpy.mockRestore();
+      (session as unknown as { persistFailed: boolean }).persistFailed = false;
+      session.close = originalClose;
+      await manager.close();
+    }
   });
 
   it('moves a single live manager session and updates the path registry', async () => {

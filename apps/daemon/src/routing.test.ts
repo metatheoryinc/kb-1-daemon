@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -535,6 +535,56 @@ describe('daemon routing', () => {
 
     const audit = await readAuditRows(config.vaultRoot);
     expect(audit.map((row) => row.operation)).toEqual(['append', 'prepend']);
+    await sessions.close();
+  });
+
+  it('surfaces live append persist failures without auditing or idle-dropping unsaved content, then recovers', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({
+      root: config.vaultRoot,
+      defaultContent: '',
+      idleSessionGraceMs: 30
+    });
+    await writeFileWithParents(join(config.vaultRoot, 'notes', 'readonly.md'), 'base\n');
+    const hydrated = sessions.getSession('notes/readonly.md');
+    await hydrated.open();
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const notesDir = join(config.vaultRoot, 'notes');
+
+    await chmod(notesDir, 0o500);
+    const failedAppend = await app.request('/api/files/notes/readonly.md/append', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'lost if dropped\n' })
+    });
+
+    expect(failedAppend.status).toBe(500);
+    await expect(failedAppend.json()).resolves.toMatchObject({ ok: false, error: 'persist_failed' });
+    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
+    await expect(readFile(join(config.vaultRoot, '.kb2/audit/changes.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(sessions.getOpenSession('notes/readonly.md')).toBe(hydrated);
+    await expect(hydrated.getContent()).resolves.toBe('base\nlost if dropped\n');
+
+    await chmod(notesDir, 0o700);
+    const recoveredAppend = await app.request('/api/files/notes/readonly.md/append', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'after recovery\n' })
+    });
+
+    expect(recoveredAppend.status).toBe(200);
+    await expect(recoveredAppend.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/readonly.md',
+      content: 'base\nlost if dropped\nafter recovery\n'
+    });
+    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\nlost if dropped\nafter recovery\n');
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ operation: 'append', path: 'notes/readonly.md' });
+    expect(hydrated.getActivePersistFailureEvent()).toBeUndefined();
     await sessions.close();
   });
 

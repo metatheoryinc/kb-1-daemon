@@ -1,6 +1,7 @@
 export {
   DEFAULT_DEMO_DOCUMENT_CONTENT,
   OneFileDocumentSession,
+  PersistFailedError,
   type DocumentSessionEventHandler,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions

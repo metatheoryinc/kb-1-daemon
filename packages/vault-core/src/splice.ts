@@ -1,5 +1,3 @@
-import matter from 'gray-matter';
-
 export const SPLICE_BYTES_LIMIT = 64 * 1024;
 export const DOCUMENT_BYTES_LIMIT = 1024 * 1024;
 
@@ -43,8 +41,9 @@ export function applyAnchoredSplice(
     };
   }
 
+  const normalizedContent = normalizeWithRawOffsets(content);
   const needle = before + oldText + after;
-  const matches = findAllSubstringOffsets(content, needle);
+  const matches = findAllSubstringOffsets(normalizedContent.value, needle);
   if (matches.length === 0) return { ok: false, rejected: 'not_found' };
 
   let matchOffset: number;
@@ -63,10 +62,12 @@ export function applyAnchoredSplice(
   }
 
   const oldOffset = matchOffset + before.length;
+  const rawOldOffset = normalizedContent.rawOffsets[oldOffset]!;
+  const rawOldEndOffset = normalizedContent.rawOffsets[oldOffset + oldText.length]!;
   const next =
-    content.slice(0, oldOffset) +
+    content.slice(0, rawOldOffset) +
     newText +
-    content.slice(oldOffset + oldText.length);
+    content.slice(rawOldEndOffset);
   const nextBytes = utf8ByteLength(next);
   if (nextBytes > DOCUMENT_BYTES_LIMIT) {
     return {
@@ -86,11 +87,31 @@ export function appendContent(content: string, addition: string): string {
 
 export function prependContent(content: string, addition: string): string {
   const normalizedAddition = lfNormalize(addition);
-  const parsed = matter(content);
-  const insertionPoint = matter.test(content)
-    ? content.length - parsed.content.length
-    : 0;
-  return content.slice(0, insertionPoint) + normalizedAddition + content.slice(insertionPoint);
+  const insertionPoint = frontmatterInsertionPoint(content) ?? 0;
+  const separator = insertionPoint > 0 &&
+    normalizedAddition.length > 0 &&
+    !endsWithLineEnding(content.slice(0, insertionPoint))
+    ? '\n'
+    : '';
+  return content.slice(0, insertionPoint) + separator + normalizedAddition + content.slice(insertionPoint);
+}
+
+function frontmatterInsertionPoint(content: string): number | undefined {
+  const opening = /^---(?:\r\n|\n|\r)/.exec(content);
+  if (!opening) return undefined;
+
+  let lineStart = opening[0].length;
+  while (lineStart < content.length) {
+    const lineEnd = nextLineEnd(content, lineStart);
+    const line = content.slice(lineStart, lineEnd.contentEnd);
+    if (line.trim() === '---') {
+      return lineEnd.nextStart;
+    }
+    lineStart = lineEnd.nextStart;
+  }
+
+  // Unterminated frontmatter is treated as ordinary body content.
+  return undefined;
 }
 
 export function lfNormalize(value: string): string {
@@ -112,4 +133,47 @@ function findAllSubstringOffsets(haystack: string, needle: string): number[] {
     from = at + 1;
   }
   return offsets;
+}
+
+function normalizeWithRawOffsets(content: string): { value: string; rawOffsets: number[] } {
+  let value = '';
+  const rawOffsets: number[] = [];
+  let rawIndex = 0;
+
+  while (rawIndex < content.length) {
+    rawOffsets.push(rawIndex);
+    const char = content[rawIndex]!;
+    if (char === '\r') {
+      value += '\n';
+      rawIndex += content[rawIndex + 1] === '\n' ? 2 : 1;
+      continue;
+    }
+    value += char;
+    rawIndex += 1;
+  }
+
+  rawOffsets.push(content.length);
+  return { value, rawOffsets };
+}
+
+function nextLineEnd(content: string, lineStart: number): { contentEnd: number; nextStart: number } {
+  let index = lineStart;
+  while (index < content.length) {
+    const char = content[index]!;
+    if (char === '\n') {
+      return { contentEnd: index, nextStart: index + 1 };
+    }
+    if (char === '\r') {
+      return {
+        contentEnd: index,
+        nextStart: content[index + 1] === '\n' ? index + 2 : index + 1
+      };
+    }
+    index += 1;
+  }
+  return { contentEnd: content.length, nextStart: content.length };
+}
+
+function endsWithLineEnding(value: string): boolean {
+  return value.endsWith('\n') || value.endsWith('\r');
 }

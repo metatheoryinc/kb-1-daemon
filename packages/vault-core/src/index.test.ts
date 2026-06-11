@@ -12,6 +12,7 @@ import {
   deleteVaultFolder,
   getVaultInfo,
   listVaultTree,
+  lfNormalize,
   makeVaultFolder,
   moveVaultPath,
   prependContent,
@@ -367,23 +368,35 @@ describe('anchored splice and positioned content helpers', () => {
     });
   });
 
-  it('property: anchored splice result equals the direct string replacement for generated unicode documents', () => {
+  it('property: anchored splice result equals the direct string replacement for generated full-unicode documents', () => {
+    const unicodeFragment = fc.array(
+      fc.oneof(
+        fc.string({ maxLength: 4 }),
+        fc.constantFrom('😀', '🧪', '𝌆', 'é', '中', '\uD800', '\uDC00', '\r\n', '\r')
+      ),
+      { maxLength: 20 }
+    ).map((parts) => parts.join(''));
+    const boundary = fc.constantFrom('', '😀', '🧪', '𝌆', '\uD800', '\uDC00');
+
     fc.assert(fc.property(
-      fc.string({ minLength: 1, maxLength: 120 }),
-      fc.string({ maxLength: 40 }),
-      fc.string({ maxLength: 40 }),
-      fc.string({ maxLength: 40 }),
-      (left, oldText, right, replacement) => {
-        fc.pre(oldText.length > 0);
+      unicodeFragment,
+      unicodeFragment,
+      unicodeFragment,
+      unicodeFragment,
+      boundary,
+      boundary,
+      (left, oldText, right, replacement, edgeBefore, edgeAfter) => {
+        const splicedText = `${edgeBefore}${oldText}${edgeAfter}`;
+        fc.pre(splicedText.length > 0);
         const before = '__KB2_LEFT__';
         const after = '__KB2_RIGHT__';
-        fc.pre(!left.includes(before + oldText + after));
-        fc.pre(!right.includes(before + oldText + after));
-        const source = `${left}${before}${oldText}${after}${right}😀`;
-        const expected = `${left}${before}${replacement}${after}${right}😀`;
+        fc.pre(!left.includes(before + splicedText + after));
+        fc.pre(!right.includes(before + splicedText + after));
+        const source = `${left}${before}${splicedText}${after}${right}`;
+        const expected = `${left}${before}${lfNormalize(replacement)}${after}${right}`;
         const result = applyAnchoredSplice(source, {
           before,
-          oldText,
+          oldText: splicedText,
           after,
           newText: replacement
         });
@@ -392,11 +405,45 @@ describe('anchored splice and positioned content helpers', () => {
     ));
   });
 
+  it('splices across CRLF, CR, and mixed line boundaries while preserving surrounding bytes', () => {
+    expect(applyAnchoredSplice('alpha\r\nold\r\nomega', {
+      oldText: 'old\nomega',
+      newText: 'NEW'
+    })).toEqual({ ok: true, content: 'alpha\r\nNEW' });
+
+    expect(applyAnchoredSplice('alpha\r\nold\r\nomega', {
+      oldText: 'old\r\nomega',
+      newText: 'NEW'
+    })).toEqual({ ok: true, content: 'alpha\r\nNEW' });
+
+    expect(applyAnchoredSplice('a\r\nb\rc\nd', {
+      oldText: 'b\nc\nd',
+      newText: 'B'
+    })).toEqual({ ok: true, content: 'a\r\nB' });
+
+    expect(applyAnchoredSplice('a\rb\rc', {
+      oldText: 'a\nb',
+      newText: 'AB'
+    })).toEqual({ ok: true, content: 'AB\rc' });
+  });
+
   it('appends and prepends after YAML frontmatter using gray-matter detection', () => {
     expect(appendContent('a\r\n', 'b\r\n')).toBe('a\r\nb\n');
     expect(prependContent('body\n', 'top\r\n')).toBe('top\nbody\n');
     expect(prependContent('---\ntitle: Test\n---\nbody\n', 'inserted\n')).toBe(
       '---\ntitle: Test\n---\ninserted\nbody\n'
+    );
+    expect(prependContent('---\nonly: front\n---', 'inserted\n')).toBe(
+      '---\nonly: front\n---\ninserted\n'
+    );
+    expect(prependContent('---\r\ntitle: Test\r\n---\r\nbody\r\n', 'inserted\n')).toBe(
+      '---\r\ntitle: Test\r\n---\r\ninserted\nbody\r\n'
+    );
+    expect(prependContent('---\ronly: front\r---\rbody\r', 'inserted\n')).toBe(
+      '---\ronly: front\r---\rinserted\nbody\r'
+    );
+    expect(prependContent('---\nonly: front\nbody\n', 'inserted\n')).toBe(
+      'inserted\n---\nonly: front\nbody\n'
     );
   });
 });
@@ -457,6 +504,7 @@ describe('scan search', () => {
 
   it('caps the searchable file walk before unbounded scans', async () => {
     const cappedRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-cap-'));
+    const nestedRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-nested-cap-'));
     try {
       await Promise.all(Array.from({ length: 5001 }, async (_value, index) => {
         await writeFile(path.join(cappedRoot, `file-${index}.md`), 'needle\n', 'utf8');
@@ -464,10 +512,61 @@ describe('scan search', () => {
 
       const result = await searchVaultFiles(cappedRoot, { q: 'needle', limit: 10 });
       expect(result.total).toBe(5000);
+      expect(result.truncated).toBe(true);
       expect(result.results).toHaveLength(10);
+
+      await mkdir(path.join(nestedRoot, 'nested'), { recursive: true });
+      await Promise.all(Array.from({ length: 5000 }, async (_value, index) => {
+        await writeFile(path.join(nestedRoot, 'nested', `file-${index}.md`), 'needle\n', 'utf8');
+      }));
+      await writeFile(path.join(nestedRoot, 'after.md'), 'needle\n', 'utf8');
+      const nested = await searchVaultFiles(nestedRoot, { q: 'needle', limit: 10 });
+      expect(nested.total).toBe(5000);
+      expect(nested.truncated).toBe(true);
     } finally {
       await rm(cappedRoot, { recursive: true, force: true });
+      await rm(nestedRoot, { recursive: true, force: true });
     }
+  });
+
+  it('property: every randomized search result references a real line in a real file', async () => {
+    const segment = fc.stringMatching(/^[a-z]{1,8}$/);
+    const relativeFile = fc.tuple(fc.array(segment, { maxLength: 2 }), segment)
+      .map(([folders, name]) => [...folders, `${name}.md`].join('/'));
+    const line = fc.string({ maxLength: 24 }).filter((value) => !value.includes('\n'));
+    const fileSet = fc.uniqueArray(
+      fc.record({
+        path: relativeFile,
+        lines: fc.array(line, { minLength: 1, maxLength: 8 })
+      }),
+      { minLength: 1, maxLength: 12, selector: (file) => file.path }
+    );
+
+    await fc.assert(fc.asyncProperty(fileSet, async (files) => {
+      const propertyRoot = await mkdtemp(path.join(tmpdir(), 'kb2-search-property-'));
+      try {
+        const expectedLines = new Map<string, string[]>();
+        for (const file of files) {
+          const lines = file.lines.length > 0 && file.lines.some((candidate) => candidate.includes('needle'))
+            ? file.lines
+            : ['needle', ...file.lines];
+          expectedLines.set(file.path, lines);
+          await writeFileWithParents(path.join(propertyRoot, file.path), `${lines.join('\n')}\n`, 'utf8');
+        }
+
+        const result = await searchVaultFiles(propertyRoot, { q: 'needle', limit: 100, context: 2 });
+        for (const hit of result.results) {
+          const lines = expectedLines.get(hit.path);
+          expect(lines).toBeDefined();
+          expect(hit.line).toBeGreaterThanOrEqual(1);
+          expect(hit.line).toBeLessThanOrEqual(lines!.length);
+          expect(hit.lineText).toBe(lines![hit.line - 1]);
+          expect(hit.lineText.toLocaleLowerCase()).toContain('needle');
+        }
+      } finally {
+        await rm(propertyRoot, { recursive: true, force: true });
+      }
+    }), { numRuns: 35 });
   });
 
   it('returns empty results for empty and missing-folder searches', async () => {

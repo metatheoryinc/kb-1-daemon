@@ -7,9 +7,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text'],
-      include: ['src/manager.ts'],
+      include: ['src/manager.ts', 'src/session.ts'],
       thresholds: {
-        lines: 95
+        'src/manager.ts': {
+          lines: 95
+        },
+        'src/session.ts': {
+          lines: 90
+        }
       }
     }
   }

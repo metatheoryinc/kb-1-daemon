@@ -30,6 +30,7 @@ export class DocumentSessionManager {
   }
 
   getSession(vaultPath: string, overrides: Partial<Pick<OneFileDocumentSessionOptions, 'defaultContent'>> = {}): OneFileDocumentSession {
+    this.cancelIdleClose(vaultPath);
     const existing = this.sessions.get(vaultPath);
     if (existing) return existing;
 
@@ -77,6 +78,7 @@ export class DocumentSessionManager {
     operation: (session: OneFileDocumentSession) => Promise<T>,
     options: Partial<Pick<OneFileDocumentSessionOptions, 'defaultContent'>> = {}
   ): Promise<T> {
+    this.cancelIdleClose(vaultPath);
     const session = this.getSession(vaultPath, options);
     try {
       return await operation(session);
@@ -208,9 +210,23 @@ export class DocumentSessionManager {
     if (this.hasClients(vaultPath)) return;
     const session = this.sessions.get(vaultPath);
     if (!session) return;
-    await session.close();
-    if (!this.hasClients(vaultPath) && this.sessions.get(vaultPath) === session) {
-      this.sessions.delete(vaultPath);
+    if (session.hasActivePersistFailure()) {
+      console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`);
+      return;
+    }
+
+    // If a client acquires this path while close is in flight, it must hydrate
+    // a fresh session rather than reusing a half-detached closing session.
+    this.sessions.delete(vaultPath);
+    try {
+      await session.close();
+    } catch (error) {
+      if (session.hasActivePersistFailure()) {
+        this.sessions.set(vaultPath, session);
+        console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`, error);
+        return;
+      }
+      throw error;
     }
   }
 }

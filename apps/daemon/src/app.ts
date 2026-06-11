@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import type { DocumentSessionManager, OneFileDocumentSession } from '@kb-2/doc-session';
+import { PersistFailedError, type DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
 import {
   InvalidPathError,
   appendAudit,
@@ -141,7 +141,8 @@ export function createApp(options: CreateAppOptions): Hono {
             message: 'file already exists'
           });
         }
-        await liveSession.applyContent(content);
+        const applied = await withMappedWriteError(context, () => liveSession.applyContent(content));
+        if (applied instanceof Response) return applied;
         const audit = await appendAudit({
           root: options.vaultRoot!,
           actor: { kind: 'user' },
@@ -153,7 +154,7 @@ export function createApp(options: CreateAppOptions): Hono {
         return context.json({
           ok: true,
           path: filePath,
-          content: await liveSession.getContent(),
+          content: applied,
           live: true,
           audit
         });
@@ -196,11 +197,12 @@ export function createApp(options: CreateAppOptions): Hono {
         }
         const body = await readJsonObject(context.req.raw);
         const splice = readSpliceRequest(body);
-        const result = await options.documentSessions.withSession(filePath, (session) =>
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
           session.applyBaselineEdit(splice.baseline, (currentContent) =>
             applyAnchoredSplice(currentContent, splice.request)
           )
-        );
+        ));
+        if (result instanceof Response) return result;
         if (!result.ok) return mapSpliceReject(context, result);
         const audit = await appendAudit({
           root: options.vaultRoot!,
@@ -228,11 +230,12 @@ export function createApp(options: CreateAppOptions): Hono {
         }
         const body = await readJsonObject(context.req.raw);
         const content = typeof body.content === 'string' ? body.content : '';
-        const result = await options.documentSessions.withSession(
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(
           filePath,
           (session) => session.applyContentEdit((currentContent) => appendContent(currentContent, content)),
           { defaultContent: '' }
-        );
+        ));
+        if (result instanceof Response) return result;
         const audit = await appendAudit({
           root: options.vaultRoot!,
           actor: { kind: 'mcp_client', client: 'api' },
@@ -259,9 +262,10 @@ export function createApp(options: CreateAppOptions): Hono {
         }
         const body = await readJsonObject(context.req.raw);
         const content = typeof body.content === 'string' ? body.content : '';
-        const result = await options.documentSessions.withSession(filePath, (session) =>
+        const result = await withMappedWriteError(context, () => options.documentSessions!.withSession(filePath, (session) =>
           session.applyContentEdit((currentContent) => prependContent(currentContent, content))
-        );
+        ));
+        if (result instanceof Response) return result;
         const audit = await appendAudit({
           root: options.vaultRoot!,
           actor: { kind: 'mcp_client', client: 'api' },
@@ -489,6 +493,24 @@ async function withMappedVaultError<T>(
   } catch (error) {
     if (error instanceof VaultResultFailure) {
       return mapVaultResult(context, error.result);
+    }
+    throw error;
+  }
+}
+
+async function withMappedWriteError<T>(
+  context: Context,
+  operation: () => T | Promise<T>
+): Promise<T | Response> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof PersistFailedError) {
+      return context.json({
+        ok: false,
+        error: 'persist_failed',
+        message: 'Document edit could not be durably saved to disk.'
+      }, 500);
     }
     throw error;
   }
