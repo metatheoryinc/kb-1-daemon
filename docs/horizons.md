@@ -30,6 +30,14 @@
 
 ## Far horizon
 
+- Hosted vaults (decided direction 2026-06-11, timing open): run the REAL
+  daemon per tenant in scale-to-zero containers (Fly Machines / CF
+  Containers / Fargate — pick via spike) behind the same relay; one
+  implementation, per-tenant filesystem custody, kb-1-cloud as control
+  plane (identity/billing/fleet). Rejected: reimplementing the daemon
+  interface on shared D1/R2 (parallel implementation + custody break).
+  Spike question when timely: durable volume story + idle economics.
+
 - Cloud relay (outbound tunnel, vault authority, takeover flows).
 - Auth, orgs, billing, collaboration gates.
 - Presence/awareness plane (cloud-side), agent attribution UI.
