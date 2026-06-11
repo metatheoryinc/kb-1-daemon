@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { InvalidPathError, validateOptionalVaultPath } from './path.js';
+import { isNodeError, statOrNull } from './fs.js';
+import { InvalidPathError, resolveVaultPath, validateOptionalVaultPath } from './path.js';
 
 export interface SearchInput {
   q: string;
@@ -90,11 +91,7 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
 
 async function collectSearchableFiles(root: string, under: string): Promise<{ files: string[]; truncated: boolean }> {
   const start = under.length === 0 ? root : vaultPath(root, under);
-  const startStat = await stat(start).catch((error: unknown) => {
-    if (isNodeError(error) && error.code === 'ENOENT') return null;
-    /* v8 ignore next */
-    throw error;
-  });
+  const startStat = await statOrNull(start);
   if (!startStat?.isDirectory()) return { files: [], truncated: false };
 
   const files: string[] = [];
@@ -119,13 +116,7 @@ async function walk(root: string, relDir: string, files: string[]): Promise<bool
 }
 
 function vaultPath(root: string, relPath: string): string {
-  const resolvedRoot = path.resolve(root);
-  const resolved = path.resolve(resolvedRoot, relPath);
-  /* v8 ignore next -- Public search validates folder paths before resolution; this is a second containment guard for future call sites. */
-  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
-    throw new InvalidPathError(relPath, 'path escapes vault root');
-  }
-  return resolved;
+  return resolveVaultPath(root, relPath);
 }
 
 function isExcludedSearchPath(relPath: string): boolean {
@@ -151,8 +142,4 @@ function clampNonNegativeInteger(
 ): number {
   if (value === undefined || !Number.isFinite(value) || value < 0) return fallback;
   return Math.min(Math.floor(value), max);
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }

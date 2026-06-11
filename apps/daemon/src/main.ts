@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { DEMO_DOCUMENT_YJS_PATH, DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
+import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -9,7 +9,16 @@ import { WebSocketServer } from 'ws';
 import { createApp } from './app.js';
 import { createDaemonConfig, type DaemonConfig } from './config.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
-import { createVaultService } from './vault-service.js';
+import { createVaultService } from '@kb-2/vault-service';
+
+const DEMO_DOCUMENT_PATH = 'hello-world.md';
+const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
+const DEFAULT_DEMO_DOCUMENT_CONTENT = [
+  '# Hello KB-2',
+  '',
+  'This Markdown file is served by the local KB-2 daemon.',
+  ''
+].join('\n');
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -20,7 +29,7 @@ export interface StartedDaemon {
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
   const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
-  const demoDocumentSession = documentSessions.getSession('hello-world.md');
+  const demoDocumentSession = documentSessions.getSession(DEMO_DOCUMENT_PATH, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
   await demoDocumentSession.open();
   const vaultService = createVaultService({
     vaultRoot: config.vaultRoot,
@@ -118,7 +127,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
 function documentPathFromWebSocketPath(pathname: string): string | undefined {
   if (pathname === DEMO_DOCUMENT_YJS_PATH) {
-    return 'hello-world.md';
+    return DEMO_DOCUMENT_PATH;
   }
 
   const prefix = '/api/files/';

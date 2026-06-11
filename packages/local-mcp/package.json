@@ -15,11 +15,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -b tsconfig.build.json",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@kb-2/vault-service": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "4.4.3"
   },

@@ -1,13 +1,4 @@
-import {
-  accentForId,
-  accentHex,
-  accentHexForId,
-  type AccentName,
-} from '@kb-2/ui';
-
-export { accentForId, accentHex, accentHexForId, type AccentName };
-
-export const MENTION_URL_SCHEME = 'mention:' as const;
+const MENTION_URL_SCHEME = 'mention:' as const;
 
 export interface MentionParts {
   email: string;
@@ -155,4 +146,3 @@ export function resolveLinkTarget(params: {
 
   return null;
 }
-

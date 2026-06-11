@@ -33,10 +33,10 @@ import { extractLinkUrl } from './plaintext-link-affordance';
  * ending at pos) or the left edge (Delete, side=1: prefer the node
  * starting at pos).
  *
- * Exported for unit testing — production callers go through the
- * keymap's `run` handlers below.
+ * Internal helper — callers go through the keymap's `run` handlers
+ * below.
  */
-export function findMentionAt(
+function findMentionAt(
   state: EditorState,
   pos: number,
   side: -1 | 1,

@@ -69,3 +69,13 @@ export function relativeDescendantPath(parent: string, child: string): string | 
   const prefix = `${parent}/`;
   return child.startsWith(prefix) ? child.slice(prefix.length) : null;
 }
+
+export function resolveVaultPath(root: string, relPath: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, relPath);
+  /* v8 ignore next -- Public operations validate away traversal before resolution; this is a second containment guard for future call sites. */
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new InvalidPathError(relPath, 'path escapes vault root');
+  }
+  return resolved;
+}

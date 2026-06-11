@@ -5,8 +5,6 @@ import * as syncProtocol from 'y-protocols/sync';
 import { PersistFailedError, type OneFileDocumentSession } from './session.js';
 import { MESSAGE_SYNC, encodeSessionEvent } from './protocol.js';
 
-export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
-
 const socketOpen = 1;
 
 export interface YjsWebSocketLike {

@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as Y from 'yjs';
 
-import { anchoredSpliceContractCases } from '../../../packages/vault-core/src/splice-contract-cases.test-support.js';
+import { anchoredSpliceContractCases } from '@kb-2/vault-core';
 import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
@@ -129,7 +129,8 @@ describe('daemon routing', () => {
         KB2_HOME: kb2Home
       }
     });
-    const documentSession = new OneFileDocumentSession(config.demoDocumentFile, { defaultContent: 'route seed\n' });
+    const demoDocumentFile = join(config.vaultRoot, 'hello-world.md');
+    const documentSession = new OneFileDocumentSession(demoDocumentFile, { defaultContent: 'route seed\n' });
     await documentSession.open();
 
     const app = createApp({
@@ -162,7 +163,7 @@ describe('daemon routing', () => {
       document: 'demo-vault/hello-world.md',
       content: 'route reset\n'
     });
-    await expect(readFile(config.demoDocumentFile, 'utf8')).resolves.toBe('route reset\n');
+    await expect(readFile(demoDocumentFile, 'utf8')).resolves.toBe('route reset\n');
 
     await documentSession.close();
   });
@@ -436,9 +437,9 @@ describe('daemon routing', () => {
       })
     });
     expect(stale.status).toBe(409);
-    const staleBody = await stale.json() as { rejected: string; current_content: string; baseline: string };
+    const staleBody = await stale.json() as { error: string; current_content: string; baseline: string };
     expect(staleBody).toMatchObject({
-      rejected: 'stale_doc',
+      error: 'stale_doc',
       current_content: 'one TWO three\n'
     });
     expect(staleBody.baseline).not.toBe(readBody.baseline);
@@ -499,7 +500,7 @@ describe('daemon routing', () => {
       }
     });
     expect(stale.isError).toBe(true);
-    expect(mcpText(stale)).toContain('"rejected":"stale_doc"');
+    expect(mcpText(stale)).toContain('"error":"stale_doc"');
     expect(mcpText(stale)).toContain('"current_content":"alpha BETA alpha\\n"');
     expect(mcpText(stale)).toContain('"baseline"');
 
@@ -514,7 +515,7 @@ describe('daemon routing', () => {
       }
     });
     expect(ambiguous.isError).toBe(true);
-    expect(mcpText(ambiguous)).toContain('"rejected":"ambiguous"');
+    expect(mcpText(ambiguous)).toContain('"error":"ambiguous"');
     expect(mcpText(ambiguous)).toContain('"match_count":2');
 
     await expect(mcpToolJson(client, 'append_note', { path: 'notes/a.md', content: 'tail\n' }))
@@ -597,7 +598,7 @@ describe('daemon routing', () => {
       await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(expected.content);
     } else {
       expect(result.isError).toBe(true);
-      expect(parseMcpRejection(result, 'edit_note')).toMatchObject(expected);
+      expect(parseMcpRejection(result, 'edit_note')).toMatchObject(serviceFailureFromContract(expected));
       await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(initialContent);
     }
 
@@ -657,7 +658,7 @@ describe('daemon routing', () => {
       body: JSON.stringify({ baseline: read.baseline, old_text: 'foo', new_text: 'FOO' })
     });
     expect(ambiguous.status).toBe(409);
-    await expect(ambiguous.json()).resolves.toMatchObject({ ok: false, rejected: 'ambiguous', match_count: 3 });
+    await expect(ambiguous.json()).resolves.toMatchObject({ ok: false, error: 'ambiguous', match_count: 3 });
 
     const occurrence = await app.request('/api/files/ambiguous.md/splice', {
       method: 'POST',
@@ -674,7 +675,70 @@ describe('daemon routing', () => {
       body: JSON.stringify({ baseline: reread.baseline, old_text: 'missing', new_text: 'x' })
     });
     expect(notFound.status).toBe(404);
-    await expect(notFound.json()).resolves.toMatchObject({ ok: false, rejected: 'not_found' });
+    await expect(notFound.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+    await sessions.close();
+  });
+
+  it.each([
+    {
+      name: 'PUT JSON content',
+      path: '/api/files/bad-put.md',
+      method: 'PUT',
+      body: { content: 42 },
+      message: 'content must be a string'
+    },
+    {
+      name: 'splice baseline',
+      path: '/api/files/bad-splice.md/splice',
+      method: 'POST',
+      body: { old_text: 'a', new_text: 'b' },
+      message: 'baseline must be a string'
+    },
+    {
+      name: 'append content',
+      path: '/api/files/bad-append.md/append',
+      method: 'POST',
+      body: { content: false },
+      message: 'content must be a string'
+    },
+    {
+      name: 'prepend content',
+      path: '/api/files/bad-prepend.md/prepend',
+      method: 'POST',
+      body: {},
+      message: 'content must be a string'
+    },
+    {
+      name: 'file move target',
+      path: '/api/files/bad-move.md/move',
+      method: 'POST',
+      body: { to: 42 },
+      message: 'to must be a string'
+    },
+    {
+      name: 'folder move target',
+      path: '/api/folders/bad-folder/move',
+      method: 'POST',
+      body: { to: null },
+      message: 'to must be a string'
+    }
+  ])('returns invalid_request for malformed $name bodies', async ({ path, method, body, message }) => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const response = await app.request(path, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'invalid_request',
+      message
+    });
+    await expect(stat(join(config.vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
     await sessions.close();
   });
 
@@ -944,6 +1008,14 @@ function parseMcpRejection(result: Awaited<ReturnType<Client['callTool']>>, tool
     throw new Error(`Expected ${toolName} rejection, got ${text}`);
   }
   return JSON.parse(text.slice(prefix.length)) as Record<string, unknown>;
+}
+
+function serviceFailureFromContract(expected: object): Record<string, unknown> {
+  if ('rejected' in expected) {
+    const { rejected, ...rest } = expected as { rejected: string } & Record<string, unknown>;
+    return { ...rest, error: rejected };
+  }
+  return expected as Record<string, unknown>;
 }
 
 function close(server: ReturnType<typeof createServer>): Promise<void> {

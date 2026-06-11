@@ -10,6 +10,7 @@
       "@kb-2/local-mcp": ["./packages/local-mcp/src/index.ts"],
       "@kb-2/tunnel-protocol": ["./packages/tunnel-protocol/src/index.ts"],
       "@kb-2/vault-core": ["./packages/vault-core/src/index.ts"],
+      "@kb-2/vault-service": ["./packages/vault-service/src/index.ts"],
       "@kb-2/ui": ["./packages/ui/src/lib/index.ts"]
     },
     "strict": true,

@@ -9,12 +9,10 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "strict": true,
-    "types": ["svelte", "vitest/globals"]
+    "types": ["svelte"]
   },
   "include": [
-    "svelte.config.js",
     "src/**/*.svelte",
     "src/**/*.ts"
   ]
 }
-

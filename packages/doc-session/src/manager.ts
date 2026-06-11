@@ -125,6 +125,7 @@ export class DocumentSessionManager {
       return moved;
     }
 
+    // All live child sessions share one disk move; each session then completes its own in-memory path rebinding after that promise settles.
     await Promise.all(matches.map(([, session]) => session.prepareForPathTransition()));
     const diskMove = Promise.resolve().then(moveOnDisk);
     await Promise.all(matches.map(async ([fromPath, session]) => {

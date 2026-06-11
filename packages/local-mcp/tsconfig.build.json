@@ -4,5 +4,8 @@
     "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo",
     "types": ["node"]
   },
+  "references": [
+    { "path": "../vault-service/tsconfig.build.json" }
+  ],
   "exclude": ["src/**/*.test.ts"]
 }

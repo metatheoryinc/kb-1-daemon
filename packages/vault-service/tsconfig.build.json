@@ -5,6 +5,7 @@
     "types": ["node"]
   },
   "references": [
+    { "path": "../doc-session/tsconfig.build.json" },
     { "path": "../vault-core/tsconfig.build.json" }
   ],
   "exclude": ["src/**/*.test.ts"]

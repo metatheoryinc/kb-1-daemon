@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
-import { accentForId } from './markdown-core';
+import { accentForId } from '@kb-2/ui';
 import {
   plaintextDecorations,
   buildMarkdownDecorations,

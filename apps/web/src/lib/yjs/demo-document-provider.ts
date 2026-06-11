@@ -118,7 +118,7 @@ export function createDemoDocumentProvider(
   };
 }
 
-export function yjsWebSocketUrl(documentPath = 'hello-world.md'): string {
+function yjsWebSocketUrl(documentPath = 'hello-world.md'): string {
   const url = new URL(`/api/files/${encodeVaultPath(documentPath)}/yjs`, window.location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.href;

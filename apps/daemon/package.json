@@ -20,6 +20,7 @@
     "@kb-2/doc-session": "workspace:*",
     "@kb-2/local-mcp": "workspace:*",
     "@kb-2/vault-core": "workspace:*",
+    "@kb-2/vault-service": "workspace:*",
     "hono": "4.12.25",
     "ws": "8.21.0"
   },

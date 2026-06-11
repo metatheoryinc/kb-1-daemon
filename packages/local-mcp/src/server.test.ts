@@ -37,7 +37,13 @@ describe('local MCP server', () => {
       readNote: async () => ({ ok: true, path: 'note.md', content: 'alpha beta', baseline: 'b1', size: 10, mtimeMs: 1 }),
       createNote: async (input) => recordActor(mutationActors, input.actor, { ok: true, path: input.path, audit: audit(input.actor, 'create') }),
       editNote: async (input) => recordActor(mutationActors, input.actor, input.baseline === 'stale'
-        ? { ok: false, rejected: 'stale_doc', current_content: 'alpha beta', baseline: 'fresh' }
+        ? {
+            ok: false,
+            error: 'stale_doc',
+            message: 'document changed since the provided baseline',
+            current_content: 'alpha beta',
+            baseline: 'fresh'
+          }
         : { ok: true, path: input.path, content: input.newText, baseline: 'b2', audit: audit(input.actor, 'splice') }),
       appendNote: async (input) => recordActor(mutationActors, input.actor, { ok: true, path: input.path, content: input.content, baseline: 'b3', audit: audit(input.actor, 'append') }),
       prependNote: async (input) => recordActor(mutationActors, input.actor, { ok: true, path: input.path, content: input.content, baseline: 'b4', audit: audit(input.actor, 'prepend') }),
@@ -91,7 +97,7 @@ describe('local MCP server', () => {
       arguments: { path: 'note.md', baseline: 'stale', old_text: 'alpha', new_text: 'ALPHA' }
     });
     expect(stale.isError).toBe(true);
-    expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"rejected":"stale_doc","current_content":"alpha beta","baseline":"fresh"}');
+    expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}');
 
     expect(mutationActors).toHaveLength(10);
     expect(mutationActors.every((actor) => actor.kind === 'mcp_client' && actor.client === 'sdk-test-client')).toBe(true);

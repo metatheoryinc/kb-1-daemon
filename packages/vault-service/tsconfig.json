@@ -10,7 +10,8 @@
     "types": ["node", "vitest/globals"]
   },
   "references": [
-    { "path": "../vault-service" }
+    { "path": "../doc-session" },
+    { "path": "../vault-core" }
   ],
   "include": ["src/**/*.ts"]
 }
