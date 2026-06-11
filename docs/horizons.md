@@ -2,13 +2,16 @@
 
 ## Near horizon
 
-- **Relay de-risk spike** (likely next): bootstrap private `kb-1-cloud`
-  (submodule topology per narrative) and prove the CF Worker/DO tunnel —
-  HTTP through outbound WS, and the Yjs WebSocket relayed end-to-end with
-  two browsers on the cloud URL. Deliverable: latency numbers + the list of
-  CF limits hit. Needs the user's Cloudflare/wrangler auth.
-- **Session handoff in progress**: local directory rename + commander
-  recreation; incoming commander starts at `docs/commander-handoff.md`.
+- **Cloud-001 — kb-1-cloud scaffold** (next, plan authored 2026-06-11 at
+  `kb-1-cloud/docs/plans/cloud-001-scaffold.md`): super-workspace with this
+  repo as `local/` submodule, Cloudflare apps borrowed wholesale from KB-1
+  (wrangler, Hono, DO mixins with storage/hibernation, better-auth,
+  SvelteKit SPA), AGENTS.md submodule contract. Cloud chunks get their own
+  numbering in the private repo.
+- **Cloud-002 — relay de-risk spike**: prove the CF Worker/DO tunnel — HTTP
+  through outbound WS, and the Yjs WebSocket relayed end-to-end with two
+  browsers on the cloud URL. Deliverable: latency numbers + the list of CF
+  limits hit. Needs the user's Cloudflare/wrangler auth; owns first deploy.
 - **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
   browsable vault; wikilinks get somewhere to go. Carries two deferred
   decisions: external file-deletion semantics, persist-failure state in
