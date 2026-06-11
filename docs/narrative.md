@@ -56,6 +56,16 @@ inventing.
   the independent auditor wrote a scratch test proving `state.abort()`
   forces a real restart, and the required fix landed same-hour. Deviations
   claiming "the tools can't" are now audit targets, not accepted facts.
+- **The relay thesis is PROVEN (2026-06-11, cloud-002).** Two browsers on a
+  real `workers.dev` URL co-edited a markdown file living in a vault on the
+  laptop — the daemon's own UI served through a CF Worker/DO tunnel, Yjs
+  websockets relayed via mux-free dial-back, ~13ms edit propagation locally
+  and ~107ms through the actual edge, then the worker was deleted. GO, with
+  named caveats (reconnect/hibernation lifecycle, backpressure, auth). The
+  independent verifier reproduced everything from scratch AND caught what
+  the implementer missed: initial Yjs sync silently drops in the dial-back
+  pairing window — fresh tabs open empty. Verification keeps earning its
+  cost; the gap is recorded in the findings doc with the fix shape.
 - **The user reviews against invariants and wins.** The gallery-story ruling
   (a component appearing in a gallery is not a per-component story) came from
   the user applying the Storybook invariant more strictly than the audit did;
@@ -101,8 +111,15 @@ inventing.
   mirroring with CI drift check, pointer-bump ritual. The relay de-risk
   spike (CF Worker/DO tunnel, Yjs-over-relay) doubles as this topology's
   pressure test.
-- 6 dependabot vulnerabilities (5 moderate, 1 low) from frontend dep trees —
-  needs a hygiene pass soon.
+- Dependabot debt grew with the cloud repo: daemon has 6 advisories
+  (5 moderate, 1 low); kb-1-cloud now reports 14 (3 HIGH, 10 moderate,
+  1 low) from the scaffold's dep trees. Hygiene pass needed on both.
+- Spike graduation pending (user decisions): daemon's `cloud-002-spike`
+  branch (tunnel-protocol + spike client + the approved `onAccept` mixin
+  hook) lives on origin, and cloud main's `local/` submodule is pinned to
+  it (e73437f) rather than daemon main. Graduating tunnel-protocol into
+  daemon main via PR — and possibly upstreaming the mixin hook to KB-1 —
+  restores the normal pin.
 - The Yjs provider has no reconnect; WebSocket drops currently rely on a
   status chip — covered by a temporary exception to the
   edits-save-or-fail-loudly invariant until offline/read-only mode ships.

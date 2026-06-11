@@ -2,10 +2,13 @@
 
 ## Near horizon
 
-- **Cloud-002 — relay de-risk spike IS RUNNING** (cloud-001 shipped and
-  merged 2026-06-11 same day: super-workspace + submodule topology proven —
-  one graph typechecks both repos; mixins byte-identical; audited with one
-  fix round). Plan: `kb-1-cloud/docs/plans/cloud-002-relay-spike.md`.
+- **Cloud-002 SHIPPED — relay thesis PROVEN** (2026-06-11; cloud-001 also
+  shipped same day). Findings + GO verdict:
+  `kb-1-cloud/docs/spikes/cloud-002-relay-findings.md`. Next decisions are
+  the user's: graduate `cloud-002-spike` (tunnel-protocol → daemon main PR,
+  mixin `onAccept` hook → KB-1 upstream candidate, restore submodule pin to
+  main), and green-light the real relay prototype (lifecycle, backpressure,
+  initial-sync fix, auth).
 - **Cloud invariants convention: DONE** (2026-06-11) — kb-1-cloud has
   `docs/architecture/invariants/` with cloud-never-stores-vault-content and
   durable-objects-compose-mixins; daemon engineering invariants inherited
