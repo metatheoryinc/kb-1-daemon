@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,10 +10,14 @@ import { WebSocket, WebSocketServer } from 'ws';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
-import { OneFileDocumentSession } from './session.js';
+import {
+  MESSAGE_SESSION_EVENT,
+  MESSAGE_SYNC,
+  OneFileDocumentSession,
+  decodeSessionEvent,
+  type DocumentSessionEvent
+} from './index.js';
 import { DEMO_DOCUMENT_YJS_PATH, bindYjsWebSocket } from './websocket.js';
-
-const messageSync = 0;
 
 describe('Yjs WebSocket session', () => {
   let kb2Home: string;
@@ -67,6 +71,136 @@ describe('Yjs WebSocket session', () => {
     await session.close();
   });
 
+  it('reconciles external file changes and broadcasts the event to every client', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: 'initial\n',
+      watchDebounceMs: 10,
+      watchPollMs: 50
+    });
+    await session.open();
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const clientA = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    const clientB = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+
+    await waitForSharedContent([clientA, clientB], (content) => content === 'initial\n');
+
+    await writeFile(filePath, 'changed outside\n', 'utf8');
+
+    await waitForSharedContent([clientA, clientB], (content) => content === 'changed outside\n');
+    await waitForSessionEvent([clientA, clientB], 'external-change');
+
+    clientA.close();
+    clientB.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await session.close();
+  });
+
+  it('broadcasts persist failure and recovery events to every client', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const clientA = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    const clientB = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      clientA.text.insert(0, 'unsaved while readonly\n');
+      await waitForSessionEvent([clientA, clientB], 'persist-failure');
+
+      await chmod(vaultDir, 0o700);
+      clientA.text.insert(clientA.text.length, 'saved after recovery\n');
+      await waitForSessionEvent([clientA, clientB], 'persist-recovered');
+
+      await waitForDiskContent(filePath, (content) =>
+        content === 'unsaved while readonly\nsaved after recovery\n'
+      );
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      clientA.close();
+      clientB.close();
+      await closeWebSocketServer(webSocketServer);
+      await closeServer(server);
+      await session.close();
+    }
+  });
+
+  it('replays active persist failure to clients that bind after the failure', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const clientA = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      clientA.text.insert(0, 'unsaved before joiner\n');
+      await waitForSessionEvent([clientA], 'persist-failure');
+
+      const lateClient = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+      try {
+        await waitForSessionEvent([lateClient], 'persist-failure');
+      } finally {
+        lateClient.close();
+      }
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      clientA.close();
+      await closeWebSocketServer(webSocketServer);
+      await closeServer(server);
+      await session.close();
+    }
+  });
+
   it('closes malformed sync frames without crashing the session', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
@@ -110,12 +244,14 @@ describe('Yjs WebSocket session', () => {
 interface YjsClient {
   doc: Y.Doc;
   text: Y.Text;
+  events: DocumentSessionEvent[];
   close: () => void;
 }
 
 async function connectYjsClient(url: string): Promise<YjsClient> {
   const doc = new Y.Doc();
   const text = doc.getText('markdown');
+  const events: DocumentSessionEvent[] = [];
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
 
@@ -135,11 +271,19 @@ async function connectYjsClient(url: string): Promise<YjsClient> {
     const encoder = encoding.createEncoder();
     const messageType = decoding.readVarUint(decoder);
 
-    if (messageType !== messageSync) {
+    if (messageType === MESSAGE_SESSION_EVENT) {
+      const event = decodeSessionEvent(decoder);
+      if (event) {
+        events.push(event);
+      }
       return;
     }
 
-    encoding.writeVarUint(encoder, messageSync);
+    if (messageType !== MESSAGE_SYNC) {
+      return;
+    }
+
+    encoding.writeVarUint(encoder, MESSAGE_SYNC);
     syncProtocol.readSyncMessage(decoder, encoder, doc, socket);
     if (encoding.length(encoder) > 1) {
       socket.send(encoding.toUint8Array(encoder));
@@ -158,13 +302,14 @@ async function connectYjsClient(url: string): Promise<YjsClient> {
   return {
     doc,
     text,
+    events,
     close: () => socket.close()
   };
 }
 
 function sendSync(socket: WebSocket, write: (encoder: encoding.Encoder) => void): void {
   const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, messageSync);
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
   socket.send(encoding.toUint8Array(encoder));
 }
@@ -215,6 +360,36 @@ async function waitForSharedContent(
       client.doc.on('update', onUpdate);
     }
   });
+}
+
+async function waitForSessionEvent(
+  clients: YjsClient[],
+  kind: DocumentSessionEvent['kind'],
+): Promise<void> {
+  await waitUntil(() => clients.every((client) => client.events.some((event) => event.kind === kind)), () =>
+    `Timed out waiting for ${kind}: ${clients.map((client) => JSON.stringify(client.events)).join(' | ')}`
+  );
+}
+
+async function waitForDiskContent(
+  filePath: string,
+  predicate: (content: string) => boolean,
+): Promise<void> {
+  await waitUntil(async () => predicate(await readFile(filePath, 'utf8')), () =>
+    `Timed out waiting for disk content at ${filePath}`
+  );
+}
+
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  errorMessage: () => string,
+): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(errorMessage());
 }
 
 function listen(server: Server): Promise<void> {

@@ -23,6 +23,11 @@ export { default as DialogShell } from './dialogs/DialogShell.svelte';
 export { default as Panel } from './layout/Panel.svelte';
 export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
+export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
+export type {
+  DocumentSaveBannerProps,
+  DocumentSaveBannerVariant,
+} from './notifications/DocumentSaveBanner.svelte';
 export {
   accentForId,
   accentHex,

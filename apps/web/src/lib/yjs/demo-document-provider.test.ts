@@ -11,7 +11,12 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { afterEach, beforeEach, describe, it } from 'vitest';
 
-import { bindYjsWebSocket, OneFileDocumentSession } from '@kb-2/doc-session';
+import {
+  bindYjsWebSocket,
+  OneFileDocumentSession,
+  encodeSessionEvent,
+  type DocumentSessionEvent,
+} from '@kb-2/doc-session';
 import {
   createDemoDocumentProvider,
   DEMO_DOCUMENT_TEXT_NAME,
@@ -94,6 +99,40 @@ describe('demo document provider', () => {
     );
 
     raw.close();
+    provider.destroy();
+  });
+
+  it('surfaces document session events from the shared WebSocket', async () => {
+    const events: DocumentSessionEvent[] = [];
+
+    server = createServer();
+    webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer!.handleUpgrade(request, socket, head, (webSocket) => {
+        webSocket.send(encodeSessionEvent({
+          kind: 'persist-failure',
+          path: join(kb2Home, 'demo-vault', 'hello-world.md'),
+          ts: 123,
+        }));
+      });
+    });
+    await listen(server);
+    const port = (server.address() as AddressInfo).port;
+
+    const provider = createDemoDocumentProvider({
+      url: `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`,
+      onSessionEvent: (event) => events.push(event),
+    });
+
+    await waitUntil(() => events.some((event) => event.kind === 'persist-failure'), () =>
+      `Timed out waiting for provider session event: ${JSON.stringify(events)}`
+    );
+
     provider.destroy();
   });
 });

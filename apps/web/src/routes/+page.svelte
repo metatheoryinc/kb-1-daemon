@@ -5,12 +5,17 @@
     DemoDocumentProviderStatus,
   } from '$lib/yjs/demo-document-provider';
   import { PlaintextEditor, type LivePath, type OrgPerson } from '@kb-2/editor';
-  import { LiveStatusChip } from '@kb-2/ui';
+  import { DocumentSaveBanner, LiveStatusChip } from '@kb-2/ui';
+  import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import { onMount } from 'svelte';
 
   let provider = $state<DemoDocumentProvider | null>(null);
   let status = $state<DemoDocumentProviderStatus>('connecting');
   let error = $state<string | null>(null);
+  let externalChangeVisible = $state(false);
+  let persistFailureActive = $state(false);
+  let persistRecoveredVisible = $state(false);
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const livePaths: LivePath[] = [
     { path: 'demo-vault/hello-world.md', noteId: 'demo-document' },
@@ -35,6 +40,33 @@
           : 'Daemon · closed',
   );
 
+  function handleSessionEvent(event: DocumentSessionEvent): void {
+    if (event.kind === 'external-change') {
+      externalChangeVisible = true;
+      return;
+    }
+
+    if (event.kind === 'persist-failure') {
+      persistFailureActive = true;
+      persistRecoveredVisible = false;
+      if (recoveryTimer) {
+        clearTimeout(recoveryTimer);
+        recoveryTimer = undefined;
+      }
+      return;
+    }
+
+    persistFailureActive = false;
+    persistRecoveredVisible = true;
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+    }
+    recoveryTimer = setTimeout(() => {
+      persistRecoveredVisible = false;
+      recoveryTimer = undefined;
+    }, 3500);
+  }
+
   onMount(() => {
     const nextProvider = createDemoDocumentProvider({
       onStatus: (nextStatus) => {
@@ -43,10 +75,15 @@
       onError: (caught) => {
         error = caught instanceof Error ? caught.message : String(caught);
       },
+      onSessionEvent: handleSessionEvent,
     });
     provider = nextProvider;
 
     return () => {
+      if (recoveryTimer) {
+        clearTimeout(recoveryTimer);
+        recoveryTimer = undefined;
+      }
       nextProvider.destroy();
       provider = null;
     };
@@ -67,6 +104,35 @@
       <LiveStatusChip label={statusLabel} />
     </a>
   </header>
+
+  {#if externalChangeVisible || persistFailureActive || persistRecoveredVisible}
+    <section class="banner-strip" aria-label="Document save notifications">
+      {#if externalChangeVisible}
+        <DocumentSaveBanner
+          variant="external-change"
+          title="File changed outside KB-2"
+          message="This file changed outside KB-2 and was reloaded from disk."
+          ondismiss={() => {
+            externalChangeVisible = false;
+          }}
+        />
+      {/if}
+
+      {#if persistFailureActive}
+        <DocumentSaveBanner
+          variant="persist-failure"
+          title="Changes are NOT saving to disk."
+          message="Keep this tab open. KB-2 will keep retrying until saving recovers."
+        />
+      {:else if persistRecoveredVisible}
+        <DocumentSaveBanner
+          variant="persist-recovered"
+          title="Saving restored"
+          message="KB-2 is saving changes to disk again."
+        />
+      {/if}
+    </section>
+  {/if}
 
   <section class="document-shell" aria-label="Demo Markdown document">
     {#if provider}
@@ -91,7 +157,7 @@
   .editor-page {
     min-height: 100vh;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     background: var(--rd-bg);
     color: var(--rd-ink-2);
     font-family: var(--rd-ui);
@@ -142,6 +208,18 @@
     overflow: hidden;
   }
 
+  .banner-strip {
+    display: grid;
+    gap: 8px;
+    padding: 12px 22px 0;
+    background: var(--rd-bg);
+  }
+
+  .banner-strip :global(.document-save-banner) {
+    width: min(100%, 760px);
+    justify-self: center;
+  }
+
   .document-shell :global(.kb2-editor-shell),
   .loading {
     grid-column: 2;
@@ -189,6 +267,10 @@
     .document-shell {
       grid-template-columns: 12px minmax(0, 1fr) 12px;
       padding-top: 12px;
+    }
+
+    .banner-strip {
+      padding: 10px 12px 0;
     }
   }
 </style>

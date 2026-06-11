@@ -1,6 +1,7 @@
 export {
   DEFAULT_DEMO_DOCUMENT_CONTENT,
   OneFileDocumentSession,
+  type DocumentSessionEventHandler,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions
 } from './session.js';
@@ -9,3 +10,11 @@ export {
   bindYjsWebSocket,
   type YjsWebSocketLike
 } from './websocket.js';
+export {
+  MESSAGE_SESSION_EVENT,
+  MESSAGE_SYNC,
+  decodeSessionEvent,
+  encodeSessionEvent,
+  type DocumentSessionEvent,
+  type DocumentSessionEventKind
+} from './protocol.js';

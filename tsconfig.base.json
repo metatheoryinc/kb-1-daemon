@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "paths": {
       "@kb-2/doc-session": ["./packages/doc-session/src/index.ts"],
+      "@kb-2/doc-session/protocol": ["./packages/doc-session/src/protocol.ts"],
       "@kb-2/editor": ["./packages/editor/src/lib/index.ts"],
       "@kb-2/ui": ["./packages/ui/src/lib/index.ts"]
     },

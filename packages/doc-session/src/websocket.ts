@@ -3,10 +3,10 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 
 import type { OneFileDocumentSession } from './session.js';
+import { MESSAGE_SYNC, encodeSessionEvent } from './protocol.js';
 
 export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
-const messageSync = 0;
 const socketOpen = 1;
 
 export interface YjsWebSocketLike {
@@ -34,6 +34,7 @@ export async function bindYjsWebSocket(
     resolveClosed = resolve;
     rejectClosed = reject;
   });
+  let unsubscribeSessionEvents: () => void = () => {};
 
   const updateHandler = (update: Uint8Array, origin: unknown) => {
     if (origin === socket) {
@@ -51,6 +52,7 @@ export async function bindYjsWebSocket(
     }
 
     cleanupStarted = true;
+    unsubscribeSessionEvents();
     session.ydoc.off('update', updateHandler);
     session.flush().then(resolveClosed, rejectClosed);
   };
@@ -66,11 +68,11 @@ export async function bindYjsWebSocket(
       const encoder = encoding.createEncoder();
       const messageType = decoding.readVarUint(decoder);
 
-      if (messageType !== messageSync) {
+      if (messageType !== MESSAGE_SYNC) {
         return;
       }
 
-      encoding.writeVarUint(encoder, messageSync);
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.readSyncMessage(decoder, encoder, session.ydoc, socket);
 
       if (encoding.length(encoder) > 1) {
@@ -81,30 +83,43 @@ export async function bindYjsWebSocket(
     }
   });
 
-  socket.on('close', cleanup);
-  socket.on('error', cleanup);
   session.ydoc.on('update', updateHandler);
+  unsubscribeSessionEvents = session.onEvent((event) => {
+    sendBytes(socket, encodeSessionEvent(event));
+  });
+
+  const activePersistFailure = session.getActivePersistFailureEvent();
+  if (activePersistFailure) {
+    sendBytes(socket, encodeSessionEvent(activePersistFailure));
+  }
 
   sendSync(socket, (encoder) => {
     syncProtocol.writeSyncStep1(encoder, session.ydoc);
   });
+
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 
   return { closed };
 }
 
 function sendSync(socket: YjsWebSocketLike, write: (encoder: encoding.Encoder) => void): void {
   const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, messageSync);
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
   sendEncoded(socket, encoder);
 }
 
 function sendEncoded(socket: YjsWebSocketLike, encoder: encoding.Encoder): void {
+  sendBytes(socket, encoding.toUint8Array(encoder));
+}
+
+function sendBytes(socket: YjsWebSocketLike, bytes: Uint8Array): void {
   if (socket.readyState !== socketOpen) {
     return;
   }
 
-  socket.send(encoding.toUint8Array(encoder));
+  socket.send(bytes);
 }
 
 function toUint8Array(data: unknown): Uint8Array | undefined {
