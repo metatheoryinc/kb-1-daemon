@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@kb-2/doc-session': fileURLToPath(new URL('../../packages/doc-session/src/index.ts', import.meta.url)),
+      '@kb-2/local-mcp': fileURLToPath(new URL('../../packages/local-mcp/src/index.ts', import.meta.url)),
       '@kb-2/vault-core': fileURLToPath(new URL('../../packages/vault-core/src/index.ts', import.meta.url))
     }
   },
@@ -14,9 +15,10 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text'],
-      include: ['src/app.ts'],
+      include: ['src/app.ts', 'src/vault-service.ts'],
       thresholds: {
-        lines: 90
+        lines: 90,
+        perFile: true
       }
     }
   }

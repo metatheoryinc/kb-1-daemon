@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
 import { DEMO_DOCUMENT_YJS_PATH, DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
+import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -8,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import { createApp } from './app.js';
 import { createDaemonConfig, type DaemonConfig } from './config.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
+import { createVaultService } from './vault-service.js';
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -20,12 +22,19 @@ export async function startDaemon(): Promise<StartedDaemon> {
   const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
   const demoDocumentSession = documentSessions.getSession('hello-world.md');
   await demoDocumentSession.open();
+  const vaultService = createVaultService({
+    vaultRoot: config.vaultRoot,
+    documentSessions
+  });
+  const mcpEndpoint = createLocalMcpEndpoint(vaultService);
 
   const app = createApp({
     statusFile: config.statusFile,
     vaultRoot: config.vaultRoot,
+    vaultService,
     documentSessions,
     demoDocumentSession,
+    mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget
   });
@@ -63,6 +72,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
             config,
             status,
             close: async () => {
+              await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
               await documentSessions.close();
