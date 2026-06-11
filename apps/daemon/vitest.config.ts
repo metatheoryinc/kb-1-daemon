@@ -15,9 +15,10 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text'],
-      include: ['src/app.ts'],
+      include: ['src/app.ts', 'src/vault-service.ts'],
       thresholds: {
-        lines: 90
+        lines: 90,
+        perFile: true
       }
     }
   }

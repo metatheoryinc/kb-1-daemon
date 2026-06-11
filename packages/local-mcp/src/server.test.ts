@@ -5,6 +5,30 @@ import { createLocalMcpEndpoint } from './server.js';
 import type { LocalMcpVaultService, ServiceResult, VaultActor } from './types.js';
 
 describe('local MCP server', () => {
+  it('rejects requests that do not carry or initialize a valid MCP session', async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService());
+
+    const getResponse = await endpoint.handleRequest(new Request('http://127.0.0.1/mcp'));
+    expect(getResponse.status).toBe(400);
+    await expect(getResponse.json()).resolves.toMatchObject({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Bad Request: No valid MCP session id provided'
+      },
+      id: null
+    });
+
+    const postResponse = await endpoint.handleRequest(new Request('http://127.0.0.1/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
+    }));
+    expect(postResponse.status).toBe(400);
+
+    await endpoint.close();
+  });
+
   it('registers every tier-1 tool and forwards calls to the injected service with initialize attribution', async () => {
     const mutationActors: VaultActor[] = [];
     const service: LocalMcpVaultService = {
@@ -106,5 +130,24 @@ function audit(actor: VaultActor, operation: string) {
     entityKind: 'file' as const,
     path: 'note.md',
     summary: operation
+  };
+}
+
+function emptyService(): LocalMcpVaultService {
+  const ok = async (): Promise<ServiceResult> => ({ ok: true });
+  return {
+    vaultInfo: ok,
+    listFiles: ok,
+    readNote: ok,
+    createNote: ok,
+    editNote: ok,
+    appendNote: ok,
+    prependNote: ok,
+    deleteNote: ok,
+    moveNote: ok,
+    createFolder: ok,
+    deleteFolder: ok,
+    moveFolder: ok,
+    search: ok
   };
 }

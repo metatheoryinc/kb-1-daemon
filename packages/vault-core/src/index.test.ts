@@ -22,6 +22,7 @@ import {
   writeVaultFile,
   type VaultContext
 } from './index.js';
+import { anchoredSpliceContractCases } from './splice-contract-cases.test-support.js';
 
 describe('vault path validation', () => {
   const validSegment = fc.stringMatching(/^[A-Za-z0-9_-]{1,24}$/).filter((segment) =>
@@ -299,6 +300,10 @@ describe('vault-core filesystem operations', () => {
 });
 
 describe('anchored splice and positioned content helpers', () => {
+  it.each(anchoredSpliceContractCases)('satisfies shared splice contract: $name', ({ initialContent, request, expected }) => {
+    expect(applyAnchoredSplice(initialContent, request)).toEqual(expected);
+  });
+
   it('applies exact replacements with anchors, occurrence, LF normalization, and surrogate pairs', () => {
     expect(applyAnchoredSplice('one two three', {
       oldText: 'two',

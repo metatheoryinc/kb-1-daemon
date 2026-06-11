@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as Y from 'yjs';
 
+import { anchoredSpliceContractCases } from '../../../packages/vault-core/src/splice-contract-cases.test-support.js';
 import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
@@ -564,6 +565,46 @@ describe('daemon routing', () => {
     await sessions.close();
   });
 
+  it.each(anchoredSpliceContractCases)('runs the shared splice contract over MCP: $name', async ({ initialContent, request, expected }) => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const notePath = 'notes/contract.md';
+    await writeFileWithParents(join(config.vaultRoot, notePath), initialContent);
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { client, transport } = await connectMcpClient(app, 'mcp-splice-contract-test');
+
+    const read = await mcpToolJson(client, 'read_note', { path: notePath }) as { baseline: string };
+    const result = await client.callTool({
+      name: 'edit_note',
+      arguments: {
+        path: notePath,
+        baseline: read.baseline,
+        old_text: request.oldText,
+        new_text: request.newText,
+        ...(request.before !== undefined ? { before: request.before } : {}),
+        ...(request.after !== undefined ? { after: request.after } : {}),
+        ...(request.occurrence !== undefined ? { occurrence: request.occurrence } : {})
+      }
+    });
+
+    if (expected.ok) {
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(mcpText(result))).toMatchObject({
+        ok: true,
+        path: notePath,
+        content: expected.content
+      });
+      await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(expected.content);
+    } else {
+      expect(result.isError).toBe(true);
+      expect(parseMcpRejection(result, 'edit_note')).toMatchObject(expected);
+      await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(initialContent);
+    }
+
+    await transport.terminateSession();
+    await sessions.close();
+  });
+
   it('surfaces MCP persist failures without a success audit row and recovers the live session', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
@@ -894,6 +935,15 @@ function mcpText(result: Awaited<ReturnType<Client['callTool']>>): string {
     throw new Error('Expected text MCP content');
   }
   return first.text;
+}
+
+function parseMcpRejection(result: Awaited<ReturnType<Client['callTool']>>, toolName: string): Record<string, unknown> {
+  const prefix = `${toolName} rejected: `;
+  const text = mcpText(result);
+  if (!text.startsWith(prefix)) {
+    throw new Error(`Expected ${toolName} rejection, got ${text}`);
+  }
+  return JSON.parse(text.slice(prefix.length)) as Record<string, unknown>;
 }
 
 function close(server: ReturnType<typeof createServer>): Promise<void> {
