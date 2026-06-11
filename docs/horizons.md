@@ -6,13 +6,10 @@
   merged 2026-06-11 same day: super-workspace + submodule topology proven —
   one graph typechecks both repos; mixins byte-identical; audited with one
   fix round). Plan: `kb-1-cloud/docs/plans/cloud-002-relay-spike.md`.
-- **Cloud invariants convention** (commander, during cloud-002): kb-1-cloud
-  gets its own `docs/architecture/invariants/` in the daemon's style —
-  shared engineering invariants apply verbatim (frontend/Storybook
-  especially), plus Cloudflare-specific ones: DOs compose the battle-tested
-  mixins (storage/hibernation/alarms never hand-rolled), DO concurrency
-  stays simple and unpoked, state survives eviction via the storage mixin.
-  Commander-authored; AGENTS.md points at them.
+- **Cloud invariants convention: DONE** (2026-06-11) — kb-1-cloud has
+  `docs/architecture/invariants/` with cloud-never-stores-vault-content and
+  durable-objects-compose-mixins; daemon engineering invariants inherited
+  verbatim; AGENTS.md points at them.
 - **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
   browsable vault; wikilinks get somewhere to go. Carries two deferred
   decisions: external file-deletion semantics, persist-failure state in
