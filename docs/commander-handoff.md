@@ -107,6 +107,14 @@ with the previous commander so they do not have to repeat any of it.
   isolation: worktree, run_in_background) — its worktrees under
   `.claude/worktrees/` need manual sweeping afterward (`git worktree remove
   --force` + branch -D), and `.claude/` is gitignored.
+- **Audit briefs must require ground-truthing of claims, not pattern-
+  matching**: every claimed dependency verified by IMPORT-GREP (a dep in
+  package.json proves nothing — chunk 008 shipped an unused gray-matter
+  while plan, PR, and audit all claimed it was used); test NAMES audited
+  against what the test actually exercises; "library X is used for Y"
+  claims traced to the import site. Additionally, run a FULL-CODEBASE
+  invariant sweep periodically (not only per-diff audits) — drift accretes
+  between diffs; the first full sweep found what three diff audits missed.
 
 ## State at handoff (2026-06-11)
 
