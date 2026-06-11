@@ -22,6 +22,8 @@ Engineering invariants — how the codebase stays healthy:
 - [Tests never touch real user data](./engineering/tests-never-touch-real-user-data.md)
 - [UI packages own no transport](./engineering/ui-packages-own-no-transport.md)
 - [Battle-tested over hand-rolled](./engineering/battle-tested-over-hand-rolled.md)
+- [Tests are gated and real](./engineering/tests-are-gated-and-real.md)
+- [One failure dialect](./engineering/one-failure-dialect.md)
 
 ## How To Read These
 
