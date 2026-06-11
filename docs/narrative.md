@@ -9,9 +9,11 @@ KB-2 is the local-first, open-source rebuild of the KB-1 product (the repo is
 named kb-2; the product's real name is KB-1 — rename deferred). The user's
 filesystem is the durable truth; a daemon is the only runtime writer; the
 cloud arrives later as relay/identity/collaboration, never as the content
-store. Five chunks in, the core thesis is proven and demoable: one command
+store. Six chunks in, the core thesis is proven and demoable: one command
 starts a daemon that serves KB-1's production CM6 editor over a Yjs session,
-and every keystroke materializes into a plain Markdown file the user owns.
+every keystroke materializes into a plain Markdown file the user owns, and
+the unhappy path is loud — external file edits reconcile-and-warn in every
+client (disk wins), and persistence failures alarm until saving recovers.
 
 ## How we work
 
@@ -66,7 +68,21 @@ inventing.
 
 ## Live tensions
 
-- When to rename kb-2 → KB-1 across packages (deliberately deferred).
+- Repo naming sequence (agreed 2026-06-11, partially pending): public repo →
+  `kb-1-daemon` soon; private cloud repo born as `kb-1-cloud`; production
+  `kb-1` renamed later with team coordination; only after a cooling period
+  can `kb-1-daemon` take the bare `kb-1` name — GitHub redirects die when a
+  freed name is reused, which would silently misdirect the team's stale
+  clones/CI. Package-scope rename (@kb-2/*) still deferred; note production
+  kb-1 already uses @kb-1/* internally.
+- Cloud/local repo topology (converged 2026-06-11): public repo stays
+  canonical and normal; private `kb-1-cloud` includes it as a `local/`
+  submodule inside one pnpm/Nx super-workspace (worktree-safe, one typecheck
+  graph). Sharp edges + mitigations to live in the cloud repo's AGENTS.md:
+  submodule init in worktrees, branch-before-edit inside local/, catalog
+  mirroring with CI drift check, pointer-bump ritual. The relay de-risk
+  spike (CF Worker/DO tunnel, Yjs-over-relay) doubles as this topology's
+  pressure test.
 - 6 dependabot vulnerabilities (5 moderate, 1 low) from frontend dep trees —
   needs a hygiene pass soon.
 - The Yjs provider has no reconnect; WebSocket drops currently rely on a

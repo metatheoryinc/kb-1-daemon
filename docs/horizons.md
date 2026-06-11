@@ -2,13 +2,17 @@
 
 ## Near horizon
 
-- **Chunk 006 — direct-write detection + loud saving** (next; plan:
-  `docs/plans/chunk-006-direct-write-detection.md`). External edits to the
-  managed file reload the session and warn every client; persistence
-  failures surface loudly in the UI. Establishes the
-  edits-save-or-fail-loudly invariant in product behavior.
+- **Relay de-risk spike** (likely next): bootstrap private `kb-1-cloud`
+  (submodule topology per narrative) and prove the CF Worker/DO tunnel —
+  HTTP through outbound WS, and the Yjs WebSocket relayed end-to-end with
+  two browsers on the cloud URL. Deliverable: latency numbers + the list of
+  CF limits hit. Needs the user's Cloudflare/wrangler auth.
+- **Repo rename step 1**: kb-2 → kb-1-daemon (awaiting user go; zero-risk
+  via redirects).
 - **Chunk 007 — vault root + file tree/read APIs.** One file becomes a
-  browsable vault; wikilinks get somewhere to go.
+  browsable vault; wikilinks get somewhere to go. Carries two deferred
+  decisions: external file-deletion semantics, persist-failure state in
+  late-joining clients beyond the bind replay.
 - **Chunk 008 — local MCP tools** over the same vault service boundary.
 
 ## Mid horizon
