@@ -26,10 +26,14 @@
   daemon hosts streamable-HTTP MCP at /mcp, 13 tier-1 tools over the same
   shared vault service the REST routes use (single canonical path,
   audit-verified live), mcp_client attribution, full error fidelity.
-  Agents are now first-class vault clients. Next candidates (user's call):
-  tier-2 ops (frontmatter keys, tags, outline), file-tree UI, link index +
-  move-updates-links, cloud-003 relay prototype (plan ready), dependabot
-  hygiene (daemon 6, cloud 14 incl. 3 high).
+  Agents are now first-class vault clients.
+- **Chunk 010 — consistency + hygiene IS RUNNING** (from the first full
+  code-health analysis: fallow 88/A; approved 2026-06-11 with two NEW
+  invariants: one-failure-dialect, tests-are-gated-and-real). Deferred
+  from it: editor-page composition story.
+- After 010 (user's call): tier-2 ops (frontmatter keys, tags, outline),
+  file-tree UI, link index + move-updates-links, cloud-003 relay prototype
+  (plan ready), dependabot hygiene (daemon 6, cloud 14 incl. 3 high).
 
 ## Mid horizon
 
