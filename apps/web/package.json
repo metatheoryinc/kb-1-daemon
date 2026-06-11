@@ -10,17 +10,25 @@
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource/source-serif-4": "5.2.9",
+    "@kb-2/editor": "workspace:*",
     "@kb-2/ui": "workspace:*",
-    "svelte": "catalog:"
+    "lib0": "0.2.117",
+    "svelte": "catalog:",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "catalog:",
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@tailwindcss/vite": "catalog:",
+    "@types/ws": "8.18.1",
     "svelte-check": "catalog:",
     "tailwindcss": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "ws": "8.21.0"
   }
 }
