@@ -50,7 +50,7 @@
       const nextPath = event.toPath ?? event.path;
       documentPath = nextPath;
       docDeleted = false;
-      void goto(`/${encodeVaultPath(nextPath)}`, { replaceState: true, noScroll: true });
+      void goto(`/${encodeVaultPath(nextPath)}`, { replaceState: true, noScroll: true, keepFocus: true });
       return;
     }
 

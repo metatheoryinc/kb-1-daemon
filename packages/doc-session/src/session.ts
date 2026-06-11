@@ -134,6 +134,23 @@ export class OneFileDocumentSession {
     return this.currentContent();
   }
 
+  async applyContent(content: string): Promise<string> {
+    await this.open();
+    if (this.deleted) {
+      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
+    }
+
+    const current = this.currentContent();
+    if (current !== content) {
+      this.doc.transact(() => {
+        this.text.applyDelta(createFastDiffYTextDelta(current, content));
+      }, this);
+    }
+
+    await this.flush();
+    return this.currentContent();
+  }
+
   async flush(): Promise<void> {
     if (this.persistPromise) {
       await this.persistPromise;

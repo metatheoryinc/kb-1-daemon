@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as Y from 'yjs';
 
 import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
@@ -279,6 +280,50 @@ describe('daemon routing', () => {
     await sessions.close();
   });
 
+  it('moves zero-live folder subtrees through the production session manager once', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    await mkdir(join(config.vaultRoot, 'emptydir'), { recursive: true });
+
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const moved = await app.request('/api/folders/emptydir/move', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: 'moved/emptydir' })
+    });
+
+    expect(moved.status).toBe(200);
+    await expect(moved.json()).resolves.toMatchObject({
+      ok: true,
+      fromPath: 'emptydir',
+      toPath: 'moved/emptydir',
+      liveMoved: []
+    });
+    expect((await stat(join(config.vaultRoot, 'moved/emptydir'))).isDirectory()).toBe(true);
+    await expect(stat(join(config.vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ operation: 'move', entityKind: 'folder', fromPath: 'emptydir', toPath: 'moved/emptydir' });
+    await sessions.close();
+  });
+
+  it('deletes zero-live folder subtrees through the production session manager once', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    await mkdir(join(config.vaultRoot, 'emptydir'), { recursive: true });
+
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const deleted = await app.request('/api/folders/emptydir', { method: 'DELETE' });
+
+    expect(deleted.status).toBe(200);
+    await expect(deleted.json()).resolves.toMatchObject({ ok: true, path: 'emptydir', liveDeleted: [] });
+    await expect(stat(join(config.vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ operation: 'delete', entityKind: 'folder', path: 'emptydir' });
+    await sessions.close();
+  });
+
   it('routes live whole-file writes through the open session', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: 'old\n' });
@@ -307,6 +352,47 @@ describe('daemon routing', () => {
     const audit = await readAuditRows(config.vaultRoot);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ operation: 'write', entityKind: 'file', path: 'live-write.md', actor: { kind: 'user' } });
+    await sessions.close();
+  });
+
+  it('routes live whole-file writes through a fast-diff session merge', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: 'alpha\nomega\n' });
+    const session = sessions.getSession('live-merge.md');
+    await session.open();
+
+    const clientDoc = new Y.Doc();
+    Y.applyUpdate(clientDoc, Y.encodeStateAsUpdate(session.ydoc), session);
+    const clientText = clientDoc.getText('markdown');
+    clientText.insert('alpha\n'.length, 'typed concurrently\n');
+    const inFlightUpdate = Y.encodeStateAsUpdate(clientDoc, Y.encodeStateVector(session.ydoc));
+
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const response = await app.request('/api/files/live-merge.md?overwrite=true', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'alpha\nservice write\nomega\n' })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'live-merge.md',
+      live: true,
+      content: 'alpha\nservice write\nomega\n'
+    });
+
+    Y.applyUpdate(session.ydoc, inFlightUpdate, clientDoc);
+    await session.flush();
+
+    const mergedContent = await readFile(join(config.vaultRoot, 'live-merge.md'), 'utf8');
+    expect([
+      'alpha\ntyped concurrently\nservice write\nomega\n',
+      'alpha\nservice write\ntyped concurrently\nomega\n'
+    ]).toContain(mergedContent);
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ operation: 'write', entityKind: 'file', path: 'live-merge.md' });
     await sessions.close();
   });
 

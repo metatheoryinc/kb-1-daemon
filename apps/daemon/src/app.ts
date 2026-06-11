@@ -100,7 +100,7 @@ export function createApp(options: CreateAppOptions): Hono {
             message: 'file already exists'
           });
         }
-        await liveSession.reset(content);
+        await liveSession.applyContent(content);
         const audit = await appendAudit({
           root: options.vaultRoot!,
           actor: { kind: 'user' },
@@ -189,12 +189,12 @@ export function createApp(options: CreateAppOptions): Hono {
         { root: options.vaultRoot!, actor: { kind: 'user' } },
         { path: folderPath, recursive, permanent }
       ));
-      const deletedLive = await withMappedVaultError(
-        context,
-        () => options.documentSessions?.deleteSessionSubtree(folderPath, deleteOnDisk)
-      );
-      if (deletedLive instanceof Response) return deletedLive;
-      if (deletedLive && deletedLive.length > 0) {
+      if (options.documentSessions) {
+        const deletedLive = await withMappedVaultError(
+          context,
+          () => options.documentSessions!.deleteSessionSubtree(folderPath, deleteOnDisk)
+        );
+        if (deletedLive instanceof Response) return deletedLive;
         return context.json({ ok: true, path: folderPath, liveDeleted: deletedLive });
       }
       return mapVaultResult(context, await deleteVaultFolder(
@@ -216,12 +216,12 @@ export function createApp(options: CreateAppOptions): Hono {
         { root: options.vaultRoot!, actor: { kind: 'user' } },
         { kind: 'folder', fromPath, toPath: to }
       ));
-      const movedLive = await withMappedVaultError(
-        context,
-        () => options.documentSessions?.moveSessionSubtree(fromPath, to, moveOnDisk)
-      );
-      if (movedLive instanceof Response) return movedLive;
-      if (movedLive && movedLive.length > 0) {
+      if (options.documentSessions) {
+        const movedLive = await withMappedVaultError(
+          context,
+          () => options.documentSessions!.moveSessionSubtree(fromPath, to, moveOnDisk)
+        );
+        if (movedLive instanceof Response) return movedLive;
         return context.json({ ok: true, fromPath, toPath: to, liveMoved: movedLive });
       }
       return mapVaultResult(context, await moveVaultPath(
