@@ -235,7 +235,7 @@ export class OneFileDocumentSession {
       await this.persistPromise;
     }
     if (this.persistFailureError) {
-      throw this.persistFailureError;
+      await this.requestPersist();
     }
   }
 

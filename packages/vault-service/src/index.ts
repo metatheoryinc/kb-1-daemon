@@ -12,6 +12,7 @@ import {
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  onVaultAudit,
   prependContent,
   readVaultFile,
   searchVaultFiles,
@@ -19,6 +20,7 @@ import {
   validateVaultPath,
   writeVaultFile,
   type AnchoredSpliceRequest,
+  type AuditChangeEventOptions,
   type AuditEntry,
   type FolderMetadataInput,
   type VaultActor,
@@ -125,6 +127,19 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       }
     }
   };
+  let unsubscribeAudit: (() => void) | undefined;
+  const ensureAuditSubscription = () => {
+    if (unsubscribeAudit) return;
+    unsubscribeAudit = onVaultAudit((audit, input) => {
+      if (input.root !== options.vaultRoot) return;
+      emitAuditChange(emitChange, audit, input.changeEvent);
+    });
+  };
+  const releaseAuditSubscription = () => {
+    if (eventHandlers.size > 0) return;
+    unsubscribeAudit?.();
+    unsubscribeAudit = undefined;
+  };
   options.documentSessions.onEvent((event) => {
     const change = changeEventFromDocumentSessionEvent(event);
     if (change) emitChange(change);
@@ -133,8 +148,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   return {
     onEvent(handler) {
       eventHandlers.add(handler);
+      ensureAuditSubscription();
       return () => {
         eventHandlers.delete(handler);
+        releaseAuditSubscription();
       };
     },
 
@@ -166,7 +183,6 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     async setFolderMetadata(input) {
       const result = serviceResult(await setVaultFolderMetadata(ctx(input.actor), input.path, input.metadata));
-      if (result.ok && result.audit) emitAuditChange(emitChange, result.audit);
       return result;
     },
 
@@ -201,9 +217,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
           operation: 'write',
           entityKind: 'file',
           path: input.path,
-          summary: `Wrote ${input.path}`
+          summary: `Wrote ${input.path}`,
+          changeEvent: { skipContentPersisted: true }
         });
-        emitAuditChange(emitChange, audit, { skipContentPersisted: true });
         return {
           ok: true,
           path: input.path,
@@ -218,7 +234,6 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         content: input.content,
         overwrite: input.overwrite
       }));
-      if (result.ok) emitAuditChange(emitChange, result.audit);
       return result;
     },
 
@@ -244,9 +259,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         operation: 'splice',
         entityKind: 'file',
         path: input.path,
-        summary: `Spliced ${input.path}`
+        summary: `Spliced ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
-      emitAuditChange(emitChange, audit, { skipContentPersisted: true });
       return {
         ok: true,
         path: input.path,
@@ -271,9 +286,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         operation: 'append',
         entityKind: 'file',
         path: input.path,
-        summary: `Appended to ${input.path}`
+        summary: `Appended to ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
-      emitAuditChange(emitChange, audit, { skipContentPersisted: true });
       return {
         ok: true,
         path: input.path,
@@ -296,9 +311,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         operation: 'prepend',
         entityKind: 'file',
         path: input.path,
-        summary: `Prepended to ${input.path}`
+        summary: `Prepended to ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
-      emitAuditChange(emitChange, audit, { skipContentPersisted: true });
       return {
         ok: true,
         path: input.path,
@@ -319,14 +334,12 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSession(input.path, deleteOnDisk));
       if (!deletedLive.ok) return deletedLive;
       if (deletedLive.value) {
-        emitAuditChange(emitChange, deleted!.audit);
         return { ok: true, ...deleted!, live: true };
       }
       const result = serviceResult(await deleteVaultFile(ctx(input.actor), {
         path: input.path,
         permanent: input.permanent
       }));
-      if (result.ok) emitAuditChange(emitChange, result.audit);
       return result;
     },
 
@@ -342,7 +355,6 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
       if (movedLive.value) {
-        emitAuditChange(emitChange, moved!.audit);
         return { ok: true, ...moved!, live: true };
       }
       const result = serviceResult(await moveVaultPath(ctx(input.actor), {
@@ -350,13 +362,11 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         fromPath: input.fromPath,
         toPath: input.toPath
       }));
-      if (result.ok) emitAuditChange(emitChange, result.audit);
       return result;
     },
 
     async createFolder(input) {
       const result = serviceResult(await makeVaultFolder(ctx(input.actor), input.path));
-      if (result.ok && result.audit) emitAuditChange(emitChange, result.audit);
       return result;
     },
 
@@ -371,7 +381,6 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSessionSubtree(input.path, deleteOnDisk));
       if (!deletedLive.ok) return deletedLive;
-      emitAuditChange(emitChange, deleted!.audit);
       return { ok: true, ...deleted!, liveDeleted: deletedLive.value };
     },
 
@@ -386,7 +395,6 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
-      emitAuditChange(emitChange, moved!.audit);
       return { ok: true, ...moved!, liveMoved: movedLive.value };
     },
 
@@ -454,7 +462,7 @@ function changeEventFromDocumentSessionEvent(event: DocumentSessionEvent): Vault
 function emitAuditChange(
   emit: VaultChangeEventHandler,
   audit: AuditEntry,
-  options: { skipContentPersisted?: boolean } = {}
+  options: AuditChangeEventOptions = {}
 ): void {
   const kind = auditChangeEventKind(audit, options);
   if (!kind) return;
@@ -471,7 +479,7 @@ function emitAuditChange(
 
 function auditChangeEventKind(
   audit: AuditEntry,
-  options: { skipContentPersisted?: boolean }
+  options: AuditChangeEventOptions
 ): VaultChangeEventKind | undefined {
   switch (audit.operation) {
     case 'create':

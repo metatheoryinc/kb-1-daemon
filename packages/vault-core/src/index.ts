@@ -1,4 +1,12 @@
-export { emitVaultAudit, type AuditEntry, type VaultActor } from './audit.js';
+export {
+  emitVaultAudit,
+  onVaultAudit,
+  type AuditChangeEventOptions,
+  type AuditEntry,
+  type AuditInput,
+  type VaultActor,
+  type VaultAuditHandler
+} from './audit.js';
 export {
   folderMetadataColorNames,
   folderMetadataIconNames,

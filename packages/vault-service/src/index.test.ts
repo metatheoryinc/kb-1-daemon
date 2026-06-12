@@ -513,6 +513,46 @@ describe('vault service failure mapping', () => {
     });
   });
 
+  it('re-drives a failed flush after disk permissions recover', async () => {
+    await writeFileWithParents(join(root, 'notes', 'retry.md'), 'base\n');
+    const service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const events: VaultChangeEvent[] = [];
+    service.onEvent((event) => events.push(event));
+
+    await service.readNote({ path: 'notes/retry.md' });
+    const session = sessions.getOpenSession('notes/retry.md');
+    if (!session) throw new Error('expected live session');
+    const notesDir = join(root, 'notes');
+
+    try {
+      await chmod(notesDir, 0o500);
+      session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'stuck edit\n');
+
+      await expect(service.flushDirtySessions()).resolves.toEqual({
+        ok: false,
+        error: 'persist_failed',
+        message: 'Document edit could not be durably saved to disk.'
+      });
+      await expect(readFile(join(root, 'notes', 'retry.md'), 'utf8')).resolves.toBe('base\n');
+
+      await chmod(notesDir, 0o700);
+      await expect(service.flushDirtySessions()).resolves.toMatchObject({
+        ok: true,
+        flushed: 1,
+        durableAsOf: expect.any(String)
+      });
+
+      await expect(readFile(join(root, 'notes', 'retry.md'), 'utf8')).resolves.toBe('base\nstuck edit\n');
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'persist_recovered',
+        path: 'notes/retry.md',
+        actor: { kind: 'system' }
+      }));
+    } finally {
+      await chmod(notesDir, 0o700).catch(() => undefined);
+    }
+  });
+
   it('maps live move and folder subtree failures from vault operations', async () => {
     await writeFileWithParents(join(root, 'notes', 'live.md'), 'live\n');
     await writeFileWithParents(join(root, 'notes', 'target.md'), 'target\n');
