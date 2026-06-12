@@ -1,4 +1,8 @@
 import {
+  PendingFrameBuffer,
+  TUNNEL_CLOSE_CODES,
+  TUNNEL_PENDING_STREAM_BYTE_LIMIT,
+  TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
   decodeTunnelMessage,
   encodeTunnelMessage
@@ -16,6 +20,55 @@ it("round-trips an HTTP response envelope", () => {
   expect(decodeTunnelMessage(encodeTunnelMessage(message))).toEqual(message);
 });
 
-it("carries the spike protocol version", () => {
-  expect(TUNNEL_PROTOCOL_VERSION).toBe(1);
+it("carries the relay prototype protocol version", () => {
+  expect(TUNNEL_PROTOCOL_VERSION).toBe(2);
+});
+
+it("exports named pending stream caps and close codes", () => {
+  expect(TUNNEL_PENDING_STREAM_FRAME_LIMIT).toBeGreaterThan(0);
+  expect(TUNNEL_PENDING_STREAM_BYTE_LIMIT).toBeGreaterThan(0);
+  expect(TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT).not.toBe(
+    TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW
+  );
+});
+
+it("buffers and drains pending stream frames in order", () => {
+  const buffer = new PendingFrameBuffer({ maxFrames: 3, maxBytes: 8 });
+
+  expect(buffer.push(new Uint8Array([1, 2]))).toMatchObject({
+    ok: true,
+    queuedFrames: 1,
+    queuedBytes: 2
+  });
+  expect(buffer.push(new Uint8Array([3]))).toMatchObject({
+    ok: true,
+    queuedFrames: 2,
+    queuedBytes: 3
+  });
+
+  expect(buffer.drain()).toEqual([
+    new Uint8Array([1, 2]),
+    new Uint8Array([3])
+  ]);
+  expect(buffer.frameCount).toBe(0);
+  expect(buffer.byteCount).toBe(0);
+});
+
+it("rejects pending stream frames above frame and byte caps", () => {
+  const frameLimited = new PendingFrameBuffer({ maxFrames: 1, maxBytes: 10 });
+  expect(frameLimited.push(new Uint8Array([1]))).toMatchObject({ ok: true });
+  expect(frameLimited.push(new Uint8Array([2]))).toEqual({
+    ok: false,
+    reason: "frames",
+    queuedFrames: 1,
+    queuedBytes: 1
+  });
+
+  const byteLimited = new PendingFrameBuffer({ maxFrames: 3, maxBytes: 2 });
+  expect(byteLimited.push(new Uint8Array([1, 2, 3]))).toEqual({
+    ok: false,
+    reason: "bytes",
+    queuedFrames: 0,
+    queuedBytes: 0
+  });
 });

@@ -1,8 +1,108 @@
-export const TUNNEL_PROTOCOL_VERSION = 1 as const;
+export const TUNNEL_PROTOCOL_VERSION = 2 as const;
 
 export type TunnelProtocolVersion = typeof TUNNEL_PROTOCOL_VERSION;
 
 export type TunnelRole = "control" | "dialback";
+
+export const TUNNEL_PENDING_STREAM_FRAME_LIMIT = 64 as const;
+export const TUNNEL_PENDING_STREAM_BYTE_LIMIT = 1024 * 1024;
+export const TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS = 10_000 as const;
+export const TUNNEL_HTTP_PENDING_REQUEST_LIMIT = 128 as const;
+export const TUNNEL_HTTP_PENDING_BYTE_LIMIT = 8 * 1024 * 1024;
+export const TUNNEL_HTTP_REQUEST_TIMEOUT_MS = 15_000 as const;
+export const TUNNEL_HTTP_BODY_CHUNK_BYTES = 256 * 1024;
+export const TUNNEL_WS_FRAME_BYTE_LIMIT = 256 * 1024;
+
+export const TUNNEL_CLOSE_CODES = {
+  CONTROL_REPLACED: 4000,
+  STREAM_RETRY_SAFE: 4001,
+  PENDING_STREAM_OVERFLOW: 4002,
+  PENDING_STREAM_TIMEOUT: 4003,
+  OVERSIZED_WS_FRAME: 4004,
+  BAD_PROTOCOL: 4005,
+  UNAUTHORIZED: 4006,
+  UNKNOWN_STREAM: 4007
+} as const;
+
+export type TunnelCloseCode =
+  (typeof TUNNEL_CLOSE_CODES)[keyof typeof TUNNEL_CLOSE_CODES];
+
+export type PendingFrameBufferOverflowReason = "frames" | "bytes";
+
+export type PendingFrameBufferPushResult =
+  | { ok: true; queuedFrames: number; queuedBytes: number }
+  | {
+      ok: false;
+      reason: PendingFrameBufferOverflowReason;
+      queuedFrames: number;
+      queuedBytes: number;
+    };
+
+export type PendingFrameBufferOptions = {
+  maxFrames?: number;
+  maxBytes?: number;
+};
+
+export class PendingFrameBuffer {
+  readonly maxFrames: number;
+  readonly maxBytes: number;
+  private readonly frames: Uint8Array[] = [];
+  private queuedBytes = 0;
+
+  constructor(options: PendingFrameBufferOptions = {}) {
+    this.maxFrames = options.maxFrames ?? TUNNEL_PENDING_STREAM_FRAME_LIMIT;
+    this.maxBytes = options.maxBytes ?? TUNNEL_PENDING_STREAM_BYTE_LIMIT;
+  }
+
+  get frameCount(): number {
+    return this.frames.length;
+  }
+
+  get byteCount(): number {
+    return this.queuedBytes;
+  }
+
+  push(frame: Uint8Array): PendingFrameBufferPushResult {
+    if (this.frames.length + 1 > this.maxFrames) {
+      return {
+        ok: false,
+        reason: "frames",
+        queuedFrames: this.frameCount,
+        queuedBytes: this.byteCount
+      };
+    }
+
+    if (this.queuedBytes + frame.byteLength > this.maxBytes) {
+      return {
+        ok: false,
+        reason: "bytes",
+        queuedFrames: this.frameCount,
+        queuedBytes: this.byteCount
+      };
+    }
+
+    const copy = new Uint8Array(frame.byteLength);
+    copy.set(frame);
+    this.frames.push(copy);
+    this.queuedBytes += copy.byteLength;
+    return {
+      ok: true,
+      queuedFrames: this.frameCount,
+      queuedBytes: this.byteCount
+    };
+  }
+
+  drain(): Uint8Array[] {
+    const drained = this.frames.splice(0);
+    this.queuedBytes = 0;
+    return drained;
+  }
+
+  clear(): void {
+    this.frames.length = 0;
+    this.queuedBytes = 0;
+  }
+}
 
 export type TunnelControlClientHello = {
   type: "control.hello";
