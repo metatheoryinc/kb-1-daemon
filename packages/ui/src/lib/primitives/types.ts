@@ -1,53 +1,56 @@
-export type IconName =
-  | 'bookmark'
-  | 'home'
-  | 'vault'
-  | 'book'
-  | 'activity'
-  | 'people'
-  | 'star'
-  | 'stop'
-  | 'history'
-  | 'refresh'
-  | 'fullscreen'
-  | 'panel'
-  | 'collapse'
-  | 'expand-rail'
-  | 'dots'
-  | 'settings'
-  | 'plus'
-  | 'search'
-  | 'filter'
-  | 'chevron'
-  | 'chevron-down'
-  | 'file'
-  | 'folder'
-  | 'robot'
-  | 'cloud'
-  | 'code'
-  | 'codex'
-  | 'claude'
-  | 'anthropic'
-  | 'opencode'
-  | 'chatgpt'
-  | 'openai'
-  | 'claudeCode'
-  | 'cursor'
-  | 'gemini'
-  | 'copilot'
-  | 'mistral'
-  | 'replit'
-  | 'zed'
-  | 'cline'
-  | 'note'
-  | 'menu'
-  | 'pushpin'
-  | 'pushpin-slash'
-  | 'sun'
-  | 'moon'
-  | 'desktop'
-  | 'device-mobile'
-  | 'bell'
-  | 'x';
+export const iconNames = [
+  'bookmark',
+  'home',
+  'vault',
+  'book',
+  'activity',
+  'people',
+  'star',
+  'stop',
+  'history',
+  'refresh',
+  'fullscreen',
+  'panel',
+  'collapse',
+  'expand-rail',
+  'dots',
+  'settings',
+  'plus',
+  'search',
+  'filter',
+  'chevron',
+  'chevron-down',
+  'file',
+  'folder',
+  'robot',
+  'cloud',
+  'code',
+  'codex',
+  'claude',
+  'anthropic',
+  'opencode',
+  'chatgpt',
+  'openai',
+  'claudeCode',
+  'cursor',
+  'gemini',
+  'copilot',
+  'mistral',
+  'replit',
+  'zed',
+  'cline',
+  'note',
+  'menu',
+  'pushpin',
+  'pushpin-slash',
+  'sun',
+  'moon',
+  'desktop',
+  'device-mobile',
+  'bell',
+  'x'
+] as const;
+
+export type IconName = (typeof iconNames)[number];
 
 export type IconWeight = 'thin' | 'light' | 'regular' | 'bold' | 'fill' | 'duotone';

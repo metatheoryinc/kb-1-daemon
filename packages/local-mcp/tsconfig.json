@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "types": ["node", "vitest/globals"]
+  },
+  "references": [
+    { "path": "../vault-service" }
+  ],
+  "include": ["src/**/*.ts"]
+}

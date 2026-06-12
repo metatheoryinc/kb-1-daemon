@@ -9,5 +9,8 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "types": ["node", "vitest/globals"]
   },
+  "references": [
+    { "path": "../vault-core" }
+  ],
   "include": ["src/**/*.ts"]
 }

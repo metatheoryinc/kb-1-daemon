@@ -17,7 +17,9 @@ import {
   decodeSessionEvent,
   type DocumentSessionEvent
 } from './index.js';
-import { DEMO_DOCUMENT_YJS_PATH, bindYjsWebSocket } from './websocket.js';
+import { bindYjsWebSocket } from './websocket.js';
+
+const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
 describe('Yjs WebSocket session', () => {
   let kb2Home: string;
@@ -192,6 +194,10 @@ describe('Yjs WebSocket session', () => {
       } finally {
         lateClient.close();
       }
+
+      await chmod(vaultDir, 0o700);
+      clientA.text.insert(clientA.text.length, 'saved after replay\n');
+      await waitForSessionEvent([clientA], 'persist-recovered');
     } finally {
       await chmod(vaultDir, 0o700).catch(() => undefined);
       clientA.close();

@@ -1,14 +1,40 @@
-import { Hono } from 'hono';
-import type { OneFileDocumentSession } from '@kb-2/doc-session';
-import { readFile, stat } from 'node:fs/promises';
-import { extname, join, relative, resolve, sep } from 'node:path';
+import { Hono, type Context } from 'hono';
+import { DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
+import {
+  createLocalMcpEndpoint,
+  type LocalMcpEndpoint
+} from '@kb-2/local-mcp';
+import {
+  createVaultService,
+  type ServiceErrorCode,
+  type ServiceResult,
+  type VaultChangeEvent,
+  type VaultService
+} from '@kb-2/vault-service';
+import { resolve } from 'node:path';
 
 import { SERVICE_NAME } from './config.js';
+import {
+  filePathParam,
+  queryNumber,
+  readJsonObject,
+  readOptionalJsonContent,
+  readRequiredString,
+  readSpliceRequest,
+  requestTextContent
+} from './request-helpers.js';
 import { readDaemonStatus } from './status.js';
+import { missingUiBuildResponse, proxyUi, serveUi } from './ui-static.js';
+
+const DEMO_DOCUMENT_PATH = 'demo-vault/hello-world.md';
 
 export interface CreateAppOptions {
   statusFile: string;
+  vaultRoot?: string;
+  documentSessions?: DocumentSessionManager;
+  vaultService?: VaultService;
   demoDocumentSession?: OneFileDocumentSession;
+  mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
   webProxyTarget?: string;
 }
@@ -33,7 +59,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
       return context.json({
         ok: true,
-        document: 'demo-vault/hello-world.md',
+        document: DEMO_DOCUMENT_PATH,
         content
       });
     });
@@ -44,9 +70,208 @@ export function createApp(options: CreateAppOptions): Hono {
 
       return context.json({
         ok: true,
-        document: 'demo-vault/hello-world.md',
+        document: DEMO_DOCUMENT_PATH,
         content
       });
+    });
+  }
+
+  if (options.vaultRoot) {
+    const vaultService = options.vaultService ?? createVaultService({
+      vaultRoot: options.vaultRoot,
+      documentSessions: options.documentSessions ?? new DocumentSessionManager({ root: options.vaultRoot })
+    });
+    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
+
+    api.post('/ops/flush', async (context) => {
+      return mapServiceResult(context, await vaultService.flushDirtySessions());
+    });
+
+    api.get('/events', () => {
+      return eventStreamResponse(vaultService);
+    });
+
+    api.get('/vault', async (context) => {
+      return mapServiceResult(context, await vaultService.vaultInfo());
+    });
+
+    api.get('/tree', async (context) => {
+      const depthRaw = context.req.query('depth');
+      const depth = depthRaw === undefined ? undefined : Number(depthRaw);
+      return mapServiceResult(context, await vaultService.listFiles({
+        under: context.req.query('under'),
+        ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
+      }));
+    });
+
+    api.get('/search', async (context) => {
+      return mapServiceResult(context, await vaultService.search({
+        query: context.req.query('q') ?? '',
+        under: context.req.query('under'),
+        context: queryNumber(context, 'context'),
+        limit: queryNumber(context, 'limit'),
+        offset: queryNumber(context, 'offset')
+      }));
+    });
+
+    api.get('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      return mapServiceResult(context, await vaultService.readNote({ path: filePath }));
+    });
+
+    api.put('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      const content = await requestTextContent(context.req.raw);
+      if (!content.ok) return mapServiceResult(context, content);
+      const overwrite = context.req.query('overwrite') === 'true';
+      return mapServiceResult(context, await vaultService.createNote({
+        path: filePath,
+        content: content.content,
+        overwrite,
+        actor: { kind: 'user' }
+      }), overwrite ? 200 : 201);
+    });
+
+    api.delete('/files/*', async (context) => {
+      const filePath = filePathParam(context.req.path, '/api/files/');
+      const permanent = context.req.query('permanent') === 'true';
+      return mapServiceResult(context, await vaultService.deleteNote({
+        path: filePath,
+        permanent,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    api.post('/files/*', async (context) => {
+      if (context.req.path.endsWith('/splice')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/splice');
+        const body = await readJsonObject(context.req.raw);
+        if (!body.ok) return mapServiceResult(context, body);
+        const splice = readSpliceRequest(body);
+        if (!splice.ok) return mapServiceResult(context, splice);
+        return mapServiceResult(context, await vaultService.editNote({
+          path: filePath,
+          baseline: splice.baseline,
+          oldText: splice.request.oldText,
+          newText: splice.request.newText,
+          before: splice.request.before,
+          after: splice.request.after,
+          occurrence: splice.request.occurrence,
+          actor: { kind: 'user' }
+        }));
+      }
+
+      if (context.req.path.endsWith('/append')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/append');
+        const body = await readJsonObject(context.req.raw);
+        if (!body.ok) return mapServiceResult(context, body);
+        const content = readRequiredString(body.body, 'content');
+        if (!content.ok) return mapServiceResult(context, content);
+        return mapServiceResult(context, await vaultService.appendNote({
+          path: filePath,
+          content: content.value,
+          actor: { kind: 'user' }
+        }));
+      }
+
+      if (context.req.path.endsWith('/prepend')) {
+        const filePath = filePathParam(context.req.path, '/api/files/', '/prepend');
+        const body = await readJsonObject(context.req.raw);
+        if (!body.ok) return mapServiceResult(context, body);
+        const content = readRequiredString(body.body, 'content');
+        if (!content.ok) return mapServiceResult(context, content);
+        return mapServiceResult(context, await vaultService.prependNote({
+          path: filePath,
+          content: content.value,
+          actor: { kind: 'user' }
+        }));
+      }
+
+      if (!context.req.path.endsWith('/move')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const fromPath = filePathParam(context.req.path, '/api/files/', '/move');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const to = readRequiredString(body.body, 'to');
+      if (!to.ok) return mapServiceResult(context, to);
+      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+      return mapServiceResult(context, await vaultService.moveNote({
+        fromPath,
+        toPath: to.value,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    api.post('/folders', async (context) => {
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const folderPath = typeof body.body.path === 'string' ? body.body.path : '';
+      return mapServiceResult(context, await vaultService.createFolder({
+        path: folderPath,
+        actor: { kind: 'user' }
+      }), 201);
+    });
+
+    api.get('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/metadata')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
+      return mapServiceResult(context, await vaultService.getFolderMetadata({ path: folderPath }));
+    });
+
+    api.put('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/metadata')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const metadata = readFolderMetadataBody(body.body);
+      if (!metadata.ok) return mapServiceResult(context, metadata);
+      return mapServiceResult(context, await vaultService.setFolderMetadata({
+        path: folderPath,
+        metadata: metadata.metadata,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    api.delete('/folders/*', async (context) => {
+      const folderPath = filePathParam(context.req.path, '/api/folders/');
+      const recursive = context.req.query('recursive') === 'true';
+      const permanent = context.req.query('permanent') === 'true';
+      return mapServiceResult(context, await vaultService.deleteFolder({
+        path: folderPath,
+        recursive,
+        permanent,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    api.post('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/move')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
+      const fromPath = filePathParam(context.req.path, '/api/folders/', '/move');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const to = readRequiredString(body.body, 'to');
+      if (!to.ok) return mapServiceResult(context, to);
+      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+      return mapServiceResult(context, await vaultService.moveFolder({
+        fromPath,
+        toPath: to.value,
+        actor: { kind: 'user' }
+      }));
+    });
+
+    app.all('/mcp', async (context) => {
+      return mcpEndpoint.handleRequest(context.req.raw);
     });
   }
 
@@ -78,133 +303,88 @@ export function createApp(options: CreateAppOptions): Hono {
   return app;
 }
 
-async function readOptionalJsonContent(request: Request): Promise<string | undefined> {
-  if (!request.headers.get('content-type')?.includes('application/json')) {
-    return undefined;
-  }
+function eventStreamResponse(vaultService: VaultService): Response {
+  const encoder = new TextEncoder();
+  let unsubscribe: () => void = () => undefined;
 
-  const body = await request.json().catch(() => undefined) as { content?: unknown } | undefined;
-  return typeof body?.content === 'string' ? body.content : undefined;
-}
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      unsubscribe = vaultService.onEvent((event) => {
+        controller.enqueue(encoder.encode(formatServerSentEvent(event)));
+      });
+    },
+    cancel() {
+      unsubscribe();
+    }
+  });
 
-async function proxyUi(webProxyTarget: string, request: Request): Promise<Response> {
-  const requestUrl = new URL(request.url);
-  const upstreamUrl = new URL(webProxyTarget);
-  upstreamUrl.pathname = requestUrl.pathname;
-  upstreamUrl.search = requestUrl.search;
-
-  try {
-    return await fetch(new Request(upstreamUrl, request));
-  } catch (error) {
-    return new Response(`KB-2 web dev server is unavailable at ${webProxyTarget}.\n${String(error)}\n`, {
-      status: 502,
-      headers: {
-        'content-type': 'text/plain; charset=utf-8'
-      }
-    });
-  }
-}
-
-// Hono's Node static helper relies on middleware root handling that does not
-// cover this SPA fallback cleanly, so the daemon keeps this small file server.
-async function serveUi(webBuildDir: string, pathname: string): Promise<Response> {
-  const root = resolve(webBuildDir);
-  const filePath = await resolveUiFile(root, pathname);
-
-  if (!filePath) {
-    return missingUiBuildResponse(root);
-  }
-
-  const body = await readFile(filePath);
-
-  return new Response(body, {
+  return new Response(stream, {
     headers: {
-      'content-type': contentTypeFor(filePath)
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive'
     }
   });
 }
 
-async function resolveUiFile(root: string, pathname: string): Promise<string | undefined> {
-  const decodedPathname = safeDecodePathname(pathname);
-  const requestPath = decodedPathname.replace(/^\/+/, '') || 'index.html';
-  const candidate = resolve(join(root, requestPath));
-
-  if (isInside(root, candidate) && await isFile(candidate)) {
-    return candidate;
-  }
-
-  const fallback = join(root, 'index.html');
-  return await isFile(fallback) ? fallback : undefined;
+function formatServerSentEvent(event: VaultChangeEvent): string {
+  return `event: change\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-function missingUiBuildResponse(root: string): Response {
-  return new Response(
-    [
-      'KB-2 local UI is not built yet.',
-      '',
-      'Run `pnpm --filter @kb-2/web build` before starting the daemon,',
-      'or run `pnpm dev` to start the daemon with the Vite dev proxy.',
-      '',
-      `Expected UI entry: ${join(root, 'index.html')}`,
-      ''
-    ].join('\n'),
-    {
-      status: 503,
-      headers: {
-        'content-type': 'text/plain; charset=utf-8'
-      }
+function mapServiceResult(
+  context: Context,
+  result: ServiceResult,
+  okStatus: 200 | 201 = 200
+): Response {
+  if (result.ok) {
+    return context.json(result, okStatus);
+  }
+
+  return context.json(result, statusForServiceError(result.error));
+}
+
+function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 500 {
+  switch (error) {
+    case 'invalid_path':
+    case 'invalid_metadata':
+    case 'invalid_request':
+      return 400;
+    case 'metadata_parse_failed':
+      return 500;
+    case 'not_found':
+      return 404;
+    case 'already_exists':
+    case 'path_collision':
+    case 'folder_not_empty':
+      return 409;
+    case 'entry_cap_exceeded':
+    case 'too_large_splice':
+    case 'too_large_document':
+      return 413;
+    case 'persist_failed':
+      return 500;
+    case 'stale_doc':
+    case 'ambiguous':
+      return 409;
+  }
+}
+
+function readFolderMetadataBody(body: Record<string, unknown>): ServiceResult<{ metadata: { color?: string | null; icon?: string | null } }> {
+  const metadata: { color?: string | null; icon?: string | null } = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, 'color')) {
+    if (body.color !== null && typeof body.color !== 'string') {
+      return { ok: false, error: 'invalid_request', message: 'color must be a string or null when provided' };
     }
-  );
-}
-
-function safeDecodePathname(pathname: string): string {
-  try {
-    return decodeURIComponent(pathname);
-  } catch {
-    return '/';
+    metadata.color = body.color;
   }
-}
 
-function isInside(root: string, candidate: string): boolean {
-  const pathFromRoot = relative(root, candidate);
-  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !pathFromRoot.startsWith(sep));
-}
-
-async function isFile(pathname: string): Promise<boolean> {
-  try {
-    return (await stat(pathname)).isFile();
-  } catch {
-    return false;
+  if (Object.prototype.hasOwnProperty.call(body, 'icon')) {
+    if (body.icon !== null && typeof body.icon !== 'string') {
+      return { ok: false, error: 'invalid_request', message: 'icon must be a string or null when provided' };
+    }
+    metadata.icon = body.icon;
   }
-}
 
-function contentTypeFor(pathname: string): string {
-  switch (extname(pathname)) {
-    case '.css':
-      return 'text/css; charset=utf-8';
-    case '.html':
-      return 'text/html; charset=utf-8';
-    case '.ico':
-      return 'image/x-icon';
-    case '.js':
-      return 'text/javascript; charset=utf-8';
-    case '.json':
-      return 'application/json; charset=utf-8';
-    case '.map':
-      return 'application/json; charset=utf-8';
-    case '.png':
-      return 'image/png';
-    case '.svg':
-      return 'image/svg+xml';
-    case '.txt':
-      return 'text/plain; charset=utf-8';
-    case '.webp':
-      return 'image/webp';
-    case '.woff':
-      return 'font/woff';
-    case '.woff2':
-      return 'font/woff2';
-    default:
-      return 'application/octet-stream';
-  }
+  return { ok: true, metadata };
 }

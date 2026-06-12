@@ -1,12 +1,24 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { DEMO_DOCUMENT_YJS_PATH, OneFileDocumentSession, bindYjsWebSocket } from '@kb-2/doc-session';
+import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
+import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
+import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import { createApp } from './app.js';
 import { createDaemonConfig, type DaemonConfig } from './config.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
+import { createVaultService } from '@kb-2/vault-service';
+
+const DEMO_DOCUMENT_PATH = 'hello-world.md';
+const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
+const DEFAULT_DEMO_DOCUMENT_CONTENT = [
+  '# Hello KB-2',
+  '',
+  'This Markdown file is served by the local KB-2 daemon.',
+  ''
+].join('\n');
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -16,12 +28,22 @@ export interface StartedDaemon {
 
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
-  const demoDocumentSession = new OneFileDocumentSession(config.demoDocumentFile);
+  const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
+  const demoDocumentSession = documentSessions.getSession(DEMO_DOCUMENT_PATH, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
   await demoDocumentSession.open();
+  const vaultService = createVaultService({
+    vaultRoot: config.vaultRoot,
+    documentSessions
+  });
+  const mcpEndpoint = createLocalMcpEndpoint(vaultService);
 
   const app = createApp({
     statusFile: config.statusFile,
+    vaultRoot: config.vaultRoot,
+    vaultService,
+    documentSessions,
     demoDocumentSession,
+    mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget
   });
@@ -59,9 +81,10 @@ export async function startDaemon(): Promise<StartedDaemon> {
             config,
             status,
             close: async () => {
+              await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
-              await demoDocumentSession.close();
+              await documentSessions.close();
             }
           });
         } catch (error) {
@@ -73,20 +96,24 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.on('upgrade', (request, socket, head) => {
       const pathname = request.url ? new URL(request.url, `http://${request.headers.host ?? 'localhost'}`).pathname : '';
-      if (pathname !== DEMO_DOCUMENT_YJS_PATH) {
+      const documentPath = documentPathFromWebSocketPath(pathname);
+      if (!documentPath) {
         socket.destroy();
         return;
       }
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
         void (async () => {
+          const bindingLease = documentSessions.attachClientSession(documentPath);
           try {
-            const binding = await bindYjsWebSocket(demoDocumentSession, webSocket);
+            const binding = await bindYjsWebSocket(bindingLease.session, webSocket);
             activeDocumentConnections.add(binding.closed);
             binding.closed.finally(() => {
               activeDocumentConnections.delete(binding.closed);
+              bindingLease.release();
             }).catch(() => undefined);
           } catch (error) {
+            bindingLease.release();
             console.error(error);
             webSocket.close(1011, 'Document session failed to open');
           }
@@ -96,6 +123,25 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
+}
+
+function documentPathFromWebSocketPath(pathname: string): string | undefined {
+  if (pathname === DEMO_DOCUMENT_YJS_PATH) {
+    return DEMO_DOCUMENT_PATH;
+  }
+
+  const prefix = '/api/files/';
+  const suffix = '/yjs';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return undefined;
+  }
+
+  try {
+    const candidate = decodeURIComponent(pathname.slice(prefix.length, -suffix.length));
+    return validateVaultPath(candidate, 'file');
+  } catch {
+    return undefined;
+  }
 }
 
 async function closeWebSocketServer(server: WebSocketServer, activeDocumentConnections: Set<Promise<void>>): Promise<void> {

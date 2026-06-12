@@ -12,7 +12,7 @@ export interface DaemonConfig {
   webProxyTarget?: string;
   kb2Home: string;
   daemonHome: string;
-  demoDocumentFile: string;
+  vaultRoot: string;
   statusFile: string;
   startedAt: string;
   pid: number;
@@ -52,7 +52,7 @@ export function resolvePort(env: NodeJS.ProcessEnv = process.env): number {
   return port;
 }
 
-export function resolveHost(env: NodeJS.ProcessEnv = process.env): string {
+function resolveHost(env: NodeJS.ProcessEnv = process.env): string {
   const configuredHost = env.KB2_HOST?.trim();
   return configuredHost && configuredHost.length > 0 ? configuredHost : DEFAULT_HOST;
 }
@@ -67,7 +67,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
   const homeDir = options.homeDir ?? homedir();
   const kb2Home = resolveKb2Home(env, homeDir);
   const daemonHome = join(kb2Home, 'daemon');
-  const demoDocumentFile = join(kb2Home, 'demo-vault', 'hello-world.md');
+  const vaultRoot = join(kb2Home, 'demo-vault');
 
   return {
     serviceName: SERVICE_NAME,
@@ -76,7 +76,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     webProxyTarget: resolveWebProxyTarget(env),
     kb2Home,
     daemonHome,
-    demoDocumentFile,
+    vaultRoot,
     statusFile: join(daemonHome, 'status.json'),
     startedAt: (options.now ?? new Date()).toISOString(),
     pid: options.pid ?? process.pid

@@ -1,0 +1,30 @@
+{
+  "name": "@kb-2/vault-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.8",
+    "fast-check": "4.8.0",
+    "vitest": "4.1.8"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
+  }
+}

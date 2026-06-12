@@ -2,10 +2,8 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 
-import type { OneFileDocumentSession } from './session.js';
+import { PersistFailedError, type OneFileDocumentSession } from './session.js';
 import { MESSAGE_SYNC, encodeSessionEvent } from './protocol.js';
-
-export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
 const socketOpen = 1;
 
@@ -54,7 +52,13 @@ export async function bindYjsWebSocket(
     cleanupStarted = true;
     unsubscribeSessionEvents();
     session.ydoc.off('update', updateHandler);
-    session.flush().then(resolveClosed, rejectClosed);
+    session.flush().then(resolveClosed, (error: unknown) => {
+      if (error instanceof PersistFailedError) {
+        resolveClosed();
+        return;
+      }
+      rejectClosed(error);
+    });
   };
 
   socket.on('message', (data) => {

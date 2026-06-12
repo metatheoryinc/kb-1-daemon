@@ -37,3 +37,4 @@ export {
   accents,
   type AccentName,
 } from './primitives/accent';
+export { iconNames, type IconName, type IconWeight } from './primitives/types';

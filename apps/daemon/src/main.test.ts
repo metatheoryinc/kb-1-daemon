@@ -58,7 +58,7 @@ describe('daemon startup', () => {
     });
     expect(typeof body.content).toBe('string');
     expect(body.content).toContain('Hello KB-2');
-    await expect(readFile(started.config.demoDocumentFile, 'utf8')).resolves.toBe(body.content);
+    await expect(readFile(join(started.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toBe(body.content);
 
     await started.close();
   });

@@ -1,4 +1,4 @@
-export const userAccents = [
+const userAccents = [
   'coral',
   'peach',
   'butter',

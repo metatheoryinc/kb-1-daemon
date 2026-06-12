@@ -10,3 +10,5 @@ coverage/
 .fleet/
 fleet-claude-inbox-*.jsonl
 .claude/
+docs/scratch/
+.fallow/

@@ -26,6 +26,7 @@ export interface DemoDocumentProvider {
 
 export interface DemoDocumentProviderOptions {
   url?: string;
+  path?: string;
   onStatus?: (status: DemoDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
   onSessionEvent?: (event: DocumentSessionEvent) => void;
@@ -36,7 +37,7 @@ export function createDemoDocumentProvider(
 ): DemoDocumentProvider {
   const doc = new Y.Doc();
   const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
-  const socket = new WebSocket(options.url ?? yjsWebSocketUrl());
+  const socket = new WebSocket(options.url ?? yjsWebSocketUrl(options.path));
   socket.binaryType = 'arraybuffer';
 
   let destroyed = false;
@@ -117,10 +118,14 @@ export function createDemoDocumentProvider(
   };
 }
 
-function yjsWebSocketUrl(): string {
-  const url = new URL(DEMO_DOCUMENT_YJS_PATH, window.location.href);
+function yjsWebSocketUrl(documentPath = 'hello-world.md'): string {
+  const url = new URL(`/api/files/${encodeVaultPath(documentPath)}/yjs`, window.location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.href;
+}
+
+export function encodeVaultPath(documentPath: string): string {
+  return documentPath.split('/').map(encodeURIComponent).join('/');
 }
 
 function toUint8Array(data: unknown): Uint8Array | undefined {

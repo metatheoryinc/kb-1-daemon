@@ -5,6 +5,7 @@
   import {
     EditorState,
     Annotation,
+    Compartment,
     type Extension,
   } from '@codemirror/state';
   import {
@@ -110,6 +111,8 @@
   // reactive snapshot reference shifts. Initialized to null and
   // populated in `onMount`.
   let editorView = $state<EditorView | null>(null);
+  let readOnlyCompartment: Compartment | null = null;
+  let editableCompartment: Compartment | null = null;
 
   // Note: the user-driven view↔edit toggle that originally shipped with
   // Slice 3 (floating button + Cmd-E keymap + Compartment-wrapped
@@ -125,6 +128,8 @@
 
   onMount(() => {
     if (!host) return;
+    readOnlyCompartment = new Compartment();
+    editableCompartment = new Compartment();
 
     // Capture stable refs — same reasoning as MarkdownEditor.svelte:469:
     // Svelte 5 `$props` getters re-read on every access including
@@ -173,6 +178,7 @@
         event: Y.YTextEvent,
         transaction: Y.Transaction,
       ) => void;
+      private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 
       constructor(view: EditorView) {
         this.view = view;
@@ -202,6 +208,25 @@
           });
         };
         stableText.observe(this.observer);
+        this.reconcileFromYText();
+        this.reconcileTimer = setTimeout(() => {
+          this.reconcileTimer = undefined;
+          this.reconcileFromYText();
+        }, 50);
+      }
+
+      private reconcileFromYText(): void {
+        const syncedText = stableText.toString();
+        if (syncedText !== this.view.state.doc.toString()) {
+          this.view.dispatch({
+            changes: {
+              from: 0,
+              to: this.view.state.doc.length,
+              insert: syncedText,
+            },
+            annotations: [syncAnnotation.of(SYNC_MARK)],
+          });
+        }
       }
 
       update(update: ViewUpdate): void {
@@ -229,6 +254,10 @@
       }
 
       destroy(): void {
+        if (this.reconcileTimer) {
+          clearTimeout(this.reconcileTimer);
+          this.reconcileTimer = undefined;
+        }
         stableText.unobserve(this.observer);
       }
     }
@@ -333,13 +362,10 @@
       // comment above for the "document not code" rationale.
       highlightActiveLine(),
       EditorView.lineWrapping,
-      // Static editable / readOnly. The `readOnly` prop is the
-      // parent's enforcement point (e.g. soft-revoked grants); no
-      // runtime swap is needed here. The user-driven view↔edit toggle
-      // was decommissioned in favor of focus-aware reveal (Slice F) +
-      // H-chip (Slice S).
-      EditorState.readOnly.of(readOnly),
-      EditorView.editable.of(!readOnly),
+      // Parent-controlled enforcement point. The compartments are
+      // reconfigured when a live session enters doc-deleted/read-only state.
+      readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
+      editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
       // Live-preview-style markdown decorations. They are document +
@@ -413,9 +439,25 @@
 
     return () => {
       editorView = null;
+      readOnlyCompartment = null;
+      editableCompartment = null;
       view.destroy();
       undoManager.destroy();
     };
+  });
+
+  $effect(() => {
+    const view = editorView;
+    const readOnlyFacet = readOnlyCompartment;
+    const editableFacet = editableCompartment;
+    if (view === null || readOnlyFacet === null || editableFacet === null) return;
+
+    view.dispatch({
+      effects: [
+        readOnlyFacet.reconfigure(EditorState.readOnly.of(readOnly)),
+        editableFacet.reconfigure(EditorView.editable.of(!readOnly)),
+      ],
+    });
   });
 
   /**
