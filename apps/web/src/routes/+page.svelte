@@ -1,12 +1,17 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
-  import { createDemoDocumentProvider, encodeVaultPath } from '$lib/yjs/demo-document-provider';
+  import { afterNavigate, goto } from '$app/navigation';
+  import {
+    createDemoDocumentProvider,
+    encodeVaultPath,
+    isDemoDocumentProviderOpenError,
+  } from '$lib/yjs/demo-document-provider';
   import type {
     DemoDocumentProvider,
     DemoDocumentProviderStatus,
   } from '$lib/yjs/demo-document-provider';
   import { PlaintextEditor, type LivePath, type OrgPerson } from '@kb-2/editor';
   import {
+    DocumentNotFoundState,
     DocumentSaveBanner,
     LocalEditorShell,
     type AccentName,
@@ -49,6 +54,7 @@
   let persistFailureActive = $state(false);
   let persistRecoveredVisible = $state(false);
   let docDeleted = $state(false);
+  let notFoundPath = $state<string | null>(null);
   let documentPath = $state('hello-world.md');
   let vaultName = $state('Vault');
   let tree = $state<LocalTreeNode[]>([]);
@@ -151,6 +157,7 @@
     providerSynced = false;
     status = 'connecting';
     error = null;
+    notFoundPath = null;
     docDeleted = false;
     const nextProvider = createDemoDocumentProvider({
       path,
@@ -160,6 +167,12 @@
       },
       onError: (caught) => {
         if (generation !== providerGeneration) return;
+        if (isDemoDocumentProviderOpenError(caught)) {
+          notFoundPath = path;
+          providerSynced = false;
+          error = null;
+          return;
+        }
         error = caught instanceof Error ? caught.message : String(caught);
       },
       onSessionEvent: (event) => {
@@ -175,14 +188,20 @@
   }
 
   async function openDocument(path: string): Promise<void> {
-    if (path === documentPath) return;
+    if (path === documentPath && notFoundPath !== path) return;
+    rebindDocument(path, { resetSearch: true });
+    await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
+  }
+
+  function rebindDocument(path: string, options: { resetSearch?: boolean } = {}): void {
     documentPath = path;
     openProvider(path);
-    searchValue = '';
-    searchResults = [];
-    searchTotal = 0;
-    searchTruncated = false;
-    await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
+    if (options.resetSearch === true) {
+      searchValue = '';
+      searchResults = [];
+      searchTotal = 0;
+      searchTruncated = false;
+    }
   }
 
   function toggleFolder(path: string): void {
@@ -420,14 +439,28 @@
     return value.slice(0, 1).toUpperCase() + value.slice(1);
   }
 
+  function documentPathFromUrl(url: URL): string {
+    if (url.pathname === '/') {
+      return 'hello-world.md';
+    }
+    return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  }
+
+  afterNavigate((navigation) => {
+    if (!mounted || !navigation.to?.url) return;
+    const nextPath = documentPathFromUrl(navigation.to.url);
+    if (nextPath === documentPath) return;
+    rebindDocument(nextPath, { resetSearch: true });
+  });
+
   onMount(() => {
     mounted = true;
-    const pathname = window.location.pathname;
-    if (pathname === '/') {
+    const initialPath = documentPathFromUrl(new URL(window.location.href));
+    if (window.location.pathname === '/') {
       documentPath = 'hello-world.md';
       void goto('/hello-world.md', { replaceState: true, noScroll: true, keepFocus: true });
     } else {
-      documentPath = decodeURIComponent(pathname.replace(/^\/+/, ''));
+      documentPath = initialPath;
     }
 
     colorMode = document.documentElement.dataset.rdMode === 'dark' || document.documentElement.classList.contains('dark')
@@ -539,7 +572,9 @@
   {/if}
 
   <section class="document-shell" aria-label="Markdown document">
-    {#if provider && providerSynced}
+    {#if notFoundPath === documentPath}
+      <DocumentNotFoundState path={documentPath} />
+    {:else if provider && providerSynced}
       {#key provider}
         <PlaintextEditor
           ydoc={provider.doc}
@@ -582,6 +617,7 @@
   }
 
   .document-shell :global(.kb2-editor-shell),
+  .document-shell :global(.document-not-found),
   .loading {
     grid-column: 2;
     min-width: 0;

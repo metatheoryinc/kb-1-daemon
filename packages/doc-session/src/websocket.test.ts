@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   OneFileDocumentSession,
@@ -113,6 +114,39 @@ describe('Yjs WebSocket session', () => {
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
     await session.close();
+  });
+
+  it('fails missing document binds with canonical not_found and does not create parent folders', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'typo', 'missing.md');
+    const session = new OneFileDocumentSession(filePath);
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+
+    await expect(closed).resolves.toEqual({
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
+    });
+    await expect(readdir(kb2Home)).resolves.toEqual([]);
+
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
   });
 
   it('reconciles idle external file changes and broadcasts the quiet merge event to every client', async () => {

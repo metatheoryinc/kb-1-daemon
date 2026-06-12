@@ -3,7 +3,9 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { WebSocket } from 'ws';
 
+import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-2/doc-session';
 import { startDaemon } from './main.js';
 
 describe('daemon startup', () => {
@@ -59,6 +61,31 @@ describe('daemon startup', () => {
     expect(typeof body.content).toBe('string');
     expect(body.content).toContain('Hello KB-2');
     await expect(readFile(join(started.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toBe(body.content);
+
+    await started.close();
+  });
+
+  it('rejects missing document WebSocket opens without creating typo folders', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(port)
+    };
+
+    const started = await startDaemon();
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/files/typo/missing.md/yjs`);
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+
+    await expect(closed).resolves.toEqual({
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
+    });
+    await expect(access(join(started.config.vaultRoot, 'typo'))).rejects.toBeTruthy();
+    await expect(readFile(join(started.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toContain('Hello KB-2');
 
     await started.close();
   });

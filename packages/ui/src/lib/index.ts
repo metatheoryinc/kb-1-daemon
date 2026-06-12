@@ -24,6 +24,7 @@ export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
 export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
 export { default as DocumentHeader } from './local-editor/DocumentHeader.svelte';
+export { default as DocumentNotFoundState } from './local-editor/DocumentNotFoundState.svelte';
 export { default as FileNode } from './local-editor/FileNode.svelte';
 export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
 export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';

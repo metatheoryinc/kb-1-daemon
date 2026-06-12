@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -82,6 +82,19 @@ describe('OneFileDocumentSession', () => {
     await expect(readFile(filePath, 'utf8')).resolves.toBe('seed\n');
     await expect(session.getContent()).resolves.toBe('seed\n');
     await session.close();
+  });
+
+  it('rejects missing document opens with not_found and leaves parent folders untouched', async () => {
+    const session = new OneFileDocumentSession(filePath);
+
+    await expect(session.open()).rejects.toMatchObject({
+      failure: {
+        ok: false,
+        error: 'not_found',
+        message: 'file not found'
+      }
+    });
+    await expect(readdir(kb2Home)).resolves.toEqual([]);
   });
 
   it('cold boots the Yjs document from the materialized Markdown file', async () => {

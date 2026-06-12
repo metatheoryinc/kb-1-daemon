@@ -2,7 +2,7 @@
 import { serve } from '@hono/node-server';
 import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
-import { validateVaultPath } from '@kb-2/vault-core';
+import { readVaultFile, validateVaultPath, writeVaultFile } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -29,7 +29,8 @@ export interface StartedDaemon {
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
   const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
-  const demoDocumentSession = documentSessions.getSession(DEMO_DOCUMENT_PATH, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
+  await seedDemoDocument(config.vaultRoot);
+  const demoDocumentSession = documentSessions.getSession(DEMO_DOCUMENT_PATH);
   await demoDocumentSession.open();
   const vaultService = createVaultService({
     vaultRoot: config.vaultRoot,
@@ -123,6 +124,22 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
+}
+
+async function seedDemoDocument(vaultRoot: string): Promise<void> {
+  const existing = await readVaultFile({ root: vaultRoot }, DEMO_DOCUMENT_PATH);
+  if (existing.ok) return;
+  if (existing.error !== 'not_found') {
+    throw new Error(existing.message);
+  }
+
+  const seeded = await writeVaultFile(
+    { root: vaultRoot, actor: { kind: 'system' } },
+    { path: DEMO_DOCUMENT_PATH, content: DEFAULT_DEMO_DOCUMENT_CONTENT }
+  );
+  if (!seeded.ok) {
+    throw new Error(seeded.message);
+  }
 }
 
 function documentPathFromWebSocketPath(pathname: string): string | undefined {

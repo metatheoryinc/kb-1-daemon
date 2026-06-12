@@ -1,6 +1,10 @@
 export {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DOCUMENT_SESSION_NOT_FOUND_FAILURE,
+  DocumentSessionNotFoundError,
   OneFileDocumentSession,
   PersistFailedError,
+  type DocumentSessionFailure,
   type DocumentSessionEventHandler,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions,

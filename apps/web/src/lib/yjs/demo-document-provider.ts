@@ -26,6 +26,19 @@ export interface DemoDocumentProvider {
   destroy: () => void;
 }
 
+export interface DemoDocumentProviderOpenFailure {
+  ok: false;
+  error: 'not_found';
+  message: string;
+}
+
+export class DemoDocumentProviderOpenError extends Error {
+  constructor(readonly failure: DemoDocumentProviderOpenFailure) {
+    super(failure.message);
+    this.name = 'DemoDocumentProviderOpenError';
+  }
+}
+
 export interface DemoDocumentProviderOptions {
   url?: string;
   path?: string;
@@ -110,8 +123,13 @@ export function createDemoDocumentProvider(
     options.onError?.(event);
   });
 
-  socket.addEventListener('close', () => {
+  socket.addEventListener('close', (event) => {
     options.onStatus?.('closed');
+    if (destroyed) return;
+    const failure = parseOpenFailure(event.reason);
+    if (failure) {
+      options.onError?.(new DemoDocumentProviderOpenError(failure));
+    }
   });
 
   return {
@@ -125,6 +143,10 @@ export function createDemoDocumentProvider(
       options.onStatus?.('closed');
     },
   };
+}
+
+export function isDemoDocumentProviderOpenError(error: unknown): error is DemoDocumentProviderOpenError {
+  return error instanceof DemoDocumentProviderOpenError;
 }
 
 function yjsWebSocketUrl(documentPath = 'hello-world.md'): string {
@@ -141,5 +163,26 @@ function toUint8Array(data: unknown): Uint8Array | undefined {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   if (data instanceof Uint8Array) return data;
   if (data instanceof Blob) return undefined;
+  return undefined;
+}
+
+function parseOpenFailure(reason: string): DemoDocumentProviderOpenFailure | undefined {
+  if (!reason) return undefined;
+  try {
+    const parsed = JSON.parse(reason) as Partial<DemoDocumentProviderOpenFailure>;
+    if (
+      parsed.ok === false &&
+      parsed.error === 'not_found' &&
+      typeof parsed.message === 'string'
+    ) {
+      return {
+        ok: false,
+        error: 'not_found',
+        message: parsed.message
+      };
+    }
+  } catch {
+    return undefined;
+  }
   return undefined;
 }
