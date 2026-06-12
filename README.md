@@ -33,13 +33,19 @@ claude mcp add kb-2 --transport http http://127.0.0.1:17992/mcp
 
 Available tools: `vault_info`, `list_files`, `read_note`, `create_note`,
 `edit_note`, `append_note`, `prepend_note`, `delete_note`, `move_note`,
-`create_folder`, `delete_folder`, `move_folder`, `search`.
+`create_folder`, `delete_folder`, `move_folder`, `get_folder_metadata`,
+`set_folder_metadata`, `search`.
 
 `read_note` returns a `baseline` for edit loops. `edit_note` uses the same
 anchored splice contract as the REST API: stale baselines return
 `stale_doc` with current content and a fresh baseline, ambiguous matches return
 `match_count`, and persist failures are surfaced without writing a success
-audit row. `move_note` and `move_folder` do not rewrite links.
+audit row. `list_files` includes inline folder metadata. `set_folder_metadata`
+persists durable folder color/icon metadata and is audited as `mcp_client`.
+`move_note` and `move_folder` do not rewrite links.
+
+Parity rule: every UI-reachable vault operation must have an MCP tool
+equivalent over the same vault service boundary.
 
 ## Other Commands
 

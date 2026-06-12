@@ -23,6 +23,24 @@ describe('vault service failure mapping', () => {
       path: 'notes',
       audit: { operation: 'mkdir', path: 'notes' }
     });
+    await expect(service.setFolderMetadata({
+      path: 'notes',
+      metadata: { color: 'coral', icon: 'folder' },
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes',
+      metadata: { color: 'coral', icon: 'folder' },
+      audit: { operation: 'write', entityKind: 'folder', path: 'notes' }
+    });
+    await expect(service.getFolderMetadata({ path: 'notes' })).resolves.toMatchObject({
+      ok: true,
+      metadata: { color: 'coral', icon: 'folder' }
+    });
+    await expect(service.listFolderMetadata()).resolves.toMatchObject({
+      ok: true,
+      folders: { notes: { color: 'coral', icon: 'folder' } }
+    });
     await expect(service.createNote({
       path: 'notes/a.md',
       content: 'alpha beta\n',
@@ -40,6 +58,14 @@ describe('vault service failure mapping', () => {
       ok: true,
       entries: [{ path: 'notes/a.md', kind: 'file' }]
     });
+    const rootTree = await service.listFiles({});
+    expect(rootTree.ok).toBe(true);
+    const rootEntries = (rootTree as { ok: true; entries: Array<Record<string, unknown>> }).entries;
+    expect(rootEntries).toContainEqual(expect.objectContaining({
+      path: 'notes',
+      kind: 'folder',
+      metadata: { color: 'coral', icon: 'folder' }
+    }));
     await expect(service.search({ query: 'beta' })).resolves.toMatchObject({
       ok: true,
       total: 1,
@@ -95,6 +121,7 @@ describe('vault service failure mapping', () => {
     const auditRows = await readAuditRows(root);
     expect(auditRows.map((row) => row.operation)).toEqual([
       'mkdir',
+      'write',
       'create',
       'move',
       'delete',

@@ -9,9 +9,11 @@ import {
   stat,
   writeFile
 } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { emitVaultAudit, type AuditEntry, type VaultActor } from './audit.js';
-import { statOrNull } from './fs.js';
+import { isNodeError, statOrNull } from './fs.js';
 import {
   InvalidPathError,
   relativeDescendantPath,
@@ -25,11 +27,13 @@ export type { AuditEntry, VaultActor };
 
 export type VaultErrorCode =
   | 'invalid_path'
+  | 'invalid_metadata'
   | 'not_found'
   | 'already_exists'
   | 'path_collision'
   | 'folder_not_empty'
-  | 'entry_cap_exceeded';
+  | 'entry_cap_exceeded'
+  | 'metadata_parse_failed';
 
 export type VaultResult<T> = { ok: true; value: T } | { ok: false; error: VaultErrorCode; message: string };
 
@@ -43,6 +47,7 @@ export interface VaultEntry {
   kind: 'file' | 'folder';
   size: number;
   mtimeMs: number;
+  metadata?: FolderMetadata;
 }
 
 export interface VaultInfo {
@@ -79,8 +84,100 @@ export interface MoveValue {
   audit: AuditEntry;
 }
 
+export const folderMetadataColorNames = [
+  'coral',
+  'peach',
+  'butter',
+  'sage',
+  'mint',
+  'lime',
+  'sky',
+  'periwinkle',
+  'lavender',
+  'rose',
+  'teal',
+  'slate'
+] as const;
+
+export const folderMetadataIconNames = [
+  'bookmark',
+  'home',
+  'vault',
+  'book',
+  'activity',
+  'people',
+  'star',
+  'stop',
+  'history',
+  'refresh',
+  'fullscreen',
+  'panel',
+  'collapse',
+  'expand-rail',
+  'dots',
+  'settings',
+  'plus',
+  'search',
+  'filter',
+  'chevron',
+  'chevron-down',
+  'file',
+  'folder',
+  'robot',
+  'cloud',
+  'code',
+  'codex',
+  'claude',
+  'anthropic',
+  'opencode',
+  'chatgpt',
+  'openai',
+  'claudeCode',
+  'cursor',
+  'gemini',
+  'copilot',
+  'mistral',
+  'replit',
+  'zed',
+  'cline',
+  'note',
+  'menu',
+  'pushpin',
+  'pushpin-slash',
+  'sun',
+  'moon',
+  'desktop',
+  'device-mobile',
+  'bell',
+  'x'
+] as const;
+
+export type FolderMetadataColor = (typeof folderMetadataColorNames)[number];
+export type FolderMetadataIcon = (typeof folderMetadataIconNames)[number];
+
+export interface FolderMetadata {
+  color?: FolderMetadataColor;
+  icon?: FolderMetadataIcon;
+}
+
+export interface FolderMetadataInput {
+  color?: string | null;
+  icon?: string | null;
+}
+
+export interface FolderMetadataValue {
+  path: string;
+  metadata: FolderMetadata;
+  audit?: AuditEntry;
+}
+
+export type FolderMetadataMap = Record<string, FolderMetadata>;
+
 const DEFAULT_DEPTH = 10;
 const DEFAULT_ENTRY_CAP = 5000;
+const FOLDER_METADATA_RELATIVE_PATH = path.posix.join('.kb2', 'folders.yml');
+const folderMetadataColorSet = new Set<string>(folderMetadataColorNames);
+const folderMetadataIconSet = new Set<string>(folderMetadataIconNames);
 
 class EntryCapExceededError extends Error {
   constructor() {
@@ -91,6 +188,10 @@ class EntryCapExceededError extends Error {
 
 function fail(error: VaultErrorCode, message: string): VaultResult<never> {
   return { ok: false, error, message };
+}
+
+function metadataFileFailure(message = 'folder metadata file is malformed'): VaultResult<never> {
+  return fail('metadata_parse_failed', message);
 }
 
 function classifyPathError(err: unknown): VaultResult<never> | null {
@@ -116,6 +217,10 @@ async function exists(absPath: string): Promise<boolean> {
 
 function vaultPath(root: string, relPath: string): string {
   return resolveVaultPath(root, relPath);
+}
+
+function folderMetadataPath(root: string): string {
+  return resolveVaultPath(root, FOLDER_METADATA_RELATIVE_PATH);
 }
 
 function trashRelativePath(originalPath: string): string {
@@ -154,6 +259,179 @@ async function walkEntries(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function cloneMetadata(metadata: FolderMetadata): FolderMetadata {
+  return {
+    ...(metadata.color !== undefined ? { color: metadata.color } : {}),
+    ...(metadata.icon !== undefined ? { icon: metadata.icon } : {})
+  };
+}
+
+function isEmptyMetadata(metadata: FolderMetadata): boolean {
+  return metadata.color === undefined && metadata.icon === undefined;
+}
+
+function normalizeFolderMetadataEntry(value: unknown): VaultResult<FolderMetadata> {
+  if (!isRecord(value)) return metadataFileFailure();
+
+  const metadata: FolderMetadata = {};
+  if (value.color !== undefined) {
+    if (typeof value.color !== 'string' || !folderMetadataColorSet.has(value.color)) {
+      return metadataFileFailure();
+    }
+    metadata.color = value.color as FolderMetadataColor;
+  }
+
+  if (value.icon !== undefined && value.icon !== null) {
+    if (typeof value.icon !== 'string' || !folderMetadataIconSet.has(value.icon)) {
+      return metadataFileFailure();
+    }
+    metadata.icon = value.icon as FolderMetadataIcon;
+  }
+
+  return { ok: true, value: metadata };
+}
+
+function normalizeFolderMetadataInput(input: FolderMetadataInput): VaultResult<FolderMetadataInput> {
+  const metadata: FolderMetadataInput = {};
+
+  if (Object.prototype.hasOwnProperty.call(input, 'color')) {
+    if (input.color !== null && (typeof input.color !== 'string' || !folderMetadataColorSet.has(input.color))) {
+      return fail('invalid_metadata', 'color must be one of the supported accent names or null');
+    }
+    metadata.color = input.color;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(input, 'icon')) {
+    if (input.icon !== null && (typeof input.icon !== 'string' || !folderMetadataIconSet.has(input.icon))) {
+      return fail('invalid_metadata', 'icon must be one of the supported icon names or null');
+    }
+    metadata.icon = input.icon;
+  }
+
+  return { ok: true, value: metadata };
+}
+
+async function readFolderMetadataMap(root: string): Promise<VaultResult<FolderMetadataMap>> {
+  let content: string;
+  try {
+    content = await readFile(folderMetadataPath(root), 'utf8');
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return { ok: true, value: {} };
+    }
+    throw error;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(content);
+  } catch {
+    return metadataFileFailure();
+  }
+
+  if (!isRecord(parsed) || !isRecord(parsed.folders)) return metadataFileFailure();
+
+  const map: FolderMetadataMap = {};
+  for (const [folderPath, rawMetadata] of Object.entries(parsed.folders)) {
+    try {
+      validateVaultPath(folderPath, 'folder');
+    } catch {
+      return metadataFileFailure();
+    }
+    const normalized = normalizeFolderMetadataEntry(rawMetadata);
+    if (!normalized.ok) return normalized;
+    if (!isEmptyMetadata(normalized.value)) {
+      map[folderPath] = normalized.value;
+    }
+  }
+
+  return { ok: true, value: map };
+}
+
+async function writeFolderMetadataMap(root: string, metadata: FolderMetadataMap): Promise<void> {
+  const filePath = folderMetadataPath(root);
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true });
+
+  const sortedFolders = Object.fromEntries(
+    Object.entries(metadata)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([folderPath, folderMetadata]) => [folderPath, cloneMetadata(folderMetadata)])
+  );
+  const content = stringifyYaml({ folders: sortedFolders });
+  const temporaryPath = path.join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+
+  try {
+    await writeFile(temporaryPath, content, 'utf8');
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    /* v8 ignore start -- Cleanup runs only after an atomic-write filesystem failure; success-path durability is covered by raw folders.yml assertions. */
+    await rm(temporaryPath, { force: true });
+    throw error;
+    /* v8 ignore stop */
+  }
+}
+
+function applyFolderMetadataInput(current: FolderMetadata, input: FolderMetadataInput): FolderMetadata {
+  const next = cloneMetadata(current);
+
+  if (Object.prototype.hasOwnProperty.call(input, 'color')) {
+    if (input.color === null) {
+      delete next.color;
+    } else if (input.color !== undefined) {
+      next.color = input.color as FolderMetadataColor;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(input, 'icon')) {
+    if (input.icon === null) {
+      delete next.icon;
+    } else if (input.icon !== undefined) {
+      next.icon = input.icon as FolderMetadataIcon;
+    }
+  }
+
+  return next;
+}
+
+function removeFolderMetadataSubtree(metadata: FolderMetadataMap, deletedPath: string): FolderMetadataMap {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([folderPath]) => {
+      return folderPath !== deletedPath && relativeDescendantPath(deletedPath, folderPath) === null;
+    })
+  );
+}
+
+function moveFolderMetadataSubtree(metadata: FolderMetadataMap, fromPath: string, toPath: string): FolderMetadataMap {
+  const next: FolderMetadataMap = {};
+  for (const [folderPath, folderMetadata] of Object.entries(metadata)) {
+    const fromDescendant = relativeDescendantPath(fromPath, folderPath);
+    if (fromDescendant !== null) {
+      const movedPath = fromDescendant.length === 0 ? toPath : path.posix.join(toPath, fromDescendant);
+      next[movedPath] = folderMetadata;
+      continue;
+    }
+
+    if (folderPath === toPath || relativeDescendantPath(toPath, folderPath) !== null) {
+      continue;
+    }
+
+    next[folderPath] = folderMetadata;
+  }
+  return next;
+}
+
+function attachFolderMetadata(entries: VaultEntry[], metadata: FolderMetadataMap): VaultEntry[] {
+  return entries.map((entry) => {
+    if (entry.kind !== 'folder' || metadata[entry.path] === undefined) return entry;
+    return { ...entry, metadata: cloneMetadata(metadata[entry.path]) };
+  });
+}
+
 export async function getVaultInfo(ctx: VaultContext): Promise<VaultResult<VaultInfo>> {
   try {
     await mkdir(ctx.root, { recursive: true });
@@ -188,7 +466,9 @@ export async function listVaultTree(
 
     const entries: VaultEntry[] = [];
     await walkEntries(ctx.root, under, 0, input.depth ?? DEFAULT_DEPTH, input.entryCap ?? DEFAULT_ENTRY_CAP, entries);
-    return { ok: true, value: { entries } };
+    const metadata = await readFolderMetadataMap(ctx.root);
+    if (!metadata.ok) return metadata;
+    return { ok: true, value: { entries: attachFolderMetadata(entries, metadata.value) } };
   } catch (err) {
     const pathResult = classifyPathError(err);
     /* v8 ignore next -- Defensive false branch rethrows unexpected read errors; invalid-path classification is covered. */
@@ -199,6 +479,74 @@ export async function listVaultTree(
     /* v8 ignore next -- Defensive rethrow for unexpected tree failures outside classified path/cap errors. */
     throw err;
   }
+}
+
+export async function getFolderMetadata(ctx: VaultContext, folderPath: string): Promise<VaultResult<FolderMetadataValue>> {
+  try {
+    const rel = validateVaultPath(folderPath, 'folder');
+    const abs = vaultPath(ctx.root, rel);
+    const s = await statOrNull(abs);
+    if (!s || !s.isDirectory()) return fail('not_found', 'folder not found');
+    const metadata = await readFolderMetadataMap(ctx.root);
+    if (!metadata.ok) return metadata;
+    return { ok: true, value: { path: rel, metadata: cloneMetadata(metadata.value[rel] ?? {}) } };
+  } catch (err) {
+    const pathResult = classifyPathError(err);
+    /* v8 ignore next -- Defensive false branch rethrows unexpected folder metadata read errors; invalid-path classification is covered. */
+    if (pathResult) return pathResult;
+    /* v8 ignore next -- Defensive rethrow for unexpected metadata read failures outside classified path/not-found/parse errors. */
+    throw err;
+  }
+}
+
+export async function setFolderMetadata(
+  ctx: VaultContext,
+  folderPath: string,
+  input: FolderMetadataInput
+): Promise<VaultResult<FolderMetadataValue>> {
+  try {
+    const rel = validateVaultPath(folderPath, 'folder');
+    const normalizedInput = normalizeFolderMetadataInput(input);
+    if (!normalizedInput.ok) return normalizedInput;
+
+    const abs = vaultPath(ctx.root, rel);
+    const s = await statOrNull(abs);
+    if (!s || !s.isDirectory()) return fail('not_found', 'folder not found');
+
+    const metadata = await readFolderMetadataMap(ctx.root);
+    if (!metadata.ok) return metadata;
+
+    const nextMetadata = applyFolderMetadataInput(metadata.value[rel] ?? {}, normalizedInput.value);
+    const nextMap = { ...metadata.value };
+    if (isEmptyMetadata(nextMetadata)) {
+      delete nextMap[rel];
+    } else {
+      nextMap[rel] = nextMetadata;
+    }
+    await writeFolderMetadataMap(ctx.root, nextMap);
+
+    const audit = await emitVaultAudit({
+      root: ctx.root,
+      actor: ctx.actor,
+      operation: 'write',
+      entityKind: 'folder',
+      path: rel,
+      summary: `Updated folder metadata for ${rel}`
+    });
+    return { ok: true, value: { path: rel, metadata: nextMetadata, audit } };
+  } catch (err) {
+    const pathResult = classifyPathError(err);
+    /* v8 ignore next -- Defensive false branch rethrows unexpected folder metadata write errors; invalid-path classification is covered. */
+    if (pathResult) return pathResult;
+    /* v8 ignore next -- Defensive rethrow for unexpected metadata write failures outside classified path/not-found/parse errors. */
+    throw err;
+  }
+}
+
+export async function listFolderMetadata(ctx: VaultContext): Promise<VaultResult<{ folders: FolderMetadataMap }>> {
+  const metadata = await readFolderMetadataMap(ctx.root);
+  if (!metadata.ok) return metadata;
+  return { ok: true, value: { folders: metadata.value } };
 }
 
 export async function readVaultFile(ctx: VaultContext, filePath: string): Promise<VaultResult<ReadFileValue>> {
@@ -338,6 +686,8 @@ export async function deleteVaultFolder(
     if (children.length > 0 && input.recursive !== true) {
       return fail('folder_not_empty', 'folder is not empty');
     }
+    const metadata = await readFolderMetadataMap(ctx.root);
+    if (!metadata.ok) return metadata;
 
     let trashPath: string | undefined;
     if (input.permanent === true) {
@@ -348,6 +698,7 @@ export async function deleteVaultFolder(
       await mkdir(path.dirname(trashAbs), { recursive: true });
       await rename(abs, trashAbs);
     }
+    await writeFolderMetadataMap(ctx.root, removeFolderMetadataSubtree(metadata.value, rel));
 
     const audit = await emitVaultAudit({
       root: ctx.root,
@@ -383,6 +734,8 @@ export async function moveVaultPath(
     if (!s || (input.kind === 'file' ? !s.isFile() : !s.isDirectory())) {
       return fail('not_found', `${input.kind} not found`);
     }
+    const metadata = input.kind === 'folder' ? await readFolderMetadataMap(ctx.root) : undefined;
+    if (metadata !== undefined && !metadata.ok) return metadata;
     if ((await exists(toAbs)) && input.overwrite !== true) {
       return fail('path_collision', 'target path already exists');
     }
@@ -405,6 +758,9 @@ export async function moveVaultPath(
         throw err;
       }
       /* v8 ignore stop */
+    }
+    if (metadata !== undefined) {
+      await writeFolderMetadataMap(ctx.root, moveFolderMetadataSubtree(metadata.value, from, to));
     }
     const audit = await emitVaultAudit({
       root: ctx.root,

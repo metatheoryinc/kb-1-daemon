@@ -200,6 +200,24 @@ export function createApp(options: CreateAppOptions): Hono {
       }), 201);
     });
 
+    api.get('/folders/*/metadata', async (context) => {
+      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
+      return mapServiceResult(context, await vaultService.getFolderMetadata({ path: folderPath }));
+    });
+
+    api.put('/folders/*/metadata', async (context) => {
+      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const metadata = readFolderMetadataBody(body.body);
+      if (!metadata.ok) return mapServiceResult(context, metadata);
+      return mapServiceResult(context, await vaultService.setFolderMetadata({
+        path: folderPath,
+        metadata: metadata.metadata,
+        actor: { kind: 'user' }
+      }));
+    });
+
     api.delete('/folders/*', async (context) => {
       const folderPath = filePathParam(context.req.path, '/api/folders/');
       const recursive = context.req.query('recursive') === 'true';
@@ -278,8 +296,11 @@ function mapServiceResult(
 function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 500 {
   switch (error) {
     case 'invalid_path':
+    case 'invalid_metadata':
     case 'invalid_request':
       return 400;
+    case 'metadata_parse_failed':
+      return 500;
     case 'not_found':
       return 404;
     case 'already_exists':
@@ -296,4 +317,24 @@ function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 |
     case 'ambiguous':
       return 409;
   }
+}
+
+function readFolderMetadataBody(body: Record<string, unknown>): ServiceResult<{ metadata: { color?: string | null; icon?: string | null } }> {
+  const metadata: { color?: string | null; icon?: string | null } = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, 'color')) {
+    if (body.color !== null && typeof body.color !== 'string') {
+      return { ok: false, error: 'invalid_request', message: 'color must be a string or null when provided' };
+    }
+    metadata.color = body.color;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'icon')) {
+    if (body.icon !== null && typeof body.icon !== 'string') {
+      return { ok: false, error: 'invalid_request', message: 'icon must be a string or null when provided' };
+    }
+    metadata.icon = body.icon;
+  }
+
+  return { ok: true, metadata };
 }
