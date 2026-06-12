@@ -13,6 +13,7 @@ export {
   DEFAULT_IDLE_SESSION_GRACE_MS,
   DocumentSessionManager,
   type ClientDocumentSession,
+  type FlushDocumentSessionsResult,
   type DocumentSessionManagerOptions
 } from './manager.js';
 export {

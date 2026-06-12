@@ -4,7 +4,13 @@ import {
   createLocalMcpEndpoint,
   type LocalMcpEndpoint
 } from '@kb-2/local-mcp';
-import { createVaultService, type LocalMcpVaultService, type ServiceErrorCode, type ServiceResult } from '@kb-2/vault-service';
+import {
+  createVaultService,
+  type ServiceErrorCode,
+  type ServiceResult,
+  type VaultChangeEvent,
+  type VaultService
+} from '@kb-2/vault-service';
 import { resolve } from 'node:path';
 
 import { SERVICE_NAME } from './config.js';
@@ -26,7 +32,7 @@ export interface CreateAppOptions {
   statusFile: string;
   vaultRoot?: string;
   documentSessions?: DocumentSessionManager;
-  vaultService?: LocalMcpVaultService;
+  vaultService?: VaultService;
   demoDocumentSession?: OneFileDocumentSession;
   mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
@@ -76,6 +82,14 @@ export function createApp(options: CreateAppOptions): Hono {
       documentSessions: options.documentSessions ?? new DocumentSessionManager({ root: options.vaultRoot })
     });
     const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
+
+    api.post('/ops/flush', async (context) => {
+      return mapServiceResult(context, await vaultService.flushDirtySessions());
+    });
+
+    api.get('/events', () => {
+      return eventStreamResponse(vaultService);
+    });
 
     api.get('/vault', async (context) => {
       return mapServiceResult(context, await vaultService.vaultInfo());
@@ -287,6 +301,34 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   return app;
+}
+
+function eventStreamResponse(vaultService: VaultService): Response {
+  const encoder = new TextEncoder();
+  let unsubscribe: () => void = () => undefined;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      unsubscribe = vaultService.onEvent((event) => {
+        controller.enqueue(encoder.encode(formatServerSentEvent(event)));
+      });
+    },
+    cancel() {
+      unsubscribe();
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive'
+    }
+  });
+}
+
+function formatServerSentEvent(event: VaultChangeEvent): string {
+  return `event: change\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 function mapServiceResult(

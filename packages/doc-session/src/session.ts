@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import diff from 'fast-diff';
@@ -155,6 +155,10 @@ export class OneFileDocumentSession {
 
   hasActivePersistFailure(): boolean {
     return this.persistFailed;
+  }
+
+  hasUnsettledPersist(): boolean {
+    return this.persistRequested || this.persistPromise !== undefined || this.persistFailureError !== undefined;
   }
 
   async reset(content = this.defaultContent): Promise<string> {
@@ -403,6 +407,7 @@ export class OneFileDocumentSession {
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
       this.markPersistRecovered();
+      this.emitEvent('content-persisted');
     } finally {
       if (this.pendingWriteHash === contentHash) {
         this.pendingWriteHash = undefined;
@@ -660,11 +665,27 @@ async function atomicWriteFile(filePath: string, content: string): Promise<void>
 
   const temporaryPath = join(directory, `.${process.pid}.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporaryPath, content, 'utf8');
+    const file = await open(temporaryPath, 'w');
+    try {
+      await file.writeFile(content, 'utf8');
+      await file.sync();
+    } finally {
+      await file.close();
+    }
     await rename(temporaryPath, filePath);
+    await fsyncDirectory(directory);
   } catch (error) {
     await rm(temporaryPath, { force: true });
     throw error;
+  }
+}
+
+async function fsyncDirectory(directory: string): Promise<void> {
+  const handle = await open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 

@@ -107,6 +107,22 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('flushes dirty manager sessions and re-emits content-persisted events', async () => {
+    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const events: DocumentSessionEvent[] = [];
+    manager.onEvent((event) => events.push(event));
+    const session = manager.getSession('notes/flush.md');
+    await session.open();
+
+    session.ydoc.getText('markdown').insert(0, 'manager flush\n');
+    await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 1 });
+
+    await expect(readFile(join(kb2Home, 'demo-vault', 'notes', 'flush.md'), 'utf8')).resolves.toBe('manager flush\n');
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'content-persisted', path: 'notes/flush.md' }));
+    await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 0 });
+    await manager.close();
+  });
+
   it('issues baselines, rejects stale baseline edits with current content, and retries with the fresh baseline', async () => {
     const session = new OneFileDocumentSession(filePath, { defaultContent: 'one two three\n' });
     await session.open();
@@ -389,7 +405,7 @@ describe('OneFileDocumentSession', () => {
       return content.includes('external edit\n') && content.includes('client edit\n');
     }, () => `Timed out waiting for external and client edits to persist; content=${session.ydoc.getText('markdown').toString()}`);
 
-    expect(eventKinds(events)).toEqual(['external-merge']);
+    expect(eventKinds(events)).toEqual(['external-merge', 'content-persisted']);
     const finalContent = await readFile(filePath, 'utf8');
     expect(finalContent).toContain('external edit\n');
     expect(finalContent).toContain('client edit\n');
