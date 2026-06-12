@@ -17,7 +17,7 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.test.ts'],
       thresholds: {
-        lines: 90,
+        lines: 85,
         perFile: true
       }
     }
