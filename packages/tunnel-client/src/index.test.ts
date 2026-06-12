@@ -1,6 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { TUNNEL_CLOSE_CODES, TUNNEL_PENDING_STREAM_FRAME_LIMIT } from '@kb-2/tunnel-protocol';
 import {
+  TUNNEL_CLOSE_CODES,
+  TUNNEL_PENDING_STREAM_FRAME_LIMIT,
+  TUNNEL_WS_FRAME_BYTE_LIMIT,
+} from '@kb-2/tunnel-protocol';
+import {
+  ChunkedHttpRequestAssembler,
   DialbackBridge,
   createBackoffDelay,
   relayInternalUrl,
@@ -60,6 +65,56 @@ describe('tunnel-client helpers', () => {
     expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1'), '__kb2_tunnel/control').href).toBe(
       'ws://127.0.0.1:9920/t/dev1/__kb2_tunnel/control',
     );
+  });
+});
+
+describe('ChunkedHttpRequestAssembler', () => {
+  it('assembles chunked HTTP request bodies in sequence order', () => {
+    const assembler = new ChunkedHttpRequestAssembler();
+    assembler.start({
+      type: 'http.request.start',
+      id: 'req-1',
+      method: 'POST',
+      path: '/upload',
+      headers: { 'content-type': 'application/octet-stream' },
+      totalBytes: 5,
+    });
+    assembler.chunk({ type: 'http.request.chunk', id: 'req-1', sequence: 1, bodyB64: Buffer.from([3, 4]).toString('base64') });
+    assembler.chunk({ type: 'http.request.chunk', id: 'req-1', sequence: 0, bodyB64: Buffer.from([1, 2, 3]).toString('base64') });
+
+    expect(assembler.end({ type: 'http.request.end', id: 'req-1', chunks: 2 })).toEqual({
+      type: 'http.request',
+      id: 'req-1',
+      method: 'POST',
+      path: '/upload',
+      headers: { 'content-type': 'application/octet-stream' },
+      bodyB64: Buffer.from([1, 2, 3, 3, 4]).toString('base64'),
+    });
+  });
+
+  it('drops incomplete or oversized chunked HTTP requests', () => {
+    const assembler = new ChunkedHttpRequestAssembler();
+    assembler.start({
+      type: 'http.request.start',
+      id: 'req-1',
+      method: 'POST',
+      path: '/upload',
+      headers: {},
+      totalBytes: 1,
+    });
+    assembler.chunk({ type: 'http.request.chunk', id: 'req-1', sequence: 0, bodyB64: Buffer.from([1, 2]).toString('base64') });
+    expect(assembler.end({ type: 'http.request.end', id: 'req-1', chunks: 1 })).toBeUndefined();
+
+    assembler.start({
+      type: 'http.request.start',
+      id: 'req-2',
+      method: 'POST',
+      path: '/upload',
+      headers: {},
+      totalBytes: 2,
+    });
+    assembler.chunk({ type: 'http.request.chunk', id: 'req-2', sequence: 0, bodyB64: Buffer.from([1]).toString('base64') });
+    expect(assembler.end({ type: 'http.request.end', id: 'req-2', chunks: 2 })).toBeUndefined();
   });
 });
 
@@ -144,6 +199,23 @@ describe('DialbackBridge', () => {
     expect(daemonSocket.sent).toEqual([{ data: Buffer.from([9]), options: { binary: true } }]);
   });
 
+  it('closes both sockets when a relay websocket frame exceeds the tunnel cap', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket }).start();
+
+    relaySocket.message(Buffer.alloc(TUNNEL_WS_FRAME_BYTE_LIMIT + 1));
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+      reason: 'Relay websocket frame exceeded tunnel cap',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+      reason: 'Relay websocket frame exceeded tunnel cap',
+    });
+  });
+
   it('forwards daemon frames back to the relay socket', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
@@ -154,6 +226,25 @@ describe('DialbackBridge', () => {
     daemonSocket.message(Buffer.from([4]), true);
 
     expect(relaySocket.sent).toEqual([{ data: Buffer.from([4]), options: { binary: true } }]);
+  });
+
+  it('closes both sockets when a daemon websocket frame exceeds the tunnel cap', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    relaySocket.open();
+    daemonSocket.open();
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket }).start();
+
+    daemonSocket.message(Buffer.alloc(TUNNEL_WS_FRAME_BYTE_LIMIT + 1));
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+      reason: 'Daemon websocket frame exceeded tunnel cap',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+      reason: 'Daemon websocket frame exceeded tunnel cap',
+    });
   });
 
   it('drops daemon frames while the relay socket is not open', () => {

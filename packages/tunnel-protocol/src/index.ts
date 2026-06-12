@@ -130,12 +130,55 @@ export type TunnelHttpRequestEnvelope = {
   bodyB64: string | null;
 };
 
+export type TunnelHttpRequestStartEnvelope = {
+  type: "http.request.start";
+  id: string;
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  totalBytes: number;
+};
+
+export type TunnelHttpRequestChunkEnvelope = {
+  type: "http.request.chunk";
+  id: string;
+  sequence: number;
+  bodyB64: string;
+};
+
+export type TunnelHttpRequestEndEnvelope = {
+  type: "http.request.end";
+  id: string;
+  chunks: number;
+};
+
 export type TunnelHttpResponseEnvelope = {
   type: "http.response";
   id: string;
   status: number;
   headers: Record<string, string>;
   bodyB64: string | null;
+};
+
+export type TunnelHttpResponseStartEnvelope = {
+  type: "http.response.start";
+  id: string;
+  status: number;
+  headers: Record<string, string>;
+  totalBytes: number;
+};
+
+export type TunnelHttpResponseChunkEnvelope = {
+  type: "http.response.chunk";
+  id: string;
+  sequence: number;
+  bodyB64: string;
+};
+
+export type TunnelHttpResponseEndEnvelope = {
+  type: "http.response.end";
+  id: string;
+  chunks: number;
 };
 
 export type TunnelWebSocketOpenEnvelope = {
@@ -154,12 +197,18 @@ export type TunnelWebSocketDialbackHello = {
 
 export type TunnelControlClientMessage =
   | TunnelControlClientHello
-  | TunnelHttpResponseEnvelope;
+  | TunnelHttpResponseEnvelope
+  | TunnelHttpResponseStartEnvelope
+  | TunnelHttpResponseChunkEnvelope
+  | TunnelHttpResponseEndEnvelope;
 
 export type TunnelControlServerMessage =
   | TunnelControlServerReady
   | TunnelControlServerError
   | TunnelHttpRequestEnvelope
+  | TunnelHttpRequestStartEnvelope
+  | TunnelHttpRequestChunkEnvelope
+  | TunnelHttpRequestEndEnvelope
   | TunnelWebSocketOpenEnvelope;
 
 export type TunnelDialbackClientMessage = TunnelWebSocketDialbackHello;

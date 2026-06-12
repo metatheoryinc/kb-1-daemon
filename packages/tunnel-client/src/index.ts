@@ -1,13 +1,19 @@
 import {
   PendingFrameBuffer,
   TUNNEL_CLOSE_CODES,
+  TUNNEL_HTTP_BODY_CHUNK_BYTES,
+  TUNNEL_HTTP_PENDING_BYTE_LIMIT,
   TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
+  TUNNEL_WS_FRAME_BYTE_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
   TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS,
   decodeTunnelMessage,
   encodeTunnelMessage,
   type TunnelControlServerMessage,
+  type TunnelHttpRequestChunkEnvelope,
+  type TunnelHttpRequestEndEnvelope,
   type TunnelHttpRequestEnvelope,
+  type TunnelHttpRequestStartEnvelope,
   type TunnelHttpResponseEnvelope,
   type TunnelWebSocketOpenEnvelope,
 } from '@kb-2/tunnel-protocol';
@@ -58,6 +64,7 @@ export class TunnelClient {
   private readonly random: () => number;
   private control: WebSocket | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly httpAssembler = new ChunkedHttpRequestAssembler();
   private stopped = true;
   private reconnectAttempt = 0;
 
@@ -155,8 +162,21 @@ export class TunnelClient {
         });
         return;
       case 'http.request':
-        control.send(encodeJsonBytes(await this.proxyHttp(message)));
+        this.sendHttpResponse(control, await this.proxyHttp(message));
         return;
+      case 'http.request.start':
+        this.httpAssembler.start(message);
+        return;
+      case 'http.request.chunk':
+        this.httpAssembler.chunk(message);
+        return;
+      case 'http.request.end': {
+        const assembled = this.httpAssembler.end(message);
+        if (assembled) {
+          this.sendHttpResponse(control, await this.proxyHttp(assembled));
+        }
+        return;
+      }
       case 'ws.open':
         this.openDialback(message);
         return;
@@ -194,6 +214,44 @@ export class TunnelClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private sendHttpResponse(control: WebSocket, envelope: TunnelHttpResponseEnvelope): void {
+    if (!envelope.bodyB64) {
+      control.send(encodeJsonBytes(envelope));
+      return;
+    }
+
+    const body = Buffer.from(envelope.bodyB64, 'base64');
+    if (body.byteLength <= TUNNEL_HTTP_BODY_CHUNK_BYTES) {
+      control.send(encodeJsonBytes(envelope));
+      return;
+    }
+
+    control.send(encodeJsonBytes({
+      type: 'http.response.start',
+      id: envelope.id,
+      status: envelope.status,
+      headers: envelope.headers,
+      totalBytes: body.byteLength,
+    }));
+
+    let sequence = 0;
+    for (let offset = 0; offset < body.byteLength; offset += TUNNEL_HTTP_BODY_CHUNK_BYTES) {
+      control.send(encodeJsonBytes({
+        type: 'http.response.chunk',
+        id: envelope.id,
+        sequence,
+        bodyB64: body.subarray(offset, offset + TUNNEL_HTTP_BODY_CHUNK_BYTES).toString('base64'),
+      }));
+      sequence += 1;
+    }
+
+    control.send(encodeJsonBytes({
+      type: 'http.response.end',
+      id: envelope.id,
+      chunks: sequence,
+    }));
   }
 
   private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {
@@ -270,12 +328,20 @@ export class DialbackBridge {
     });
 
     this.options.relaySocket.on('message', (data, isBinary) => {
+      const frame = rawDataToBytes(data);
+      if (frame.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
+        this.closeBoth(
+          TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+          'Relay websocket frame exceeded tunnel cap',
+        );
+        return;
+      }
+
       if (this.options.daemonSocket.readyState === WebSocket.OPEN) {
         this.options.daemonSocket.send(data, { binary: isBinary });
         return;
       }
 
-      const frame = rawDataToBytes(data);
       const queued = this.pendingRelayFrames.push(frame);
       if (!queued.ok) {
         this.logger.log('warn', 'dial-back pending buffer overflow', {
@@ -292,6 +358,15 @@ export class DialbackBridge {
     });
 
     this.options.daemonSocket.on('message', (data, isBinary) => {
+      const frame = rawDataToBytes(data);
+      if (frame.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
+        this.closeBoth(
+          TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
+          'Daemon websocket frame exceeded tunnel cap',
+        );
+        return;
+      }
+
       if (this.options.relaySocket.readyState === WebSocket.OPEN) {
         this.options.relaySocket.send(data, { binary: isBinary });
       }
@@ -337,6 +412,69 @@ export class DialbackBridge {
     this.pendingRelayFrames.clear();
     this.options.relaySocket.close(code, reason);
     this.options.daemonSocket.close(code, reason);
+  }
+}
+
+type ChunkedHttpRequestDraft = {
+  start: TunnelHttpRequestStartEnvelope;
+  chunks: Map<number, Buffer>;
+  receivedBytes: number;
+};
+
+export class ChunkedHttpRequestAssembler {
+  private readonly drafts = new Map<string, ChunkedHttpRequestDraft>();
+
+  start(message: TunnelHttpRequestStartEnvelope): void {
+    this.drafts.set(message.id, {
+      start: message,
+      chunks: new Map(),
+      receivedBytes: 0,
+    });
+  }
+
+  chunk(message: TunnelHttpRequestChunkEnvelope): void {
+    const draft = this.drafts.get(message.id);
+    if (!draft || draft.chunks.has(message.sequence)) return;
+
+    const chunk = Buffer.from(message.bodyB64, 'base64');
+    if (
+      draft.receivedBytes + chunk.byteLength > draft.start.totalBytes ||
+      draft.receivedBytes + chunk.byteLength > TUNNEL_HTTP_PENDING_BYTE_LIMIT
+    ) {
+      this.drafts.delete(message.id);
+      return;
+    }
+
+    draft.chunks.set(message.sequence, chunk);
+    draft.receivedBytes += chunk.byteLength;
+  }
+
+  end(message: TunnelHttpRequestEndEnvelope): TunnelHttpRequestEnvelope | undefined {
+    const draft = this.drafts.get(message.id);
+    this.drafts.delete(message.id);
+    if (!draft || draft.chunks.size !== message.chunks || draft.receivedBytes !== draft.start.totalBytes) {
+      return undefined;
+    }
+
+    const ordered: Buffer[] = [];
+    for (let sequence = 0; sequence < message.chunks; sequence += 1) {
+      const chunk = draft.chunks.get(sequence);
+      if (!chunk) return undefined;
+      ordered.push(chunk);
+    }
+
+    return {
+      type: 'http.request',
+      id: draft.start.id,
+      method: draft.start.method,
+      path: draft.start.path,
+      headers: draft.start.headers,
+      bodyB64: Buffer.concat(ordered).toString('base64'),
+    };
+  }
+
+  cancel(id: string): void {
+    this.drafts.delete(id);
   }
 }
 

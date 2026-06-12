@@ -20,6 +20,57 @@ it("round-trips an HTTP response envelope", () => {
   expect(decodeTunnelMessage(encodeTunnelMessage(message))).toEqual(message);
 });
 
+it("round-trips chunked HTTP request envelopes", () => {
+  const start = {
+    type: "http.request.start",
+    id: "req-1",
+    method: "POST",
+    path: "/upload",
+    headers: { "content-type": "application/octet-stream" },
+    totalBytes: 262145
+  } as const;
+  const chunk = {
+    type: "http.request.chunk",
+    id: "req-1",
+    sequence: 1,
+    bodyB64: "AQI="
+  } as const;
+  const end = {
+    type: "http.request.end",
+    id: "req-1",
+    chunks: 2
+  } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(start))).toEqual(start);
+  expect(decodeTunnelMessage(encodeTunnelMessage(chunk))).toEqual(chunk);
+  expect(decodeTunnelMessage(encodeTunnelMessage(end))).toEqual(end);
+});
+
+it("round-trips chunked HTTP response envelopes", () => {
+  const start = {
+    type: "http.response.start",
+    id: "req-1",
+    status: 200,
+    headers: { "content-type": "application/octet-stream" },
+    totalBytes: 262145
+  } as const;
+  const chunk = {
+    type: "http.response.chunk",
+    id: "req-1",
+    sequence: 1,
+    bodyB64: "AQI="
+  } as const;
+  const end = {
+    type: "http.response.end",
+    id: "req-1",
+    chunks: 2
+  } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(start))).toEqual(start);
+  expect(decodeTunnelMessage(encodeTunnelMessage(chunk))).toEqual(chunk);
+  expect(decodeTunnelMessage(encodeTunnelMessage(end))).toEqual(end);
+});
+
 it("carries the relay prototype protocol version", () => {
   expect(TUNNEL_PROTOCOL_VERSION).toBe(2);
 });
