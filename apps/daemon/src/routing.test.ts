@@ -211,6 +211,113 @@ describe('daemon routing', () => {
     expect(audit[1]).toMatchObject({ operation: 'write', path: 'notes/a.md' });
   });
 
+  it('attributes REST writes from the x-kb2-actor header in responses and audit JSONL', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({
+      statusFile: config.statusFile,
+      vaultRoot: config.vaultRoot,
+      actorDefault: config.actorDefault
+    });
+    const suppliedActor = {
+      kind: 'integration',
+      id: 'user-123',
+      name: 'Ada Lovelace',
+      client: 'kb-1-cloud'
+    };
+
+    const created = await app.request('/api/files/notes/attributed.md', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'text/plain',
+        'x-kb2-actor': JSON.stringify(suppliedActor)
+      },
+      body: 'attributed\n'
+    });
+
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/attributed.md',
+      audit: { actor: suppliedActor }
+    });
+    await expect(readFile(join(config.vaultRoot, 'notes/attributed.md'), 'utf8')).resolves.toBe('attributed\n');
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      operation: 'create',
+      entityKind: 'file',
+      path: 'notes/attributed.md',
+      actor: suppliedActor
+    });
+  });
+
+  it.each([
+    { name: 'default user mode', env: {}, expectedActor: { kind: 'user' } },
+    { name: 'configured unknown mode', env: { KB2_ACTOR_DEFAULT: 'unknown' }, expectedActor: { kind: 'unknown' } }
+  ])('uses $name for REST writes without an actor header', async ({ env, expectedActor }) => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home, ...env } });
+    const app = createApp({
+      statusFile: config.statusFile,
+      vaultRoot: config.vaultRoot,
+      actorDefault: config.actorDefault
+    });
+
+    const created = await app.request('/api/files/notes/defaulted.md', {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'defaulted\n'
+    });
+
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ok: true,
+      audit: { actor: expectedActor }
+    });
+    await expect(readFile(join(config.vaultRoot, 'notes/defaulted.md'), 'utf8')).resolves.toBe('defaulted\n');
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      operation: 'create',
+      path: 'notes/defaulted.md',
+      actor: expectedActor
+    });
+  });
+
+  it.each([
+    { name: 'bad JSON', header: '{' },
+    { name: 'spoofed system kind', header: JSON.stringify({ kind: 'system' }) },
+    { name: 'reserved mcp_client kind', header: JSON.stringify({ kind: 'mcp_client' }) },
+    { name: 'unknown kind', header: JSON.stringify({ kind: 'service' }) },
+    { name: 'oversized payload', header: JSON.stringify({ kind: 'user', name: 'x'.repeat(1025) }) },
+    { name: 'non-string identity field', header: JSON.stringify({ kind: 'user', id: 123 }) }
+  ])('rejects malformed REST actor header: $name', async ({ header }) => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({
+      statusFile: config.statusFile,
+      vaultRoot: config.vaultRoot,
+      actorDefault: config.actorDefault
+    });
+
+    const response = await app.request('/api/files/notes/rejected.md', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'text/plain',
+        'x-kb2-actor': header
+      },
+      body: 'must not write\n'
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'invalid_actor'
+    });
+    await expect(stat(join(config.vaultRoot, 'notes/rejected.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(config.vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('moves and deletes live file sessions through the API with doc events and trash', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });

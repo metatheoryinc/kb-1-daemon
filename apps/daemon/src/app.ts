@@ -8,12 +8,13 @@ import {
   createVaultService,
   type ServiceErrorCode,
   type ServiceResult,
+  type VaultActor,
   type VaultChangeEvent,
   type VaultService
 } from '@kb-2/vault-service';
 import { resolve } from 'node:path';
 
-import { SERVICE_NAME } from './config.js';
+import { SERVICE_NAME, type ActorDefault } from './config.js';
 import {
   filePathParam,
   queryNumber,
@@ -27,6 +28,8 @@ import { readDaemonStatus } from './status.js';
 import { missingUiBuildResponse, proxyUi, serveUi } from './ui-static.js';
 
 const DEMO_DOCUMENT_PATH = 'demo-vault/hello-world.md';
+const ACTOR_HEADER = 'x-kb2-actor';
+const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
   statusFile: string;
@@ -37,6 +40,7 @@ export interface CreateAppOptions {
   mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
   webProxyTarget?: string;
+  actorDefault?: ActorDefault;
 }
 
 export function createApp(options: CreateAppOptions): Hono {
@@ -82,6 +86,7 @@ export function createApp(options: CreateAppOptions): Hono {
       documentSessions: options.documentSessions ?? new DocumentSessionManager({ root: options.vaultRoot })
     });
     const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
+    const actorDefault = options.actorDefault ?? 'user';
 
     api.post('/ops/flush', async (context) => {
       return mapServiceResult(context, await vaultService.flushDirtySessions());
@@ -121,6 +126,8 @@ export function createApp(options: CreateAppOptions): Hono {
 
     api.put('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const content = await requestTextContent(context.req.raw);
       if (!content.ok) return mapServiceResult(context, content);
       const overwrite = context.req.query('overwrite') === 'true';
@@ -128,22 +135,26 @@ export function createApp(options: CreateAppOptions): Hono {
         path: filePath,
         content: content.content,
         overwrite,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }), overwrite ? 200 : 201);
     });
 
     api.delete('/files/*', async (context) => {
       const filePath = filePathParam(context.req.path, '/api/files/');
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const permanent = context.req.query('permanent') === 'true';
       return mapServiceResult(context, await vaultService.deleteNote({
         path: filePath,
         permanent,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }));
     });
 
     api.post('/files/*', async (context) => {
       if (context.req.path.endsWith('/splice')) {
+        const actor = actorFromRequest(context, actorDefault);
+        if (!actor.ok) return mapServiceResult(context, actor);
         const filePath = filePathParam(context.req.path, '/api/files/', '/splice');
         const body = await readJsonObject(context.req.raw);
         if (!body.ok) return mapServiceResult(context, body);
@@ -157,11 +168,13 @@ export function createApp(options: CreateAppOptions): Hono {
           before: splice.request.before,
           after: splice.request.after,
           occurrence: splice.request.occurrence,
-          actor: { kind: 'user' }
+          actor: actor.actor
         }));
       }
 
       if (context.req.path.endsWith('/append')) {
+        const actor = actorFromRequest(context, actorDefault);
+        if (!actor.ok) return mapServiceResult(context, actor);
         const filePath = filePathParam(context.req.path, '/api/files/', '/append');
         const body = await readJsonObject(context.req.raw);
         if (!body.ok) return mapServiceResult(context, body);
@@ -170,11 +183,13 @@ export function createApp(options: CreateAppOptions): Hono {
         return mapServiceResult(context, await vaultService.appendNote({
           path: filePath,
           content: content.value,
-          actor: { kind: 'user' }
+          actor: actor.actor
         }));
       }
 
       if (context.req.path.endsWith('/prepend')) {
+        const actor = actorFromRequest(context, actorDefault);
+        if (!actor.ok) return mapServiceResult(context, actor);
         const filePath = filePathParam(context.req.path, '/api/files/', '/prepend');
         const body = await readJsonObject(context.req.raw);
         if (!body.ok) return mapServiceResult(context, body);
@@ -183,7 +198,7 @@ export function createApp(options: CreateAppOptions): Hono {
         return mapServiceResult(context, await vaultService.prependNote({
           path: filePath,
           content: content.value,
-          actor: { kind: 'user' }
+          actor: actor.actor
         }));
       }
 
@@ -192,6 +207,8 @@ export function createApp(options: CreateAppOptions): Hono {
       }
 
       const fromPath = filePathParam(context.req.path, '/api/files/', '/move');
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
       const to = readRequiredString(body.body, 'to');
@@ -200,17 +217,19 @@ export function createApp(options: CreateAppOptions): Hono {
       return mapServiceResult(context, await vaultService.moveNote({
         fromPath,
         toPath: to.value,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }));
     });
 
     api.post('/folders', async (context) => {
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
       const folderPath = typeof body.body.path === 'string' ? body.body.path : '';
       return mapServiceResult(context, await vaultService.createFolder({
         path: folderPath,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }), 201);
     });
 
@@ -228,6 +247,8 @@ export function createApp(options: CreateAppOptions): Hono {
         return context.json({ ok: false, error: 'Not found' }, 404);
       }
 
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
@@ -236,19 +257,21 @@ export function createApp(options: CreateAppOptions): Hono {
       return mapServiceResult(context, await vaultService.setFolderMetadata({
         path: folderPath,
         metadata: metadata.metadata,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }));
     });
 
     api.delete('/folders/*', async (context) => {
       const folderPath = filePathParam(context.req.path, '/api/folders/');
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const recursive = context.req.query('recursive') === 'true';
       const permanent = context.req.query('permanent') === 'true';
       return mapServiceResult(context, await vaultService.deleteFolder({
         path: folderPath,
         recursive,
         permanent,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }));
     });
 
@@ -257,6 +280,8 @@ export function createApp(options: CreateAppOptions): Hono {
         return context.json({ ok: false, error: 'Not found' }, 404);
       }
 
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
       const fromPath = filePathParam(context.req.path, '/api/folders/', '/move');
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
@@ -266,7 +291,7 @@ export function createApp(options: CreateAppOptions): Hono {
       return mapServiceResult(context, await vaultService.moveFolder({
         fromPath,
         toPath: to.value,
-        actor: { kind: 'user' }
+        actor: actor.actor
       }));
     });
 
@@ -345,6 +370,7 @@ function mapServiceResult(
 
 function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 500 {
   switch (error) {
+    case 'invalid_actor':
     case 'invalid_path':
     case 'invalid_metadata':
     case 'invalid_request':
@@ -367,6 +393,70 @@ function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 |
     case 'ambiguous':
       return 409;
   }
+}
+
+function actorFromRequest(context: Context, actorDefault: ActorDefault): ServiceResult<{ actor: VaultActor }> {
+  const rawActor = context.req.header(ACTOR_HEADER);
+
+  if (rawActor === undefined) {
+    return { ok: true, actor: { kind: actorDefault } };
+  }
+
+  if (new TextEncoder().encode(rawActor).byteLength > MAX_ACTOR_HEADER_BYTES) {
+    return invalidActor(`${ACTOR_HEADER} must be 1 KiB or smaller`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawActor);
+  } catch {
+    return invalidActor(`${ACTOR_HEADER} must be valid JSON`);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return invalidActor(`${ACTOR_HEADER} must be a JSON object`);
+  }
+
+  const actor = parsed as Record<string, unknown>;
+  if (actor.kind !== 'user' && actor.kind !== 'integration') {
+    return invalidActor(`${ACTOR_HEADER}.kind must be "user" or "integration"`);
+  }
+
+  const id = readOptionalActorString(actor, 'id');
+  if (!id.ok) return id;
+  const name = readOptionalActorString(actor, 'name');
+  if (!name.ok) return name;
+  const client = readOptionalActorString(actor, 'client');
+  if (!client.ok) return client;
+
+  return {
+    ok: true,
+    actor: {
+      kind: actor.kind,
+      ...(id.value !== undefined ? { id: id.value } : {}),
+      ...(name.value !== undefined ? { name: name.value } : {}),
+      ...(client.value !== undefined ? { client: client.value } : {})
+    }
+  };
+}
+
+function readOptionalActorString(
+  actor: Record<string, unknown>,
+  key: 'id' | 'name' | 'client'
+): ServiceResult<{ value?: string }> {
+  if (!Object.prototype.hasOwnProperty.call(actor, key)) {
+    return { ok: true };
+  }
+
+  if (typeof actor[key] !== 'string') {
+    return invalidActor(`${ACTOR_HEADER}.${key} must be a string when provided`);
+  }
+
+  return { ok: true, value: actor[key] };
+}
+
+function invalidActor(message: string): ServiceResult<never> {
+  return { ok: false, error: 'invalid_actor', message };
 }
 
 function readFolderMetadataBody(body: Record<string, unknown>): ServiceResult<{ metadata: { color?: string | null; icon?: string | null } }> {

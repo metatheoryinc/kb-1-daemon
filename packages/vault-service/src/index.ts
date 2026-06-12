@@ -37,9 +37,10 @@ export type ServiceErrorCode =
   | 'too_large_splice'
   | 'too_large_document'
   | 'persist_failed'
-  | 'invalid_request';
+  | 'invalid_request'
+  | 'invalid_actor';
 
-type SimpleServiceErrorCode = VaultErrorCode | 'persist_failed' | 'invalid_request';
+type SimpleServiceErrorCode = VaultErrorCode | 'persist_failed' | 'invalid_request' | 'invalid_actor';
 
 export type ServiceFailure =
   | { ok: false; error: SimpleServiceErrorCode; message: string }
@@ -48,7 +49,8 @@ export type ServiceFailure =
   | { ok: false; error: 'too_large_splice'; message: string; limit_bytes: number }
   | { ok: false; error: 'too_large_document'; message: string; current_bytes: number; limit_bytes: number }
   | { ok: false; error: 'persist_failed'; message: string }
-  | { ok: false; error: 'invalid_request'; message: string };
+  | { ok: false; error: 'invalid_request'; message: string }
+  | { ok: false; error: 'invalid_actor'; message: string };
 
 export type ServiceResult<T extends object = object> = ({ ok: true } & T) | ServiceFailure;
 

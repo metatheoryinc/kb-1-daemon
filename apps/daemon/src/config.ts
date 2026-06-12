@@ -4,6 +4,9 @@ import { join, resolve } from 'node:path';
 export const SERVICE_NAME = 'kb2d';
 export const DEFAULT_PORT = 7382;
 export const DEFAULT_HOST = '127.0.0.1';
+export const DEFAULT_ACTOR_DEFAULT = 'user';
+
+export type ActorDefault = 'user' | 'unknown';
 
 export interface DaemonConfig {
   serviceName: typeof SERVICE_NAME;
@@ -11,6 +14,7 @@ export interface DaemonConfig {
   port: number;
   webProxyTarget?: string;
   relay?: DaemonRelayConfig;
+  actorDefault: ActorDefault;
   kb2Home: string;
   daemonHome: string;
   vaultRoot: string;
@@ -86,6 +90,20 @@ export function resolveRelayConfig(env: NodeJS.ProcessEnv = process.env): Daemon
   };
 }
 
+export function resolveActorDefault(env: NodeJS.ProcessEnv = process.env): ActorDefault {
+  const configuredDefault = env.KB2_ACTOR_DEFAULT?.trim();
+
+  if (!configuredDefault) {
+    return DEFAULT_ACTOR_DEFAULT;
+  }
+
+  if (configuredDefault === 'user' || configuredDefault === 'unknown') {
+    return configuredDefault;
+  }
+
+  throw new Error(`KB2_ACTOR_DEFAULT must be "user" or "unknown". Received: ${configuredDefault}`);
+}
+
 export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonConfig {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
@@ -99,6 +117,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     port: resolvePort(env),
     webProxyTarget: resolveWebProxyTarget(env),
     relay: resolveRelayConfig(env),
+    actorDefault: resolveActorDefault(env),
     kb2Home,
     daemonHome,
     vaultRoot,
