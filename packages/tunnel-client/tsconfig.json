@@ -1,13 +1,16 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "../../",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@kb-2/tunnel-protocol": ["../tunnel-protocol/dist/index.d.ts"]
+    }
   },
-  "include": [
-    "src/**/*.ts",
-    "../tunnel-protocol/src/**/*.ts"
-  ]
+  "include": ["src/**/*.ts"]
 }
