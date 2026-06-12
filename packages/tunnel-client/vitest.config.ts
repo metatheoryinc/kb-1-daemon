@@ -1,6 +1,17 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: [
+      {
+        find: /^@kb-2\/tunnel-protocol$/,
+        replacement: fileURLToPath(
+          new URL('../tunnel-protocol/src/index.ts', import.meta.url),
+        ),
+      },
+    ],
+  },
   test: {
     globals: true,
     environment: 'node',

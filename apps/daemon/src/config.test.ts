@@ -1,6 +1,14 @@
 import { join, resolve } from 'node:path';
 
-import { DEFAULT_HOST, DEFAULT_PORT, createDaemonConfig, resolveKb2Home, resolvePort, resolveWebProxyTarget } from './config.js';
+import {
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  createDaemonConfig,
+  resolveKb2Home,
+  resolvePort,
+  resolveRelayConfig,
+  resolveWebProxyTarget
+} from './config.js';
 
 describe('daemon config', () => {
   it('defaults KB2_HOME to a user-level .kb2 directory', () => {
@@ -29,7 +37,9 @@ describe('daemon config', () => {
         KB2_HOME: kb2Home,
         KB2_HOST: '0.0.0.0',
         KB2_PORT: '8399',
-        KB2_WEB_PROXY_TARGET: 'http://127.0.0.1:5173'
+        KB2_WEB_PROXY_TARGET: 'http://127.0.0.1:5173',
+        KB2_RELAY_URL: 'http://127.0.0.1:9920/t/dev1',
+        KB2_RELAY_TOKEN: 'test-token'
       },
       now,
       pid: 1234
@@ -40,6 +50,10 @@ describe('daemon config', () => {
       host: '0.0.0.0',
       port: 8399,
       webProxyTarget: 'http://127.0.0.1:5173',
+      relay: {
+        relayUrl: 'http://127.0.0.1:9920/t/dev1',
+        token: 'test-token'
+      },
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
       vaultRoot: join(kb2Home, 'demo-vault'),
@@ -64,5 +78,25 @@ describe('daemon config', () => {
   it('uses KB2_WEB_PROXY_TARGET when supplied', () => {
     expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' http://127.0.0.1:5173 ' })).toBe('http://127.0.0.1:5173');
     expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' ' })).toBeUndefined();
+  });
+
+  it('keeps relay integration disabled by default', () => {
+    expect(resolveRelayConfig({})).toBeUndefined();
+    expect(createDaemonConfig({ env: {}, homeDir: resolve('/tmp/kb2-home') }).relay).toBeUndefined();
+  });
+
+  it('requires relay URL and token together', () => {
+    expect(() => resolveRelayConfig({ KB2_RELAY_URL: 'http://127.0.0.1:9920/t/dev1' })).toThrow(/KB2_RELAY_URL/);
+    expect(() => resolveRelayConfig({ KB2_RELAY_TOKEN: 'test-token' })).toThrow(/KB2_RELAY_URL/);
+  });
+
+  it('normalizes relay URL when supplied', () => {
+    expect(resolveRelayConfig({
+      KB2_RELAY_URL: ' http://127.0.0.1:9920/t/dev1 ',
+      KB2_RELAY_TOKEN: ' test-token '
+    })).toEqual({
+      relayUrl: 'http://127.0.0.1:9920/t/dev1',
+      token: 'test-token'
+    });
   });
 });

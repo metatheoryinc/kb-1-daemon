@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "emitDeclarationOnly": false,
+    "noEmit": false,
+    "types": ["node"],
+    "paths": {
+      "@kb-2/tunnel-protocol": ["../tunnel-protocol/dist/index.d.ts"]
+    }
+  },
+  "exclude": ["src/**/*.test.ts"]
+}

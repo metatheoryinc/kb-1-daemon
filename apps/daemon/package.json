@@ -19,6 +19,7 @@
     "@hono/node-server": "2.0.4",
     "@kb-2/doc-session": "workspace:*",
     "@kb-2/local-mcp": "workspace:*",
+    "@kb-2/tunnel-client": "workspace:*",
     "@kb-2/vault-core": "workspace:*",
     "@kb-2/vault-service": "workspace:*",
     "hono": "4.12.25",
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/ws": "8.18.1",
-    "@vitest/coverage-v8": "4.1.8"
+    "@vitest/coverage-v8": "4.1.8",
+    "yjs": "13.6.31"
   }
 }
