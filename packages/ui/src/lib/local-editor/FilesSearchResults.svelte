@@ -25,7 +25,15 @@
         <button type="button" class="result" onclick={() => onOpen?.(result.path)}>
           <span class="path">{result.path}</span>
           <span class="line">Line {result.line}</span>
-          <span class="snippet">{result.lineText}</span>
+          <span class="snippet">
+            {#if result.before && result.before.length > 0}
+              <span class="context">{result.before.at(-1)}</span>
+            {/if}
+            <span>{result.lineText}</span>
+            {#if result.after && result.after.length > 0}
+              <span class="context">{result.after[0]}</span>
+            {/if}
+          </span>
         </button>
       {/each}
     </div>
@@ -101,5 +109,13 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
+  }
+
+  .snippet span {
+    display: block;
+  }
+
+  .context {
+    color: var(--rd-ink-4);
   }
 </style>

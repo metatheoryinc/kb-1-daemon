@@ -8,7 +8,7 @@ boundary through `packages/local-mcp`.
 | --- | --- | --- | --- |
 | Read vault file tree with inline folder metadata | `GET /api/tree` | `list_files` | None |
 | Search notes with snippets, limit 50 | `GET /api/search?q=...&limit=50` | `search` | None |
-| Open/read a note for editing | `GET /api/files/{path}` and Yjs session route | `read_note` | None |
+| Open/read a note for editing | Yjs session route `GET /api/files/{path}/yjs`; REST read available as `GET /api/files/{path}` | `read_note` | None |
 | Create note from folder context menu | `PUT /api/files/{path}` | `create_note` | None |
 | Rename note from file context menu | `POST /api/files/{path}/move` | `move_note` | None |
 | Move note from file context menu | `POST /api/files/{path}/move` | `move_note` | None |
