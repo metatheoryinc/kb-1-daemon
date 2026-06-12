@@ -32,6 +32,30 @@ export interface OneFileDocumentSessionOptions {
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 
+// Deliberately re-declared at the doc-session boundary to keep this package decoupled from service/transport mappers while preserving the closed one-failure-dialect shape.
+export interface DocumentSessionFailure {
+  ok: false;
+  error: 'not_found';
+  message: string;
+}
+
+export const DOCUMENT_SESSION_NOT_FOUND_FAILURE: DocumentSessionFailure = {
+  ok: false,
+  error: 'not_found',
+  message: 'file not found'
+};
+
+export const DOCUMENT_SESSION_FAILURE_CLOSE_CODE = 1008;
+
+export class DocumentSessionNotFoundError extends Error {
+  readonly failure = DOCUMENT_SESSION_NOT_FOUND_FAILURE;
+
+  constructor(readonly filePath: string) {
+    super(DOCUMENT_SESSION_NOT_FOUND_FAILURE.message);
+    this.name = 'DocumentSessionNotFoundError';
+  }
+}
+
 export type SessionContentEditReject =
   | { ok: false; rejected: 'not_found' }
   | { ok: false; rejected: 'ambiguous'; match_count: number }
@@ -65,6 +89,7 @@ export class OneFileDocumentSession {
   filePath: string;
 
   private readonly defaultContent: string;
+  private readonly createMissingOnOpen: boolean;
   private eventPath: string;
   private readonly warn: (warning: DocumentSessionWarning) => void;
   private readonly watchDebounceMs: number;
@@ -94,6 +119,7 @@ export class OneFileDocumentSession {
     this.filePath = filePath;
     this.eventPath = options.eventPath ?? filePath;
     this.defaultContent = options.defaultContent ?? '';
+    this.createMissingOnOpen = options.defaultContent !== undefined;
     this.watchDebounceMs = options.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
     this.watchPollMs = options.watchPollMs ?? WATCH_POLL_MS;
     this.warn = options.warn ?? ((warning) => {
@@ -105,13 +131,17 @@ export class OneFileDocumentSession {
     return this.doc;
   }
 
-  async open(): Promise<void> {
+  isOpened(): boolean {
+    return this.opened && !this.deleted;
+  }
+
+  async open(options: { createIfMissing?: boolean } = {}): Promise<void> {
     if (this.opened) {
       return;
     }
 
     if (!this.openPromise) {
-      this.openPromise = this.loadFromFile().finally(() => {
+      this.openPromise = this.loadFromFile(options.createIfMissing ?? this.createMissingOnOpen).finally(() => {
         this.openPromise = undefined;
       });
     }
@@ -119,8 +149,8 @@ export class OneFileDocumentSession {
     await this.openPromise;
   }
 
-  private async loadFromFile(): Promise<void> {
-    const content = await this.readOrCreateFile();
+  private async loadFromFile(createIfMissing: boolean): Promise<void> {
+    const content = await this.readFile({ createIfMissing });
     this.text.insert(0, content);
     this.lastWrittenHash = hashContent(content);
     this.lastWrittenContent = content;
@@ -415,10 +445,14 @@ export class OneFileDocumentSession {
     }
   }
 
-  private async readOrCreateFile(): Promise<string> {
+  private async readFile(options: { createIfMissing: boolean }): Promise<string> {
     const existing = await readOptionalFile(this.filePath);
     if (existing !== undefined) {
       return existing;
+    }
+
+    if (!options.createIfMissing) {
+      throw new DocumentSessionNotFoundError(this.filePath);
     }
 
     await atomicWriteFile(this.filePath, this.defaultContent);
@@ -693,7 +727,7 @@ async function readOptionalFile(filePath: string): Promise<string | undefined> {
   try {
     return await readFile(filePath, 'utf8');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
+    if (isNodeError(error) && (error as { code?: string }).code === 'ENOENT') {
       return undefined;
     }
 

@@ -103,7 +103,9 @@ export class DocumentSessionManager {
   }
 
   getOpenSession(vaultPath: string): OneFileDocumentSession | undefined {
-    return this.sessions.get(vaultPath);
+    const session = this.sessions.get(vaultPath);
+    if (!session?.isOpened()) return undefined;
+    return session;
   }
 
   getOpenSessionCount(): number {
@@ -230,6 +232,10 @@ export class DocumentSessionManager {
   private scheduleIdleClose(vaultPath: string): void {
     if (this.hasClients(vaultPath) || !this.sessions.has(vaultPath)) return;
     this.cancelIdleClose(vaultPath);
+    if (!this.sessions.get(vaultPath)?.isOpened()) {
+      this.sessions.delete(vaultPath);
+      return;
+    }
     const timer = setTimeout(() => {
       void this.closeSession(vaultPath).catch((error: unknown) => {
         console.warn(`KB-2 failed to close idle document session for ${vaultPath}.`, error);

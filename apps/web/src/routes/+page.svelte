@@ -1,16 +1,52 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
-  import { createDemoDocumentProvider, encodeVaultPath } from '$lib/yjs/demo-document-provider';
+  import { afterNavigate, goto } from '$app/navigation';
+  import {
+    createDemoDocumentProvider,
+    encodeVaultPath,
+    isDemoDocumentProviderOpenError,
+  } from '$lib/yjs/demo-document-provider';
   import type {
     DemoDocumentProvider,
     DemoDocumentProviderStatus,
   } from '$lib/yjs/demo-document-provider';
   import { PlaintextEditor, type LivePath, type OrgPerson } from '@kb-2/editor';
-  import { DocumentSaveBanner, LiveStatusChip } from '@kb-2/ui';
+  import {
+    DocumentNotFoundState,
+    DocumentSaveBanner,
+    LocalEditorShell,
+    type AccentName,
+    type LocalSearchResult,
+    type LocalTreeAction,
+    type LocalTreeNode,
+  } from '@kb-2/ui';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import { onMount } from 'svelte';
 
+  interface ApiFailure {
+    ok: false;
+    error?: string;
+    message?: string;
+  }
+
+  interface TreeEntry {
+    path: string;
+    kind: 'file' | 'folder';
+    metadata?: { color?: AccentName; icon?: string | null };
+  }
+
+  interface SearchHit {
+    path: string;
+    line: number;
+    lineText: string;
+    context?: {
+      before?: string[];
+      after?: string[];
+    };
+  }
+
   let provider = $state<DemoDocumentProvider | null>(null);
+  let providerGeneration = 0;
+  let providerSynced = $state(false);
   let status = $state<DemoDocumentProviderStatus>('connecting');
   let error = $state<string | null>(null);
   let externalMergeVisible = $state(false);
@@ -18,7 +54,19 @@
   let persistFailureActive = $state(false);
   let persistRecoveredVisible = $state(false);
   let docDeleted = $state(false);
+  let notFoundPath = $state<string | null>(null);
   let documentPath = $state('hello-world.md');
+  let vaultName = $state('Vault');
+  let tree = $state<LocalTreeNode[]>([]);
+  let expandedPaths = $state(new Set<string>());
+  let searchValue = $state('');
+  let searchResults = $state<LocalSearchResult[]>([]);
+  let searchTotal = $state(0);
+  let searchTruncated = $state(false);
+  let searchLoading = $state(false);
+  let colorMode = $state<'light' | 'dark'>('light');
+  let mounted = $state(false);
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -26,18 +74,13 @@
     { path: documentPath, noteId: documentPath },
   ]);
 
-  const orgPeople: OrgPerson[] = [
-    {
-      id: 'demo-yoh',
-      email: 'yoh@example.com',
-      name: 'Yoh',
-      image: null,
-    },
-  ];
+  const orgPeople: OrgPerson[] = [];
 
-  const statusLabel = $derived(
+  const daemonLabel = $derived(
     status === 'open'
       ? 'Daemon · live'
+      : status === 'syncing'
+        ? 'Daemon · syncing'
       : status === 'connecting'
         ? 'Daemon · connecting'
         : status === 'error'
@@ -51,6 +94,7 @@
       documentPath = nextPath;
       docDeleted = false;
       void goto(`/${encodeVaultPath(nextPath)}`, { replaceState: true, noScroll: true, keepFocus: true });
+      void refreshTree();
       return;
     }
 
@@ -59,6 +103,7 @@
       persistFailureActive = false;
       externalChangeVisible = false;
       externalMergeVisible = false;
+      void refreshTree();
       return;
     }
 
@@ -105,28 +150,333 @@
     }, 3500);
   }
 
-  onMount(() => {
-    const pathname = window.location.pathname;
-    if (pathname === '/') {
-      void goto('/hello-world.md', { replaceState: true, noScroll: true });
-      documentPath = 'hello-world.md';
-    } else {
-      documentPath = decodeURIComponent(pathname.replace(/^\/+/, ''));
-    }
-
+  function openProvider(path: string): void {
+    provider?.destroy();
+    const generation = providerGeneration + 1;
+    providerGeneration = generation;
+    providerSynced = false;
+    status = 'connecting';
+    error = null;
+    notFoundPath = null;
+    docDeleted = false;
     const nextProvider = createDemoDocumentProvider({
-      path: documentPath,
+      path,
       onStatus: (nextStatus) => {
+        if (generation !== providerGeneration) return;
         status = nextStatus;
       },
       onError: (caught) => {
+        if (generation !== providerGeneration) return;
+        if (isDemoDocumentProviderOpenError(caught)) {
+          notFoundPath = path;
+          providerSynced = false;
+          error = null;
+          return;
+        }
         error = caught instanceof Error ? caught.message : String(caught);
       },
-      onSessionEvent: handleSessionEvent,
+      onSessionEvent: (event) => {
+        if (generation !== providerGeneration) return;
+        handleSessionEvent(event);
+      },
+      onSynced: () => {
+        if (generation !== providerGeneration) return;
+        providerSynced = true;
+      },
     });
     provider = nextProvider;
+  }
+
+  async function openDocument(path: string): Promise<void> {
+    if (path === documentPath && notFoundPath !== path) return;
+    rebindDocument(path, { resetSearch: true });
+    await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
+  }
+
+  function rebindDocument(path: string, options: { resetSearch?: boolean } = {}): void {
+    documentPath = path;
+    openProvider(path);
+    if (options.resetSearch === true) {
+      searchValue = '';
+      searchResults = [];
+      searchTotal = 0;
+      searchTruncated = false;
+    }
+  }
+
+  function toggleFolder(path: string): void {
+    const next = new Set(expandedPaths);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    expandedPaths = next;
+  }
+
+  function toggleColorMode(): void {
+    colorMode = colorMode === 'dark' ? 'light' : 'dark';
+    applyColorMode(colorMode);
+  }
+
+  function applyColorMode(mode: 'light' | 'dark'): void {
+    document.documentElement.classList.toggle('dark', mode === 'dark');
+    document.documentElement.dataset.rdMode = mode;
+  }
+
+  function updateSearch(value: string): void {
+    searchValue = value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      void runSearch(value);
+    }, 250);
+  }
+
+  function clearSearch(): void {
+    searchValue = '';
+    searchResults = [];
+    searchTotal = 0;
+    searchTruncated = false;
+  }
+
+  async function runSearch(value: string): Promise<void> {
+    const query = value.trim();
+    if (!query) {
+      clearSearch();
+      return;
+    }
+    searchLoading = true;
+    try {
+      const response = await fetchJson<{ ok: true; results: SearchHit[]; total: number; truncated: boolean }>(
+        `/api/search?q=${encodeURIComponent(query)}&limit=50`,
+      );
+      if (query !== searchValue.trim()) return;
+      searchResults = response.results.map((hit) => ({
+        path: hit.path,
+        line: hit.line,
+        lineText: hit.lineText,
+        before: hit.context?.before ?? [],
+        after: hit.context?.after ?? [],
+      }));
+      searchTotal = response.total;
+      searchTruncated = response.truncated || response.total > response.results.length;
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    } finally {
+      searchLoading = false;
+    }
+  }
+
+  async function refreshVaultInfo(): Promise<void> {
+    try {
+      const info = await fetchJson<{ ok: true; rootName: string }>('/api/vault');
+      vaultName = info.rootName;
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+  }
+
+  async function refreshTree(): Promise<void> {
+    try {
+      const result = await fetchJson<{ ok: true; entries: TreeEntry[] }>('/api/tree');
+      tree = buildTree(result.entries);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+  }
+
+  async function handleTreeAction(action: LocalTreeAction): Promise<void> {
+    try {
+      if (action.kind === 'file') {
+        await handleFileAction(action);
+      } else {
+        await handleFolderAction(action);
+      }
+      await refreshTree();
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+  }
+
+  async function handleFileAction(action: Extract<LocalTreeAction, { kind: 'file' }>): Promise<void> {
+    if (action.action === 'delete') {
+      if (!window.confirm(`Delete ${action.path}?`)) return;
+      await fetchJson(`/api/files/${encodeVaultPath(action.path)}`, { method: 'DELETE' });
+      return;
+    }
+
+    const nextPath = window.prompt(`${titleCase(action.action)} file`, action.path);
+    if (!nextPath || nextPath === action.path) return;
+    await fetchJson(`/api/files/${encodeVaultPath(action.path)}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: nextPath }),
+    });
+  }
+
+  async function handleFolderAction(action: Extract<LocalTreeAction, { kind: 'folder' }>): Promise<void> {
+    if (action.action === 'color') {
+      await fetchJson(`/api/folders/${encodeVaultPath(action.path)}/metadata`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ color: action.color ?? null }),
+      });
+      return;
+    }
+
+    if (action.action === 'delete') {
+      if (!window.confirm(`Delete ${action.path} and its contents?`)) return;
+      await fetchJson(`/api/folders/${encodeVaultPath(action.path)}?recursive=true`, { method: 'DELETE' });
+      return;
+    }
+
+    if (action.action === 'new-note') {
+      const nextPath = window.prompt('New note path', `${action.path}/untitled.md`);
+      if (!nextPath) return;
+      await fetchJson(`/api/files/${encodeVaultPath(nextPath)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'text/markdown' },
+        body: '',
+      });
+      await openDocument(nextPath);
+      return;
+    }
+
+    if (action.action === 'new-folder') {
+      const nextPath = window.prompt('New folder path', `${action.path}/untitled`);
+      if (!nextPath) return;
+      await fetchJson('/api/folders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: nextPath }),
+      });
+      expandedPaths = new Set([...expandedPaths, action.path, nextPath]);
+      return;
+    }
+
+    const nextPath = window.prompt(`${titleCase(action.action)} folder`, action.path);
+    if (!nextPath || nextPath === action.path) return;
+    await fetchJson(`/api/folders/${encodeVaultPath(action.path)}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: nextPath }),
+    });
+  }
+
+  async function fetchJson<T extends { ok: true } = { ok: true }>(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<T> {
+    const response = await fetch(input, init);
+    const body = await response.json().catch(() => null) as (T | ApiFailure | null);
+    if (!response.ok || !body || body.ok === false) {
+      const failure = body && body.ok === false ? body : null;
+      throw new Error(failure?.message ?? failure?.error ?? `Request failed (${response.status})`);
+    }
+    return body as T;
+  }
+
+  function buildTree(entries: TreeEntry[]): LocalTreeNode[] {
+    const byPath = new Map<string, LocalTreeNode>();
+    const roots: LocalTreeNode[] = [];
+
+    for (const entry of [...entries].sort(compareEntries)) {
+      const node: LocalTreeNode = entry.kind === 'folder'
+        ? {
+            kind: 'folder',
+            path: entry.path,
+            name: nameFromPath(entry.path),
+            metadata: entry.metadata,
+            children: [],
+          }
+        : {
+            kind: 'file',
+            path: entry.path,
+            name: nameFromPath(entry.path),
+          };
+      byPath.set(entry.path, node);
+    }
+
+    for (const node of byPath.values()) {
+      const parentPath = parentOf(node.path);
+      const parent = parentPath ? byPath.get(parentPath) : undefined;
+      if (parent?.kind === 'folder') {
+        parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
+    return sortNodes(roots);
+  }
+
+  function compareEntries(left: TreeEntry, right: TreeEntry): number {
+    return left.path.localeCompare(right.path);
+  }
+
+  function sortNodes(nodes: LocalTreeNode[]): LocalTreeNode[] {
+    return nodes.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    }).map((node) => {
+      if (node.kind === 'folder') {
+        node.children = sortNodes(node.children);
+      }
+      return node;
+    });
+  }
+
+  function parentOf(path: string): string {
+    const index = path.lastIndexOf('/');
+    return index === -1 ? '' : path.slice(0, index);
+  }
+
+  function nameFromPath(path: string): string {
+    return path.split('/').filter(Boolean).at(-1) ?? path;
+  }
+
+  function titleCase(value: string): string {
+    return value.slice(0, 1).toUpperCase() + value.slice(1);
+  }
+
+  function documentPathFromUrl(url: URL): string {
+    if (url.pathname === '/') {
+      return 'hello-world.md';
+    }
+    return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  }
+
+  afterNavigate((navigation) => {
+    if (!mounted || !navigation.to?.url) return;
+    const nextPath = documentPathFromUrl(navigation.to.url);
+    if (nextPath === documentPath) return;
+    rebindDocument(nextPath, { resetSearch: true });
+  });
+
+  onMount(() => {
+    mounted = true;
+    const initialPath = documentPathFromUrl(new URL(window.location.href));
+    if (window.location.pathname === '/') {
+      documentPath = 'hello-world.md';
+      void goto('/hello-world.md', { replaceState: true, noScroll: true, keepFocus: true });
+    } else {
+      documentPath = initialPath;
+    }
+
+    colorMode = document.documentElement.dataset.rdMode === 'dark' || document.documentElement.classList.contains('dark')
+      ? 'dark'
+      : 'light';
+    applyColorMode(colorMode);
+    openProvider(documentPath);
+    void refreshVaultInfo();
+    void refreshTree();
 
     return () => {
+      mounted = false;
+      if (searchTimer) {
+        clearTimeout(searchTimer);
+        searchTimer = undefined;
+      }
       if (externalMergeTimer) {
         clearTimeout(externalMergeTimer);
         externalMergeTimer = undefined;
@@ -135,8 +485,9 @@
         clearTimeout(recoveryTimer);
         recoveryTimer = undefined;
       }
-      nextProvider.destroy();
+      provider?.destroy();
       provider = null;
+      providerSynced = false;
     };
   });
 </script>
@@ -145,17 +496,29 @@
   <title>KB-2 Editor</title>
 </svelte:head>
 
-<main class="editor-page">
-  <header class="topbar">
-    <div class="title-group">
-      <span class="eyebrow">demo-vault</span>
-      <h1>{documentPath}</h1>
-    </div>
-    <a class="status-link" href="/status" aria-label="Open daemon status">
-      <LiveStatusChip label={statusLabel} />
-    </a>
-  </header>
-
+<LocalEditorShell
+  {vaultName}
+  {daemonLabel}
+  {documentPath}
+  {colorMode}
+  {tree}
+  {expandedPaths}
+  {searchValue}
+  {searchResults}
+  {searchTotal}
+  {searchTruncated}
+  {searchLoading}
+  onSearchInput={updateSearch}
+  onSearchClear={clearSearch}
+  onToggleColorMode={toggleColorMode}
+  onToggleFolder={toggleFolder}
+  onOpenFile={(path) => {
+    void openDocument(path);
+  }}
+  onTreeAction={(action) => {
+    void handleTreeAction(action);
+  }}
+>
   {#if externalMergeVisible || externalChangeVisible || persistFailureActive || persistRecoveredVisible || docDeleted}
     <section class="banner-strip" aria-label="Document save notifications">
       {#if externalMergeVisible}
@@ -208,17 +571,21 @@
     </section>
   {/if}
 
-  <section class="document-shell" aria-label="Demo Markdown document">
-    {#if provider}
-      <PlaintextEditor
-        ydoc={provider.doc}
-        ytext={provider.text}
-        livePaths={livePaths}
-        orgPeople={orgPeople}
-        readOnly={docDeleted}
-        scroll="self"
-      />
-    {:else}
+  <section class="document-shell" aria-label="Markdown document">
+    {#if notFoundPath === documentPath}
+      <DocumentNotFoundState path={documentPath} />
+    {:else if provider && providerSynced}
+      {#key provider}
+        <PlaintextEditor
+          ydoc={provider.doc}
+          ytext={provider.text}
+          livePaths={livePaths}
+          orgPeople={orgPeople}
+          readOnly={docDeleted}
+          scroll="self"
+        />
+      {/key}
+    {:else if mounted}
       <div class="loading">Opening document…</div>
     {/if}
   </section>
@@ -226,63 +593,9 @@
   {#if error}
     <p class="error">{error}</p>
   {/if}
-</main>
+</LocalEditorShell>
 
 <style>
-  .editor-page {
-    min-height: 100vh;
-    display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
-    background: var(--rd-bg);
-    color: var(--rd-ink-2);
-    font-family: var(--rd-ui);
-  }
-
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 16px 22px 12px;
-    border-bottom: 1px solid var(--rd-rule);
-    background: color-mix(in srgb, var(--rd-panel) 82%, transparent);
-  }
-
-  .title-group {
-    min-width: 0;
-  }
-
-  .eyebrow {
-    display: block;
-    color: var(--rd-ink-4);
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 1.2;
-  }
-
-  h1 {
-    margin: 1px 0 0;
-    color: var(--rd-ink-1);
-    font-size: 16px;
-    font-weight: 650;
-    line-height: 1.2;
-    letter-spacing: 0;
-  }
-
-  .status-link {
-    flex: none;
-    color: inherit;
-    text-decoration: none;
-  }
-
-  .document-shell {
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(24px, 1fr) minmax(0, 760px) minmax(24px, 1fr);
-    padding: 22px 0 0;
-    overflow: hidden;
-  }
-
   .banner-strip {
     display: grid;
     gap: 8px;
@@ -295,7 +608,16 @@
     justify-self: center;
   }
 
+  .document-shell {
+    min-height: 0;
+    height: 100%;
+    display: grid;
+    grid-template-columns: minmax(24px, 1fr) minmax(0, 760px) minmax(24px, 1fr);
+    overflow: hidden;
+  }
+
   .document-shell :global(.kb2-editor-shell),
+  .document-shell :global(.document-not-found),
   .loading {
     grid-column: 2;
     min-width: 0;
@@ -305,9 +627,6 @@
   }
 
   .document-shell :global(.plaintext-editor .cm-content) {
-    /* Heading gutter chips render in a box reaching 40px left of the text
-       (see PlaintextEditor's ::before rules), so the left padding must
-       exceed that for the chips to sit inside the panel. */
     padding-top: 28px;
     padding-left: 56px;
     padding-right: 32px;
@@ -322,30 +641,32 @@
 
   .error {
     position: fixed;
-    left: 16px;
+    left: 296px;
     bottom: 16px;
+    z-index: 30;
     margin: 0;
-    max-width: min(520px, calc(100vw - 32px));
+    max-width: min(520px, calc(100vw - 328px));
     border: 1px solid color-mix(in srgb, var(--destructive) 40%, transparent);
     border-radius: 6px;
     background: var(--rd-panel);
     color: var(--destructive);
     padding: 8px 10px;
+    font-family: var(--rd-ui);
     font-size: 12px;
   }
 
   @media (max-width: 720px) {
-    .topbar {
-      padding: 12px 14px 10px;
-    }
-
     .document-shell {
       grid-template-columns: 12px minmax(0, 1fr) 12px;
-      padding-top: 12px;
     }
 
     .banner-strip {
       padding: 10px 12px 0;
+    }
+
+    .error {
+      left: 16px;
+      max-width: calc(100vw - 32px);
     }
   }
 </style>

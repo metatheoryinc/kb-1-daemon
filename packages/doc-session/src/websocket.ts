@@ -2,8 +2,13 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 
-import { PersistFailedError, type OneFileDocumentSession } from './session.js';
-import { MESSAGE_SYNC, encodeSessionEvent } from './protocol.js';
+import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DocumentSessionNotFoundError,
+  PersistFailedError,
+  type OneFileDocumentSession
+} from './session.js';
+import { MESSAGE_SYNC, encodeSessionEvent, encodeSyncedMessage } from './protocol.js';
 
 const socketOpen = 1;
 
@@ -24,8 +29,9 @@ export async function bindYjsWebSocket(
   session: OneFileDocumentSession,
   socket: YjsWebSocketLike
 ): Promise<BoundYjsWebSocket> {
-  await session.open();
   let cleanupStarted = false;
+  let sessionReady = false;
+  const pendingMessages: unknown[] = [];
   let resolveClosed!: () => void;
   let rejectClosed!: (error: unknown) => void;
   const closed = new Promise<void>((resolve, reject) => {
@@ -61,7 +67,16 @@ export async function bindYjsWebSocket(
     });
   };
 
-  socket.on('message', (data) => {
+  const handleMessage = (data: unknown) => {
+    if (!sessionReady) {
+      pendingMessages.push(data);
+      return;
+    }
+
+    processSyncMessage(data);
+  };
+
+  const processSyncMessage = (data: unknown) => {
     try {
       const message = toUint8Array(data);
       if (!message) {
@@ -85,7 +100,23 @@ export async function bindYjsWebSocket(
     } catch {
       socket.close(1003, 'Invalid Yjs sync message');
     }
-  });
+  };
+
+  socket.on('message', handleMessage);
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
+
+  try {
+    await session.open({ createIfMissing: false });
+  } catch (error) {
+    if (error instanceof DocumentSessionNotFoundError) {
+      socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(error.failure));
+      resolveClosed();
+      return { closed };
+    }
+    throw error;
+  }
+  sessionReady = true;
 
   session.ydoc.on('update', updateHandler);
   unsubscribeSessionEvents = session.onEvent((event) => {
@@ -97,12 +128,14 @@ export async function bindYjsWebSocket(
     sendBytes(socket, encodeSessionEvent(activePersistFailure));
   }
 
+  for (const data of pendingMessages.splice(0)) {
+    processSyncMessage(data);
+  }
+
   sendSync(socket, (encoder) => {
     syncProtocol.writeSyncStep1(encoder, session.ydoc);
   });
-
-  socket.on('close', cleanup);
-  socket.on('error', cleanup);
+  sendBytes(socket, encodeSyncedMessage());
 
   return { closed };
 }

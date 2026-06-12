@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,11 +11,13 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   OneFileDocumentSession,
   decodeSessionEvent,
-  type DocumentSessionEvent
+  type DocumentSessionEvent,
+  type YjsWebSocketLike
 } from './index.js';
 import { bindYjsWebSocket } from './websocket.js';
 
@@ -71,6 +73,81 @@ describe('Yjs WebSocket session', () => {
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
     await session.close();
+  });
+
+  it('buffers the initial client sync request while a cold session opens', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(vaultDir, 'hello-world.md');
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(filePath, 'cold file content\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const originalOpen = session.open.bind(session);
+    let releaseOpen!: () => void;
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    session.open = async () => {
+      await openGate;
+      await originalOpen();
+    };
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    releaseOpen();
+
+    await waitForSharedContent([client], (content) => content === 'cold file content\n');
+
+    client.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await session.close();
+  });
+
+  it('fails missing document binds with canonical not_found and does not create parent folders', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'typo', 'missing.md');
+    const session = new OneFileDocumentSession(filePath);
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+
+    await expect(closed).resolves.toEqual({
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
+    });
+    await expect(readdir(kb2Home)).resolves.toEqual([]);
+
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
   });
 
   it('reconciles idle external file changes and broadcasts the quiet merge event to every client', async () => {
@@ -245,6 +322,42 @@ describe('Yjs WebSocket session', () => {
     await closeServer(server);
     await session.close();
   });
+
+  it('handles alternate message payload shapes and skips sends to closed sockets', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'socket shapes\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+    socket.readyState = WebSocket.CLOSED;
+
+    const binding = await bindYjsWebSocket(session, socket);
+    expect(socket.sent).toEqual([]);
+
+    socket.emitMessage('not bytes');
+    socket.emitMessage(new Uint8Array([99]).buffer);
+    socket.emitMessage([Buffer.from([99])]);
+    expect(socket.closed).toEqual([]);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
+  it('propagates unexpected session open failures', async () => {
+    const socket = new FakeSocket();
+    const session = {
+      ydoc: new Y.Doc(),
+      open: async () => {
+        throw new Error('unexpected open failure');
+      },
+      flush: async () => undefined,
+      onEvent: () => () => undefined,
+      getActivePersistFailureEvent: () => undefined
+    } as unknown as OneFileDocumentSession;
+
+    await expect(bindYjsWebSocket(session, socket)).rejects.toThrow('unexpected open failure');
+  });
 });
 
 interface YjsClient {
@@ -252,6 +365,43 @@ interface YjsClient {
   text: Y.Text;
   events: DocumentSessionEvent[];
   close: () => void;
+}
+
+class FakeSocket implements YjsWebSocketLike {
+  readyState: number = WebSocket.OPEN;
+  readonly sent: Uint8Array[] = [];
+  readonly closed: Array<{ code: number | undefined; reason: string | undefined }> = [];
+  private readonly listeners = {
+    message: [] as Array<(data: unknown) => void>,
+    close: [] as Array<() => void>,
+    error: [] as Array<() => void>
+  };
+
+  send(data: Uint8Array): void {
+    this.sent.push(data);
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closed.push({ code, reason });
+    this.readyState = WebSocket.CLOSED;
+  }
+
+  on(event: 'message' | 'close' | 'error', listener: ((data: unknown) => void) | (() => void)): this {
+    this.listeners[event].push(listener as never);
+    return this;
+  }
+
+  emitMessage(data: unknown): void {
+    for (const listener of this.listeners.message) {
+      listener(data);
+    }
+  }
+
+  emitClose(): void {
+    for (const listener of this.listeners.close) {
+      listener();
+    }
+  }
 }
 
 async function connectYjsClient(url: string): Promise<YjsClient> {
