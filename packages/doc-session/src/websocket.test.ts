@@ -16,7 +16,8 @@ import {
   MESSAGE_SYNC,
   OneFileDocumentSession,
   decodeSessionEvent,
-  type DocumentSessionEvent
+  type DocumentSessionEvent,
+  type YjsWebSocketLike
 } from './index.js';
 import { bindYjsWebSocket } from './websocket.js';
 
@@ -321,6 +322,42 @@ describe('Yjs WebSocket session', () => {
     await closeServer(server);
     await session.close();
   });
+
+  it('handles alternate message payload shapes and skips sends to closed sockets', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'socket shapes\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+    socket.readyState = WebSocket.CLOSED;
+
+    const binding = await bindYjsWebSocket(session, socket);
+    expect(socket.sent).toEqual([]);
+
+    socket.emitMessage('not bytes');
+    socket.emitMessage(new Uint8Array([99]).buffer);
+    socket.emitMessage([Buffer.from([99])]);
+    expect(socket.closed).toEqual([]);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
+  it('propagates unexpected session open failures', async () => {
+    const socket = new FakeSocket();
+    const session = {
+      ydoc: new Y.Doc(),
+      open: async () => {
+        throw new Error('unexpected open failure');
+      },
+      flush: async () => undefined,
+      onEvent: () => () => undefined,
+      getActivePersistFailureEvent: () => undefined
+    } as unknown as OneFileDocumentSession;
+
+    await expect(bindYjsWebSocket(session, socket)).rejects.toThrow('unexpected open failure');
+  });
 });
 
 interface YjsClient {
@@ -328,6 +365,43 @@ interface YjsClient {
   text: Y.Text;
   events: DocumentSessionEvent[];
   close: () => void;
+}
+
+class FakeSocket implements YjsWebSocketLike {
+  readyState: number = WebSocket.OPEN;
+  readonly sent: Uint8Array[] = [];
+  readonly closed: Array<{ code: number | undefined; reason: string | undefined }> = [];
+  private readonly listeners = {
+    message: [] as Array<(data: unknown) => void>,
+    close: [] as Array<() => void>,
+    error: [] as Array<() => void>
+  };
+
+  send(data: Uint8Array): void {
+    this.sent.push(data);
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closed.push({ code, reason });
+    this.readyState = WebSocket.CLOSED;
+  }
+
+  on(event: 'message' | 'close' | 'error', listener: ((data: unknown) => void) | (() => void)): this {
+    this.listeners[event].push(listener as never);
+    return this;
+  }
+
+  emitMessage(data: unknown): void {
+    for (const listener of this.listeners.message) {
+      listener(data);
+    }
+  }
+
+  emitClose(): void {
+    for (const listener of this.listeners.close) {
+      listener();
+    }
+  }
 }
 
 async function connectYjsClient(url: string): Promise<YjsClient> {

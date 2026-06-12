@@ -32,6 +32,7 @@ export interface OneFileDocumentSessionOptions {
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 
+// Deliberately re-declared at the doc-session boundary to keep this package decoupled from service/transport mappers while preserving the closed one-failure-dialect shape.
 export interface DocumentSessionFailure {
   ok: false;
   error: 'not_found';
@@ -128,6 +129,10 @@ export class OneFileDocumentSession {
 
   get ydoc(): Y.Doc {
     return this.doc;
+  }
+
+  isOpened(): boolean {
+    return this.opened && !this.deleted;
   }
 
   async open(options: { createIfMissing?: boolean } = {}): Promise<void> {

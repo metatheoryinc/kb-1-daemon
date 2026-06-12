@@ -600,6 +600,30 @@ describe('OneFileDocumentSession', () => {
     await manager.close();
   });
 
+  it('evicts a never-opened client session whose missing-file open failed', async () => {
+    const manager = new DocumentSessionManager({
+      root: join(kb2Home, 'demo-vault'),
+      idleSessionGraceMs: 80
+    });
+    const lease = manager.attachClientSession('typo/missing.md');
+
+    await expect(lease.session.open({ createIfMissing: false })).rejects.toMatchObject({
+      failure: {
+        ok: false,
+        error: 'not_found',
+        message: 'file not found'
+      }
+    });
+    expect(manager.getOpenSession('typo/missing.md')).toBeUndefined();
+    expect(manager.getOpenSessionCount()).toBe(1);
+
+    lease.release();
+
+    expect(manager.getOpenSessionCount()).toBe(0);
+    await expect(readdir(kb2Home)).resolves.toEqual([]);
+    await manager.close();
+  });
+
   it('keeps a session open until every simultaneous client lease is released', async () => {
     const manager = new DocumentSessionManager({
       root: join(kb2Home, 'demo-vault'),

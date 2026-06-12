@@ -2,6 +2,8 @@
 import { serve } from '@hono/node-server';
 import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { readVaultFile, validateVaultPath, writeVaultFile } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -29,9 +31,9 @@ export interface StartedDaemon {
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
   const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
-  await seedDemoDocument(config.vaultRoot);
-  const demoDocumentSession = documentSessions.getSession(DEMO_DOCUMENT_PATH);
-  await demoDocumentSession.open();
+  const hasDemoDocument = await seedDemoDocument(config.vaultRoot);
+  const demoDocumentSession = hasDemoDocument ? documentSessions.getSession(DEMO_DOCUMENT_PATH) : undefined;
+  await demoDocumentSession?.open();
   const vaultService = createVaultService({
     vaultRoot: config.vaultRoot,
     documentSessions
@@ -126,11 +128,15 @@ export async function startDaemon(): Promise<StartedDaemon> {
   });
 }
 
-async function seedDemoDocument(vaultRoot: string): Promise<void> {
+async function seedDemoDocument(vaultRoot: string): Promise<boolean> {
   const existing = await readVaultFile({ root: vaultRoot }, DEMO_DOCUMENT_PATH);
-  if (existing.ok) return;
+  if (existing.ok) return true;
   if (existing.error !== 'not_found') {
     throw new Error(existing.message);
+  }
+
+  if (await hasMarkdownFiles(vaultRoot) || await hasKb2State(vaultRoot)) {
+    return false;
   }
 
   const seeded = await writeVaultFile(
@@ -140,6 +146,49 @@ async function seedDemoDocument(vaultRoot: string): Promise<void> {
   if (!seeded.ok) {
     throw new Error(seeded.message);
   }
+  return true;
+}
+
+async function hasKb2State(vaultRoot: string): Promise<boolean> {
+  try {
+    await readdir(join(vaultRoot, '.kb2'), { withFileTypes: true });
+    return true;
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function hasMarkdownFiles(directory: string): Promise<boolean> {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) {
+      return false;
+    }
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (entry.name === '.kb2') {
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith('.md')) {
+      return true;
+    }
+    if (entry.isDirectory() && await hasMarkdownFiles(join(directory, entry.name))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
 }
 
 function documentPathFromWebSocketPath(pathname: string): string | undefined {
