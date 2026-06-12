@@ -16,6 +16,10 @@ export default defineConfig({
       {
         find: /^@kb-2\/doc-session$/,
         replacement: fileURLToPath(new URL('../../packages/doc-session/src/index.ts', import.meta.url))
+      },
+      {
+        find: /^@kb-2\/vault-core$/,
+        replacement: fileURLToPath(new URL('../../packages/vault-core/src/index.ts', import.meta.url))
       }
     ]
   },
