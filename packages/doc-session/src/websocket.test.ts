@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -68,6 +68,48 @@ describe('Yjs WebSocket session', () => {
 
     clientA.close();
     clientB.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await session.close();
+  });
+
+  it('buffers the initial client sync request while a cold session opens', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(vaultDir, 'hello-world.md');
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(filePath, 'cold file content\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const originalOpen = session.open.bind(session);
+    let releaseOpen!: () => void;
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    session.open = async () => {
+      await openGate;
+      await originalOpen();
+    };
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    releaseOpen();
+
+    await waitForSharedContent([client], (content) => content === 'cold file content\n');
+
+    client.close();
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
     await session.close();

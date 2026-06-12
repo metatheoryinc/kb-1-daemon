@@ -23,8 +23,10 @@ export {
 export {
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
+  MESSAGE_SYNCED,
   decodeSessionEvent,
   encodeSessionEvent,
+  encodeSyncedMessage,
   type DocumentSessionEvent,
   type DocumentSessionEventKind
 } from './protocol.js';

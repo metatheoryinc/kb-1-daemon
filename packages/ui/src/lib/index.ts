@@ -6,7 +6,6 @@ export { default as BrandMark } from './primitives/BrandMark.svelte';
 export { default as Breadcrumb } from './primitives/Breadcrumb.svelte';
 export type { BreadcrumbAvatar, BreadcrumbItem } from './primitives/Breadcrumb.svelte';
 export { default as Checkbox } from './primitives/Checkbox.svelte';
-export { default as FavoriteButton } from './primitives/FavoriteButton.svelte';
 export { default as FolderIcon } from './primitives/FolderIcon.svelte';
 export { default as Icon } from './primitives/Icon.svelte';
 export { default as IconButton } from './primitives/IconButton.svelte';
@@ -24,6 +23,22 @@ export { default as Panel } from './layout/Panel.svelte';
 export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
 export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
+export { default as DocumentHeader } from './local-editor/DocumentHeader.svelte';
+export { default as FileNode } from './local-editor/FileNode.svelte';
+export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
+export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
+export { default as FolderNode } from './local-editor/FolderNode.svelte';
+export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
+export type {
+  LocalFileAction,
+  LocalFileNode,
+  LocalFolderAction,
+  LocalFolderMetadata,
+  LocalFolderNode,
+  LocalSearchResult,
+  LocalTreeAction,
+  LocalTreeNode,
+} from './local-editor/types';
 export type {
   DocumentSaveBannerProps,
   DocumentSaveBannerVariant,

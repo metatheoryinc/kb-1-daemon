@@ -1,9 +1,23 @@
 <script lang="ts" module>
-  export interface MenuItem {
+  export interface MenuSwatch {
+    label: string;
+    color: string;
+    selected?: boolean;
+    onSelect: () => void;
+  }
+
+  export type MenuItem =
+    | {
+    kind?: 'item';
     label: string;
     onSelect: () => void;
     destructive?: boolean;
-  }
+    }
+    | {
+      kind: 'swatches';
+      label: string;
+      swatches: MenuSwatch[];
+    };
 </script>
 
 <script lang="ts">
@@ -130,18 +144,42 @@
   style:top="{top}px"
 >
   {#each items as item, i (i)}
-    <button
-      role="menuitem"
-      type="button"
-      class={cn('context-menu-item', item.destructive && 'destructive')}
-      onclick={(event) => {
-        event.stopPropagation();
-        onclose();
-        item.onSelect();
-      }}
-    >
-      {item.label}
-    </button>
+    {#if item.kind === 'swatches'}
+      <div class="context-menu-swatches" role="group" aria-label={item.label}>
+        <span class="swatch-label">{item.label}</span>
+        <div class="swatch-row">
+          {#each item.swatches as swatch (swatch.label)}
+            <button
+              type="button"
+              class="swatch"
+              class:selected={swatch.selected}
+              aria-label={swatch.label}
+              aria-pressed={swatch.selected}
+              title={swatch.label}
+              style:--swatch-color={swatch.color}
+              onclick={(event) => {
+                event.stopPropagation();
+                onclose();
+                swatch.onSelect();
+              }}
+            ></button>
+          {/each}
+        </div>
+      </div>
+    {:else}
+      <button
+        role="menuitem"
+        type="button"
+        class={cn('context-menu-item', item.destructive && 'destructive')}
+        onclick={(event) => {
+          event.stopPropagation();
+          onclose();
+          item.onSelect();
+        }}
+      >
+        {item.label}
+      </button>
+    {/if}
   {/each}
 </div>
 
@@ -184,5 +222,39 @@
 
   .destructive {
     color: var(--destructive);
+  }
+
+  .context-menu-swatches {
+    display: grid;
+    gap: 6px;
+    padding: 7px 8px 8px;
+  }
+
+  .swatch-label {
+    color: var(--rd-ink-3);
+    font-family: var(--rd-ui);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .swatch-row {
+    display: grid;
+    grid-template-columns: repeat(6, 18px);
+    gap: 5px;
+  }
+
+  .swatch {
+    width: 18px;
+    height: 18px;
+    border: 1px solid color-mix(in srgb, var(--swatch-color) 72%, black);
+    border-radius: 5px;
+    background: var(--swatch-color);
+    cursor: pointer;
+  }
+
+  .swatch:hover,
+  .swatch.selected {
+    outline: 2px solid var(--rd-ink-1);
+    outline-offset: 1px;
   }
 </style>
