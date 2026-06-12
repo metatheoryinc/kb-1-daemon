@@ -2,7 +2,12 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 
-import { PersistFailedError, type OneFileDocumentSession } from './session.js';
+import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DocumentSessionNotFoundError,
+  PersistFailedError,
+  type OneFileDocumentSession
+} from './session.js';
 import { MESSAGE_SYNC, encodeSessionEvent, encodeSyncedMessage } from './protocol.js';
 
 const socketOpen = 1;
@@ -101,7 +106,16 @@ export async function bindYjsWebSocket(
   socket.on('close', cleanup);
   socket.on('error', cleanup);
 
-  await session.open();
+  try {
+    await session.open({ createIfMissing: false });
+  } catch (error) {
+    if (error instanceof DocumentSessionNotFoundError) {
+      socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(error.failure));
+      resolveClosed();
+      return { closed };
+    }
+    throw error;
+  }
   sessionReady = true;
 
   session.ydoc.on('update', updateHandler);

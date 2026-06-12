@@ -9,7 +9,7 @@ import * as encoding from 'lib0/encoding';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
-import { afterEach, beforeEach, describe, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   bindYjsWebSocket,
@@ -21,6 +21,7 @@ import {
   createDemoDocumentProvider,
   DEMO_DOCUMENT_TEXT_NAME,
   DEMO_DOCUMENT_YJS_PATH,
+  isDemoDocumentProviderOpenError,
 } from './demo-document-provider';
 
 const messageSync = 0;
@@ -138,6 +139,38 @@ describe('demo document provider', () => {
     await waitUntil(() => events.some((event) => event.kind === 'external-merge'), () =>
       `Timed out waiting for provider session event: ${JSON.stringify(events)}`
     );
+
+    provider.destroy();
+  });
+
+  it('surfaces canonical not_found session-open failures from the WebSocket close reason', async () => {
+    const errors: unknown[] = [];
+
+    server = createServer();
+    webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer!.handleUpgrade(request, socket, head, (webSocket) => {
+        webSocket.close(1008, JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' }));
+      });
+    });
+    await listen(server);
+    const port = (server.address() as AddressInfo).port;
+
+    const provider = createDemoDocumentProvider({
+      url: `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`,
+      onError: (error) => errors.push(error),
+    });
+
+    await waitUntil(() => errors.some(isDemoDocumentProviderOpenError), () =>
+      `Timed out waiting for provider open failure: ${String(errors[0])}`
+    );
+    const failure = errors.find(isDemoDocumentProviderOpenError)?.failure;
+    expect(failure).toEqual({ ok: false, error: 'not_found', message: 'file not found' });
 
     provider.destroy();
   });
