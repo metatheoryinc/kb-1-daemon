@@ -10,6 +10,7 @@ import {
   createBackoffDelay,
   relayInternalUrl,
   sendableCloseCode,
+  withoutHopByHop,
   type BridgeSocket,
 } from './index.js';
 
@@ -65,6 +66,15 @@ describe('tunnel-client helpers', () => {
     expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1'), '__kb2_tunnel/control').href).toBe(
       'ws://127.0.0.1:9920/t/dev1/__kb2_tunnel/control',
     );
+  });
+
+  it('strips hop-by-hop headers before proxying to daemon endpoints', () => {
+    expect(withoutHopByHop({
+      connection: 'keep-alive',
+      Expect: '100-continue',
+      host: 'relay.example',
+      'x-request-id': 'req-1',
+    })).toEqual({ 'x-request-id': 'req-1' });
   });
 });
 

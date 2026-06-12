@@ -47,6 +47,7 @@ const DEFAULT_BACKOFF_JITTER_RATIO = 0.25;
 const hopByHopHeaders = new Set([
   'connection',
   'content-length',
+  'expect',
   'host',
   'keep-alive',
   'proxy-authenticate',
@@ -523,7 +524,7 @@ function rawDataToBytes(data: WebSocket.RawData): Uint8Array {
   return new TextEncoder().encode(String(data));
 }
 
-/* v8 ignore start -- Only used by the live TunnelClient HTTP proxy path covered in Stage A drills. */
+/* v8 ignore start -- Only used by the live TunnelClient HTTP response proxy path covered in Stage A drills. */
 function serializableHeaders(headers: Headers): Record<string, string> {
   const output: Record<string, string> = {};
   for (const [name, value] of headers) {
@@ -533,8 +534,9 @@ function serializableHeaders(headers: Headers): Record<string, string> {
   }
   return output;
 }
+/* v8 ignore stop */
 
-function withoutHopByHop(headers: Record<string, string>): Record<string, string> {
+export function withoutHopByHop(headers: Record<string, string>): Record<string, string> {
   const output: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (!hopByHopHeaders.has(name.toLowerCase())) {
@@ -544,6 +546,7 @@ function withoutHopByHop(headers: Record<string, string>): Record<string, string
   return output;
 }
 
+/* v8 ignore start -- Only used by the live TunnelClient control send path covered in Stage A drills. */
 function encodeJsonBytes(message: Parameters<typeof encodeTunnelMessage>[0]): Buffer {
   return Buffer.from(encodeTunnelMessage(message));
 }

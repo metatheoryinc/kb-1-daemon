@@ -75,6 +75,18 @@ it("carries the relay prototype protocol version", () => {
   expect(TUNNEL_PROTOCOL_VERSION).toBe(2);
 });
 
+it("rejects malformed tunnel messages", () => {
+  expect(() => decodeTunnelMessage("null")).toThrow(
+    "Tunnel message must be an object with a type"
+  );
+  expect(() => decodeTunnelMessage("\"not-an-object\"")).toThrow(
+    "Tunnel message must be an object with a type"
+  );
+  expect(() => decodeTunnelMessage("{}")).toThrow(
+    "Tunnel message must be an object with a type"
+  );
+});
+
 it("exports named pending stream caps and close codes", () => {
   expect(TUNNEL_PENDING_STREAM_FRAME_LIMIT).toBeGreaterThan(0);
   expect(TUNNEL_PENDING_STREAM_BYTE_LIMIT).toBeGreaterThan(0);
@@ -83,14 +95,23 @@ it("exports named pending stream caps and close codes", () => {
   );
 });
 
+it("uses named pending stream caps by default", () => {
+  const buffer = new PendingFrameBuffer();
+
+  expect(buffer.maxFrames).toBe(TUNNEL_PENDING_STREAM_FRAME_LIMIT);
+  expect(buffer.maxBytes).toBe(TUNNEL_PENDING_STREAM_BYTE_LIMIT);
+});
+
 it("buffers and drains pending stream frames in order", () => {
   const buffer = new PendingFrameBuffer({ maxFrames: 3, maxBytes: 8 });
+  const source = new Uint8Array([1, 2]);
 
-  expect(buffer.push(new Uint8Array([1, 2]))).toMatchObject({
+  expect(buffer.push(source)).toMatchObject({
     ok: true,
     queuedFrames: 1,
     queuedBytes: 2
   });
+  source[0] = 9;
   expect(buffer.push(new Uint8Array([3]))).toMatchObject({
     ok: true,
     queuedFrames: 2,
@@ -122,4 +143,31 @@ it("rejects pending stream frames above frame and byte caps", () => {
     queuedFrames: 0,
     queuedBytes: 0
   });
+
+  expect(byteLimited.push(new Uint8Array([1]))).toMatchObject({
+    ok: true,
+    queuedFrames: 1,
+    queuedBytes: 1
+  });
+  expect(byteLimited.push(new Uint8Array([2, 3]))).toEqual({
+    ok: false,
+    reason: "bytes",
+    queuedFrames: 1,
+    queuedBytes: 1
+  });
+});
+
+it("clears pending stream frames without draining them", () => {
+  const buffer = new PendingFrameBuffer({ maxFrames: 2, maxBytes: 4 });
+  expect(buffer.push(new Uint8Array([1, 2]))).toMatchObject({
+    ok: true,
+    queuedFrames: 1,
+    queuedBytes: 2
+  });
+
+  buffer.clear();
+
+  expect(buffer.frameCount).toBe(0);
+  expect(buffer.byteCount).toBe(0);
+  expect(buffer.drain()).toEqual([]);
 });
