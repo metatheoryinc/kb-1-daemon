@@ -397,6 +397,45 @@ describe('daemon routing', () => {
     await expect(malformed.json()).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
   });
 
+  it('routes nested folder metadata through the canonical service dialect', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+
+    await mkdir(join(config.vaultRoot, 'projects', 'active'), { recursive: true });
+
+    const set = await app.request('/api/folders/projects/active/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'mint', icon: 'folder' })
+    });
+    expect(set.status).toBe(200);
+    await expect(set.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'projects/active',
+      metadata: { color: 'mint', icon: 'folder' }
+    });
+
+    const read = await app.request('/api/folders/projects/active/metadata');
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'projects/active',
+      metadata: { color: 'mint', icon: 'folder' }
+    });
+
+    const invalidAccent = await app.request('/api/folders/projects/active/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'amber' })
+    });
+    expect(invalidAccent.status).toBe(400);
+    await expect(invalidAccent.json()).resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
+
+    const missing = await app.request('/api/folders/projects/missing/metadata');
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+  });
+
   it('deletes zero-live folder subtrees through the production session manager once', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });

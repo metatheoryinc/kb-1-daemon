@@ -444,6 +444,59 @@ describe('vault-core filesystem operations', () => {
     await expect(readRawFolderMetadata(root)).resolves.toMatchObject({ parsed: { folders: { target: { color: 'sage' } } } });
   });
 
+  it('preserves concurrent folder metadata updates across set and move interleavings', async () => {
+    await writeVaultFile(ctx, { path: 'moving/child.md', content: 'moving' });
+    await Promise.all(Array.from({ length: 12 }, async (_value, index) => {
+      await makeVaultFolder(ctx, `projects/folder-${index}`);
+    }));
+    await setFolderMetadata(ctx, 'moving', { icon: 'folder' });
+
+    const colors = ['coral', 'peach', 'butter', 'sage', 'mint', 'lime', 'sky', 'periwinkle', 'lavender', 'rose', 'teal', 'slate'] as const;
+    await Promise.all([
+      moveVaultPath(ctx, { kind: 'folder', fromPath: 'moving', toPath: 'archive/moving' }),
+      ...colors.map((color, index) => setFolderMetadata(ctx, `projects/folder-${index}`, { color }))
+    ]);
+
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: {
+        folders: {
+          'archive/moving': { icon: 'folder' },
+          'projects/folder-0': { color: 'coral' },
+          'projects/folder-1': { color: 'peach' },
+          'projects/folder-2': { color: 'butter' },
+          'projects/folder-3': { color: 'sage' },
+          'projects/folder-4': { color: 'mint' },
+          'projects/folder-5': { color: 'lime' },
+          'projects/folder-6': { color: 'sky' },
+          'projects/folder-7': { color: 'periwinkle' },
+          'projects/folder-8': { color: 'lavender' },
+          'projects/folder-9': { color: 'rose' },
+          'projects/folder-10': { color: 'teal' },
+          'projects/folder-11': { color: 'slate' }
+        }
+      }
+    });
+  });
+
+  it('continues folder metadata mutations after queued write failures', async () => {
+    await makeVaultFolder(ctx, 'notes');
+    await mkdir(path.join(root, '.kb2', 'folders.yml'), { recursive: true });
+    try {
+      await expect(Promise.all([
+        setFolderMetadata(ctx, 'notes', { color: 'coral' }),
+        setFolderMetadata(ctx, 'notes', { icon: 'folder' })
+      ])).rejects.toMatchObject({ code: 'EISDIR' });
+    } finally {
+      await rm(path.join(root, '.kb2', 'folders.yml'), { recursive: true, force: true });
+    }
+
+    await expect(setFolderMetadata(ctx, 'notes', { color: 'mint' }))
+      .resolves.toMatchObject({ ok: true, value: { metadata: { color: 'mint' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { notes: { color: 'mint' } } }
+    });
+  });
+
   it('property: folder moves relocate metadata keys exactly', async () => {
     const segment = fc.stringMatching(/^[a-z][a-z0-9]{0,4}$/).filter((value) => value !== 'moved');
     const folderPath = fc.array(segment, { minLength: 1, maxLength: 3 }).map((segments) => segments.join('/'));

@@ -13,6 +13,12 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { emitVaultAudit, type AuditEntry, type VaultActor } from './audit.js';
+import {
+  folderMetadataColorNames,
+  folderMetadataIconNames,
+  type FolderMetadataColor,
+  type FolderMetadataIcon
+} from './folder-metadata-options.js';
 import { isNodeError, statOrNull } from './fs.js';
 import {
   InvalidPathError,
@@ -84,77 +90,6 @@ export interface MoveValue {
   audit: AuditEntry;
 }
 
-export const folderMetadataColorNames = [
-  'coral',
-  'peach',
-  'butter',
-  'sage',
-  'mint',
-  'lime',
-  'sky',
-  'periwinkle',
-  'lavender',
-  'rose',
-  'teal',
-  'slate'
-] as const;
-
-export const folderMetadataIconNames = [
-  'bookmark',
-  'home',
-  'vault',
-  'book',
-  'activity',
-  'people',
-  'star',
-  'stop',
-  'history',
-  'refresh',
-  'fullscreen',
-  'panel',
-  'collapse',
-  'expand-rail',
-  'dots',
-  'settings',
-  'plus',
-  'search',
-  'filter',
-  'chevron',
-  'chevron-down',
-  'file',
-  'folder',
-  'robot',
-  'cloud',
-  'code',
-  'codex',
-  'claude',
-  'anthropic',
-  'opencode',
-  'chatgpt',
-  'openai',
-  'claudeCode',
-  'cursor',
-  'gemini',
-  'copilot',
-  'mistral',
-  'replit',
-  'zed',
-  'cline',
-  'note',
-  'menu',
-  'pushpin',
-  'pushpin-slash',
-  'sun',
-  'moon',
-  'desktop',
-  'device-mobile',
-  'bell',
-  'x'
-] as const;
-
-export type FolderMetadataColor = (typeof folderMetadataColorNames)[number];
-export type FolderMetadataIcon = (typeof folderMetadataIconNames)[number];
-
 export interface FolderMetadata {
   color?: FolderMetadataColor;
   icon?: FolderMetadataIcon;
@@ -178,6 +113,11 @@ const DEFAULT_ENTRY_CAP = 5000;
 const FOLDER_METADATA_RELATIVE_PATH = path.posix.join('.kb2', 'folders.yml');
 const folderMetadataColorSet = new Set<string>(folderMetadataColorNames);
 const folderMetadataIconSet = new Set<string>(folderMetadataIconNames);
+const folderMetadataMutationQueues = new Map<string, Promise<void>>();
+
+function ignoreMutationQueueResult(): void {
+  return undefined;
+}
 
 class EntryCapExceededError extends Error {
   constructor() {
@@ -376,6 +316,22 @@ async function writeFolderMetadataMap(root: string, metadata: FolderMetadataMap)
   }
 }
 
+async function withFolderMetadataMutation<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const key = path.resolve(root);
+  const previous = folderMetadataMutationQueues.get(key) ?? Promise.resolve();
+  const run = previous.then(operation, operation);
+  const next = run.then(ignoreMutationQueueResult, ignoreMutationQueueResult);
+  folderMetadataMutationQueues.set(key, next);
+
+  try {
+    return await run;
+  } finally {
+    if (folderMetadataMutationQueues.get(key) === next) {
+      folderMetadataMutationQueues.delete(key);
+    }
+  }
+}
+
 function applyFolderMetadataInput(current: FolderMetadata, input: FolderMetadataInput): FolderMetadata {
   const next = cloneMetadata(current);
 
@@ -513,27 +469,29 @@ export async function setFolderMetadata(
     const s = await statOrNull(abs);
     if (!s || !s.isDirectory()) return fail('not_found', 'folder not found');
 
-    const metadata = await readFolderMetadataMap(ctx.root);
-    if (!metadata.ok) return metadata;
+    return await withFolderMetadataMutation(ctx.root, async () => {
+      const metadata = await readFolderMetadataMap(ctx.root);
+      if (!metadata.ok) return metadata;
 
-    const nextMetadata = applyFolderMetadataInput(metadata.value[rel] ?? {}, normalizedInput.value);
-    const nextMap = { ...metadata.value };
-    if (isEmptyMetadata(nextMetadata)) {
-      delete nextMap[rel];
-    } else {
-      nextMap[rel] = nextMetadata;
-    }
-    await writeFolderMetadataMap(ctx.root, nextMap);
+      const nextMetadata = applyFolderMetadataInput(metadata.value[rel] ?? {}, normalizedInput.value);
+      const nextMap = { ...metadata.value };
+      if (isEmptyMetadata(nextMetadata)) {
+        delete nextMap[rel];
+      } else {
+        nextMap[rel] = nextMetadata;
+      }
+      await writeFolderMetadataMap(ctx.root, nextMap);
 
-    const audit = await emitVaultAudit({
-      root: ctx.root,
-      actor: ctx.actor,
-      operation: 'write',
-      entityKind: 'folder',
-      path: rel,
-      summary: `Updated folder metadata for ${rel}`
+      const audit = await emitVaultAudit({
+        root: ctx.root,
+        actor: ctx.actor,
+        operation: 'write',
+        entityKind: 'folder',
+        path: rel,
+        summary: `Updated folder metadata for ${rel}`
+      });
+      return { ok: true, value: { path: rel, metadata: nextMetadata, audit } };
     });
-    return { ok: true, value: { path: rel, metadata: nextMetadata, audit } };
   } catch (err) {
     const pathResult = classifyPathError(err);
     /* v8 ignore next -- Defensive false branch rethrows unexpected folder metadata write errors; invalid-path classification is covered. */
@@ -686,29 +644,31 @@ export async function deleteVaultFolder(
     if (children.length > 0 && input.recursive !== true) {
       return fail('folder_not_empty', 'folder is not empty');
     }
-    const metadata = await readFolderMetadataMap(ctx.root);
-    if (!metadata.ok) return metadata;
+    return await withFolderMetadataMutation(ctx.root, async () => {
+      const metadata = await readFolderMetadataMap(ctx.root);
+      if (!metadata.ok) return metadata;
 
-    let trashPath: string | undefined;
-    if (input.permanent === true) {
-      await rm(abs, { recursive: true });
-    } else {
-      trashPath = trashRelativePath(rel);
-      const trashAbs = vaultPath(ctx.root, trashPath);
-      await mkdir(path.dirname(trashAbs), { recursive: true });
-      await rename(abs, trashAbs);
-    }
-    await writeFolderMetadataMap(ctx.root, removeFolderMetadataSubtree(metadata.value, rel));
+      let trashPath: string | undefined;
+      if (input.permanent === true) {
+        await rm(abs, { recursive: true });
+      } else {
+        trashPath = trashRelativePath(rel);
+        const trashAbs = vaultPath(ctx.root, trashPath);
+        await mkdir(path.dirname(trashAbs), { recursive: true });
+        await rename(abs, trashAbs);
+      }
+      await writeFolderMetadataMap(ctx.root, removeFolderMetadataSubtree(metadata.value, rel));
 
-    const audit = await emitVaultAudit({
-      root: ctx.root,
-      actor: ctx.actor,
-      operation: 'delete',
-      entityKind: 'folder',
-      path: rel,
-      summary: input.permanent === true ? `Deleted folder ${rel} permanently` : `Moved folder ${rel} to trash`
+      const audit = await emitVaultAudit({
+        root: ctx.root,
+        actor: ctx.actor,
+        operation: 'delete',
+        entityKind: 'folder',
+        path: rel,
+        summary: input.permanent === true ? `Deleted folder ${rel} permanently` : `Moved folder ${rel} to trash`
+      });
+      return { ok: true, value: { path: rel, ...(trashPath !== undefined ? { trashPath } : {}), permanent: input.permanent === true, audit } };
     });
-    return { ok: true, value: { path: rel, ...(trashPath !== undefined ? { trashPath } : {}), permanent: input.permanent === true, audit } };
   } catch (err) {
     const pathResult = classifyPathError(err);
     /* v8 ignore next -- Defensive false branch rethrows unexpected folder-delete errors; invalid-path classification is covered. */
@@ -734,45 +694,55 @@ export async function moveVaultPath(
     if (!s || (input.kind === 'file' ? !s.isFile() : !s.isDirectory())) {
       return fail('not_found', `${input.kind} not found`);
     }
-    const metadata = input.kind === 'folder' ? await readFolderMetadataMap(ctx.root) : undefined;
-    if (metadata !== undefined && !metadata.ok) return metadata;
-    if ((await exists(toAbs)) && input.overwrite !== true) {
-      return fail('path_collision', 'target path already exists');
-    }
-    await mkdir(path.dirname(toAbs), { recursive: true });
-    if (input.overwrite === true && (await exists(toAbs))) {
-      await rm(toAbs, { recursive: true });
-    }
-    try {
-      await rename(fromAbs, toAbs);
-    } catch (err) {
-      /* v8 ignore start -- Cross-device rename fallback cannot be triggered deterministically inside one temp filesystem. */
-      if (err && typeof err === 'object' && 'code' in err && err.code === 'EXDEV') {
-        if (input.kind === 'folder') {
-          await cp(fromAbs, toAbs, { recursive: true });
-        } else {
-          await copyFile(fromAbs, toAbs);
-        }
-        await rm(fromAbs, { recursive: true });
-      } else {
-        throw err;
+    const movePath = async (metadata?: FolderMetadataMap): Promise<VaultResult<MoveValue>> => {
+      if ((await exists(toAbs)) && input.overwrite !== true) {
+        return fail('path_collision', 'target path already exists');
       }
-      /* v8 ignore stop */
+      await mkdir(path.dirname(toAbs), { recursive: true });
+      if (input.overwrite === true && (await exists(toAbs))) {
+        await rm(toAbs, { recursive: true });
+      }
+      try {
+        await rename(fromAbs, toAbs);
+      } catch (err) {
+        /* v8 ignore start -- Cross-device rename fallback cannot be triggered deterministically inside one temp filesystem. */
+        if (err && typeof err === 'object' && 'code' in err && err.code === 'EXDEV') {
+          if (input.kind === 'folder') {
+            await cp(fromAbs, toAbs, { recursive: true });
+          } else {
+            await copyFile(fromAbs, toAbs);
+          }
+          await rm(fromAbs, { recursive: true });
+        } else {
+          throw err;
+        }
+        /* v8 ignore stop */
+      }
+      if (metadata !== undefined) {
+        await writeFolderMetadataMap(ctx.root, moveFolderMetadataSubtree(metadata, from, to));
+      }
+      const audit = await emitVaultAudit({
+        root: ctx.root,
+        actor: ctx.actor,
+        operation: 'move',
+        entityKind: input.kind,
+        path: to,
+        fromPath: from,
+        toPath: to,
+        summary: `Moved ${from} to ${to}`
+      });
+      return { ok: true, value: { fromPath: from, toPath: to, kind: input.kind, audit } };
+    };
+
+    if (input.kind === 'folder') {
+      return await withFolderMetadataMutation(ctx.root, async () => {
+        const metadata = await readFolderMetadataMap(ctx.root);
+        if (!metadata.ok) return metadata;
+        return movePath(metadata.value);
+      });
     }
-    if (metadata !== undefined) {
-      await writeFolderMetadataMap(ctx.root, moveFolderMetadataSubtree(metadata.value, from, to));
-    }
-    const audit = await emitVaultAudit({
-      root: ctx.root,
-      actor: ctx.actor,
-      operation: 'move',
-      entityKind: input.kind,
-      path: to,
-      fromPath: from,
-      toPath: to,
-      summary: `Moved ${from} to ${to}`
-    });
-    return { ok: true, value: { fromPath: from, toPath: to, kind: input.kind, audit } };
+
+    return await movePath();
   } catch (err) {
     const pathResult = classifyPathError(err);
     /* v8 ignore next -- Defensive false branch rethrows unexpected move errors; invalid-path classification is covered. */

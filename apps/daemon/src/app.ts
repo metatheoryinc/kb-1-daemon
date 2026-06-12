@@ -200,12 +200,20 @@ export function createApp(options: CreateAppOptions): Hono {
       }), 201);
     });
 
-    api.get('/folders/*/metadata', async (context) => {
+    api.get('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/metadata')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
       const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
       return mapServiceResult(context, await vaultService.getFolderMetadata({ path: folderPath }));
     });
 
-    api.put('/folders/*/metadata', async (context) => {
+    api.put('/folders/*', async (context) => {
+      if (!context.req.path.endsWith('/metadata')) {
+        return context.json({ ok: false, error: 'Not found' }, 404);
+      }
+
       const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);

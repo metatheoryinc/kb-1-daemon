@@ -1,4 +1,19 @@
-export const iconNames = [
+export const folderMetadataColorNames = [
+  'coral',
+  'peach',
+  'butter',
+  'sage',
+  'mint',
+  'lime',
+  'sky',
+  'periwinkle',
+  'lavender',
+  'rose',
+  'teal',
+  'slate'
+] as const;
+
+export const folderMetadataIconNames = [
   'bookmark',
   'home',
   'vault',
@@ -51,6 +66,5 @@ export const iconNames = [
   'x'
 ] as const;
 
-export type IconName = (typeof iconNames)[number];
-
-export type IconWeight = 'thin' | 'light' | 'regular' | 'bold' | 'fill' | 'duotone';
+export type FolderMetadataColor = (typeof folderMetadataColorNames)[number];
+export type FolderMetadataIcon = (typeof folderMetadataIconNames)[number];
