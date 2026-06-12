@@ -2,6 +2,7 @@
 import { serve } from '@hono/node-server';
 import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
+import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
 import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -76,11 +77,14 @@ export async function startDaemon(): Promise<StartedDaemon> {
             console.log(`KB2_WEB_PROXY_TARGET=${config.webProxyTarget}`);
           }
           console.log(`status=${config.statusFile}`);
+          const tunnelClient = createRelayTunnelClient(config);
+          tunnelClient?.start();
 
           resolve({
             config,
             status,
             close: async () => {
+              tunnelClient?.stop();
               await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
@@ -124,6 +128,35 @@ export async function startDaemon(): Promise<StartedDaemon> {
     server.once('error', fail);
   });
 }
+
+function createRelayTunnelClient(config: DaemonConfig): TunnelClient | undefined {
+  if (!config.relay) {
+    return undefined;
+  }
+
+  const daemonUrl = new URL(`http://${config.host}:${config.port}`);
+  return new TunnelClient({
+    relayUrl: new URL(config.relay.relayUrl),
+    daemonUrl,
+    token: config.relay.token,
+    logger: daemonRelayLogger,
+  });
+}
+
+const daemonRelayLogger: TunnelClientLogger = {
+  log(level, message, fields) {
+    const entry = fields ? { message, ...fields } : { message };
+    if (level === 'error') {
+      console.error('[relay]', entry);
+      return;
+    }
+    if (level === 'warn') {
+      console.warn('[relay]', entry);
+      return;
+    }
+    console.log('[relay]', entry);
+  },
+};
 
 function documentPathFromWebSocketPath(pathname: string): string | undefined {
   if (pathname === DEMO_DOCUMENT_YJS_PATH) {

@@ -10,12 +10,18 @@ export interface DaemonConfig {
   host: string;
   port: number;
   webProxyTarget?: string;
+  relay?: DaemonRelayConfig;
   kb2Home: string;
   daemonHome: string;
   vaultRoot: string;
   statusFile: string;
   startedAt: string;
   pid: number;
+}
+
+export interface DaemonRelayConfig {
+  relayUrl: string;
+  token: string;
 }
 
 export interface ResolveConfigOptions {
@@ -62,6 +68,24 @@ export function resolveWebProxyTarget(env: NodeJS.ProcessEnv = process.env): str
   return configuredTarget && configuredTarget.length > 0 ? configuredTarget : undefined;
 }
 
+export function resolveRelayConfig(env: NodeJS.ProcessEnv = process.env): DaemonRelayConfig | undefined {
+  const relayUrl = env.KB2_RELAY_URL?.trim();
+  const token = env.KB2_RELAY_TOKEN?.trim();
+
+  if (!relayUrl && !token) {
+    return undefined;
+  }
+
+  if (!relayUrl || !token) {
+    throw new Error('KB2_RELAY_URL and KB2_RELAY_TOKEN must be supplied together.');
+  }
+
+  return {
+    relayUrl: new URL(relayUrl).href,
+    token
+  };
+}
+
 export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonConfig {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
@@ -74,6 +98,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     host: resolveHost(env),
     port: resolvePort(env),
     webProxyTarget: resolveWebProxyTarget(env),
+    relay: resolveRelayConfig(env),
     kb2Home,
     daemonHome,
     vaultRoot,

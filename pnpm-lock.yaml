@@ -98,6 +98,9 @@ importers:
       '@kb-2/local-mcp':
         specifier: workspace:*
         version: link:../../packages/local-mcp
+      '@kb-2/tunnel-client':
+        specifier: workspace:*
+        version: link:../../packages/tunnel-client
       '@kb-2/vault-core':
         specifier: workspace:*
         version: link:../../packages/vault-core
@@ -301,6 +304,22 @@ importers:
       vitest:
         specifier: 4.1.8
         version: 4.1.8(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  packages/tunnel-client:
+    dependencies:
+      '@kb-2/tunnel-protocol':
+        specifier: workspace:*
+        version: link:../tunnel-protocol
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      '@vitest/coverage-v8':
+        specifier: 4.1.8
+        version: 4.1.8(vitest@4.1.8)
 
   packages/tunnel-protocol:
     devDependencies:
