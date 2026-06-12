@@ -3,6 +3,7 @@ import * as encoding from 'lib0/encoding';
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_SESSION_EVENT = 1;
+export const MESSAGE_SYNCED = 2;
 
 export type DocumentSessionEventKind =
   | 'external-merge'
@@ -24,6 +25,12 @@ export function encodeSessionEvent(event: DocumentSessionEvent): Uint8Array {
   const encoder = encoding.createEncoder();
   encoding.writeVarUint(encoder, MESSAGE_SESSION_EVENT);
   encoding.writeVarString(encoder, JSON.stringify(event));
+  return encoding.toUint8Array(encoder);
+}
+
+export function encodeSyncedMessage(): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_SYNCED);
   return encoding.toUint8Array(encoder);
 }
 

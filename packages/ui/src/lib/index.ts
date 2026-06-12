@@ -6,7 +6,6 @@ export { default as BrandMark } from './primitives/BrandMark.svelte';
 export { default as Breadcrumb } from './primitives/Breadcrumb.svelte';
 export type { BreadcrumbAvatar, BreadcrumbItem } from './primitives/Breadcrumb.svelte';
 export { default as Checkbox } from './primitives/Checkbox.svelte';
-export { default as FavoriteButton } from './primitives/FavoriteButton.svelte';
 export { default as FolderIcon } from './primitives/FolderIcon.svelte';
 export { default as Icon } from './primitives/Icon.svelte';
 export { default as IconButton } from './primitives/IconButton.svelte';

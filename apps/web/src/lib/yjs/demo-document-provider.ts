@@ -5,6 +5,7 @@ import * as Y from 'yjs';
 import {
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
+  MESSAGE_SYNCED,
   decodeSessionEvent,
   type DocumentSessionEvent,
 } from '@kb-2/doc-session/protocol';
@@ -14,6 +15,7 @@ export const DEMO_DOCUMENT_TEXT_NAME = 'markdown';
 
 export type DemoDocumentProviderStatus =
   | 'connecting'
+  | 'syncing'
   | 'open'
   | 'closed'
   | 'error';
@@ -30,6 +32,7 @@ export interface DemoDocumentProviderOptions {
   onStatus?: (status: DemoDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
   onSessionEvent?: (event: DocumentSessionEvent) => void;
+  onSynced?: () => void;
 }
 
 export function createDemoDocumentProvider(
@@ -61,7 +64,7 @@ export function createDemoDocumentProvider(
   doc.on('update', updateHandler);
 
   socket.addEventListener('open', () => {
-    options.onStatus?.('open');
+    options.onStatus?.('syncing');
     sendSync((encoder) => {
       syncProtocol.writeSyncStep1(encoder, doc);
     });
@@ -80,6 +83,12 @@ export function createDemoDocumentProvider(
         if (event) {
           options.onSessionEvent?.(event);
         }
+        return;
+      }
+
+      if (messageType === MESSAGE_SYNCED) {
+        options.onStatus?.('open');
+        options.onSynced?.();
         return;
       }
 

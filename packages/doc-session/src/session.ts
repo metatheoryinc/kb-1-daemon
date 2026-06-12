@@ -672,7 +672,7 @@ async function readOptionalFile(filePath: string): Promise<string | undefined> {
   try {
     return await readFile(filePath, 'utf8');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
+    if (isNodeError(error) && (error as { code?: string }).code === 'ENOENT') {
       return undefined;
     }
 

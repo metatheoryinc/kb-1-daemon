@@ -5,7 +5,6 @@
     BrandMark,
     Breadcrumb,
     Checkbox,
-    FavoriteButton,
     FolderIcon,
     Icon,
     IconButton,
@@ -51,7 +50,6 @@
     <h2>Controls</h2>
     <div class="row">
       <Checkbox {checked} ariaLabel="Select file" onclick={() => (checked = !checked)} />
-      <FavoriteButton favorited />
       <IconButton title="Refresh">
         <Icon name="refresh" />
       </IconButton>

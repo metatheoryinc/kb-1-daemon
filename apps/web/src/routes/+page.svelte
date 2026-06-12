@@ -40,6 +40,8 @@
   }
 
   let provider = $state<DemoDocumentProvider | null>(null);
+  let providerGeneration = 0;
+  let providerSynced = $state(false);
   let status = $state<DemoDocumentProviderStatus>('connecting');
   let error = $state<string | null>(null);
   let externalMergeVisible = $state(false);
@@ -71,6 +73,8 @@
   const daemonLabel = $derived(
     status === 'open'
       ? 'Daemon · live'
+      : status === 'syncing'
+        ? 'Daemon · syncing'
       : status === 'connecting'
         ? 'Daemon · connecting'
         : status === 'error'
@@ -142,18 +146,30 @@
 
   function openProvider(path: string): void {
     provider?.destroy();
+    const generation = providerGeneration + 1;
+    providerGeneration = generation;
+    providerSynced = false;
     status = 'connecting';
     error = null;
     docDeleted = false;
     const nextProvider = createDemoDocumentProvider({
       path,
       onStatus: (nextStatus) => {
+        if (generation !== providerGeneration) return;
         status = nextStatus;
       },
       onError: (caught) => {
+        if (generation !== providerGeneration) return;
         error = caught instanceof Error ? caught.message : String(caught);
       },
-      onSessionEvent: handleSessionEvent,
+      onSessionEvent: (event) => {
+        if (generation !== providerGeneration) return;
+        handleSessionEvent(event);
+      },
+      onSynced: () => {
+        if (generation !== providerGeneration) return;
+        providerSynced = true;
+      },
     });
     provider = nextProvider;
   }
@@ -181,7 +197,12 @@
 
   function toggleColorMode(): void {
     colorMode = colorMode === 'dark' ? 'light' : 'dark';
-    document.documentElement.classList.toggle('dark', colorMode === 'dark');
+    applyColorMode(colorMode);
+  }
+
+  function applyColorMode(mode: 'light' | 'dark'): void {
+    document.documentElement.classList.toggle('dark', mode === 'dark');
+    document.documentElement.dataset.rdMode = mode;
   }
 
   function updateSearch(value: string): void {
@@ -409,7 +430,10 @@
       documentPath = decodeURIComponent(pathname.replace(/^\/+/, ''));
     }
 
-    colorMode = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+    colorMode = document.documentElement.dataset.rdMode === 'dark' || document.documentElement.classList.contains('dark')
+      ? 'dark'
+      : 'light';
+    applyColorMode(colorMode);
     openProvider(documentPath);
     void refreshVaultInfo();
     void refreshTree();
@@ -430,6 +454,7 @@
       }
       provider?.destroy();
       provider = null;
+      providerSynced = false;
     };
   });
 </script>
@@ -514,15 +539,17 @@
   {/if}
 
   <section class="document-shell" aria-label="Markdown document">
-    {#if provider}
-      <PlaintextEditor
-        ydoc={provider.doc}
-        ytext={provider.text}
-        livePaths={livePaths}
-        orgPeople={orgPeople}
-        readOnly={docDeleted}
-        scroll="self"
-      />
+    {#if provider && providerSynced}
+      {#key provider}
+        <PlaintextEditor
+          ydoc={provider.doc}
+          ytext={provider.text}
+          livePaths={livePaths}
+          orgPeople={orgPeople}
+          readOnly={docDeleted}
+          scroll="self"
+        />
+      {/key}
     {:else if mounted}
       <div class="loading">Opening document…</div>
     {/if}
