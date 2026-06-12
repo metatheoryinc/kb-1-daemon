@@ -312,6 +312,130 @@ describe('daemon routing', () => {
     await sessions.close();
   });
 
+  it('reads and writes folder metadata through REST and hydrates tree folders inline', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+
+    const created = await app.request('/api/folders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'notes' })
+    });
+    expect(created.status).toBe(201);
+
+    const set = await app.request('/api/folders/notes/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'coral', icon: 'folder' })
+    });
+    expect(set.status).toBe(200);
+    await expect(set.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'notes',
+      metadata: { color: 'coral', icon: 'folder' },
+      audit: { operation: 'write', entityKind: 'folder', path: 'notes' }
+    });
+    const setRaw = await readRawFolderMetadata(config.vaultRoot);
+    expect(setRaw).toContain('notes:');
+    expect(setRaw).toContain('color: coral');
+    expect(setRaw).toContain('icon: folder');
+
+    const read = await app.request('/api/folders/notes/metadata');
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({ ok: true, path: 'notes', metadata: { color: 'coral', icon: 'folder' } });
+
+    const tree = await app.request('/api/tree');
+    expect(tree.status).toBe(200);
+    await expect(tree.json()).resolves.toMatchObject({
+      ok: true,
+      entries: [{ path: 'notes', kind: 'folder', metadata: { color: 'coral', icon: 'folder' } }]
+    });
+
+    const cleared = await app.request('/api/folders/notes/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: null, icon: null })
+    });
+    expect(cleared.status).toBe(200);
+    await expect(cleared.json()).resolves.toMatchObject({ ok: true, metadata: {} });
+    const raw = await readRawFolderMetadata(config.vaultRoot);
+    expect(raw).toContain('folders: {}');
+
+    const audit = await readAuditRows(config.vaultRoot);
+    expect(audit.map((row) => row.operation)).toEqual(['mkdir', 'write', 'write']);
+  });
+
+  it('maps folder metadata REST failures through the canonical service dialect', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+
+    await mkdir(join(config.vaultRoot, 'notes'), { recursive: true });
+
+    const nonString = await app.request('/api/folders/notes/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 42 })
+    });
+    expect(nonString.status).toBe(400);
+    await expect(nonString.json()).resolves.toMatchObject({ ok: false, error: 'invalid_request' });
+
+    const invalidAccent = await app.request('/api/folders/notes/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'amber' })
+    });
+    expect(invalidAccent.status).toBe(400);
+    await expect(invalidAccent.json()).resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
+
+    const missing = await app.request('/api/folders/missing/metadata');
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+
+    await writeFileWithParents(join(config.vaultRoot, '.kb2', 'folders.yml'), 'folders: [');
+    const malformed = await app.request('/api/folders/notes/metadata');
+    expect(malformed.status).toBe(500);
+    await expect(malformed.json()).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+  });
+
+  it('routes nested folder metadata through the canonical service dialect', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+
+    await mkdir(join(config.vaultRoot, 'projects', 'active'), { recursive: true });
+
+    const set = await app.request('/api/folders/projects/active/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'mint', icon: 'folder' })
+    });
+    expect(set.status).toBe(200);
+    await expect(set.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'projects/active',
+      metadata: { color: 'mint', icon: 'folder' }
+    });
+
+    const read = await app.request('/api/folders/projects/active/metadata');
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({
+      ok: true,
+      path: 'projects/active',
+      metadata: { color: 'mint', icon: 'folder' }
+    });
+
+    const invalidAccent = await app.request('/api/folders/projects/active/metadata', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ color: 'amber' })
+    });
+    expect(invalidAccent.status).toBe(400);
+    await expect(invalidAccent.json()).resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
+
+    const missing = await app.request('/api/folders/projects/missing/metadata');
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+  });
+
   it('deletes zero-live folder subtrees through the production session manager once', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
@@ -525,6 +649,14 @@ describe('daemon routing', () => {
     await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
 
     await expect(mcpToolJson(client, 'create_folder', { path: 'moved' })).resolves.toMatchObject({ ok: true, path: 'moved' });
+    await expect(mcpToolJson(client, 'set_folder_metadata', { path: 'moved', color: 'mint', icon: 'folder' }))
+      .resolves.toMatchObject({ ok: true, path: 'moved', metadata: { color: 'mint', icon: 'folder' } });
+    await expect(mcpToolJson(client, 'get_folder_metadata', { path: 'moved' }))
+      .resolves.toMatchObject({ ok: true, path: 'moved', metadata: { color: 'mint', icon: 'folder' } });
+    const metadataRaw = await readRawFolderMetadata(config.vaultRoot);
+    expect(metadataRaw).toContain('moved:');
+    expect(metadataRaw).toContain('color: mint');
+    expect(metadataRaw).toContain('icon: folder');
     await expect(mcpToolJson(client, 'move_note', { from_path: 'notes/a.md', to_path: 'moved/a.md' }))
       .resolves.toMatchObject({ ok: true, fromPath: 'notes/a.md', toPath: 'moved/a.md', live: true });
     await expect(readFile(join(config.vaultRoot, 'moved/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
@@ -552,6 +684,7 @@ describe('daemon routing', () => {
       'append',
       'prepend',
       'mkdir',
+      'write',
       'move',
       'move',
       'delete',
@@ -1034,6 +1167,10 @@ function close(server: ReturnType<typeof createServer>): Promise<void> {
 async function readAuditRows(root: string): Promise<Array<Record<string, unknown>>> {
   const content = await readFile(join(root, '.kb2/audit/changes.jsonl'), 'utf8');
   return content.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function readRawFolderMetadata(root: string): Promise<string> {
+  return readFile(join(root, '.kb2/folders.yml'), 'utf8');
 }
 
 async function writeFileWithParents(filePath: string, content: string): Promise<void> {

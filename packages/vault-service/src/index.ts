@@ -6,17 +6,21 @@ import {
   deleteVaultFile,
   deleteVaultFolder,
   emitVaultAudit,
+  getFolderMetadata as getVaultFolderMetadata,
   getVaultInfo,
+  listFolderMetadata as listVaultFolderMetadata,
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
   prependContent,
   readVaultFile,
   searchVaultFiles,
+  setFolderMetadata as setVaultFolderMetadata,
   validateVaultPath,
   writeVaultFile,
   type AnchoredSpliceRequest,
   type AuditEntry,
+  type FolderMetadataInput,
   type VaultActor,
   type VaultErrorCode,
   type VaultResult
@@ -59,6 +63,9 @@ export interface EditNoteInput {
 export interface LocalMcpVaultService {
   vaultInfo(): Promise<ServiceResult>;
   listFiles(input: { under?: string; depth?: number }): Promise<ServiceResult>;
+  listFolderMetadata(): Promise<ServiceResult>;
+  getFolderMetadata(input: { path: string }): Promise<ServiceResult>;
+  setFolderMetadata(input: { path: string; metadata: FolderMetadataInput; actor: VaultActor }): Promise<ServiceResult>;
   readNote(input: { path: string }): Promise<ServiceResult>;
   createNote(input: { path: string; content: string; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult>;
   editNote(input: EditNoteInput & { actor: VaultActor }): Promise<ServiceResult>;
@@ -87,6 +94,18 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
 
     async listFiles(input) {
       return serviceResult(await listVaultTree(ctx(), input));
+    },
+
+    async listFolderMetadata() {
+      return serviceResult(await listVaultFolderMetadata(ctx()));
+    },
+
+    async getFolderMetadata(input) {
+      return serviceResult(await getVaultFolderMetadata(ctx(), input.path));
+    },
+
+    async setFolderMetadata(input) {
+      return serviceResult(await setVaultFolderMetadata(ctx(input.actor), input.path, input.metadata));
     },
 
     async readNote(input) {

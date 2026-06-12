@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import fc from 'fast-check';
+import { parse as parseYaml } from 'yaml';
 
 import {
   DOCUMENT_BYTES_LIMIT,
@@ -14,11 +15,14 @@ import {
 import {
   deleteVaultFile,
   deleteVaultFolder,
+  getFolderMetadata,
   getVaultInfo,
+  listFolderMetadata,
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
   readVaultFile,
+  setFolderMetadata,
   writeVaultFile,
   type VaultContext
 } from './vault-ops.js';
@@ -298,6 +302,234 @@ describe('vault-core filesystem operations', () => {
     await writeVaultFile({ root }, { path: 'default-actor.md', content: 'x' });
     const audit = await readAuditLines(root);
     expect(audit[0]).toMatchObject({ actor: { kind: 'user' } });
+  });
+
+  it('writes, merges, clears, lists, and hydrates folder metadata with raw folders.yml assertions', async () => {
+    await makeVaultFolder(ctx, 'notes');
+    await writeVaultFile(ctx, { path: 'notes/a.md', content: 'a' });
+
+    const colored = await setFolderMetadata(ctx, 'notes', { color: 'coral' });
+    expect(colored).toMatchObject({ ok: true, value: { path: 'notes', metadata: { color: 'coral' } } });
+    await expect(getFolderMetadata(ctx, 'notes')).resolves.toMatchObject({ ok: true, value: { metadata: { color: 'coral' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { notes: { color: 'coral' } } }
+    });
+
+    const iconed = await setFolderMetadata(ctx, 'notes', { icon: 'folder' });
+    expect(iconed).toMatchObject({ ok: true, value: { metadata: { color: 'coral', icon: 'folder' } } });
+    await expect(getFolderMetadata(ctx, 'notes')).resolves.toMatchObject({ ok: true, value: { metadata: { color: 'coral', icon: 'folder' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { notes: { color: 'coral', icon: 'folder' } } }
+    });
+
+    const tree = await listVaultTree(ctx);
+    expect(tree.ok ? tree.value.entries : []).toContainEqual(expect.objectContaining({
+      path: 'notes',
+      kind: 'folder',
+      metadata: { color: 'coral', icon: 'folder' }
+    }));
+
+    const clearedColor = await setFolderMetadata(ctx, 'notes', { color: null });
+    expect(clearedColor).toMatchObject({ ok: true, value: { metadata: { icon: 'folder' } } });
+    await expect(getFolderMetadata(ctx, 'notes')).resolves.toMatchObject({ ok: true, value: { metadata: { icon: 'folder' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { notes: { icon: 'folder' } } }
+    });
+
+    const clearedAll = await setFolderMetadata(ctx, 'notes', { icon: null });
+    expect(clearedAll).toMatchObject({ ok: true, value: { metadata: {} } });
+    await expect(getFolderMetadata(ctx, 'notes')).resolves.toMatchObject({ ok: true, value: { metadata: {} } });
+    await expect(listFolderMetadata(ctx)).resolves.toEqual({ ok: true, value: { folders: {} } });
+    const raw = await readRawFolderMetadata(root);
+    expect(raw.raw).toContain('folders: {}');
+    expect(raw.parsed).toEqual({ folders: {} });
+
+    const auditLines = await readAuditLines(root) as Array<{ operation: string; entityKind: string; path: string }>;
+    expect(auditLines.map((line) => line.operation)).toEqual(['mkdir', 'create', 'write', 'write', 'write', 'write']);
+    expect(auditLines.slice(2).every((line) => line.entityKind === 'folder' && line.path === 'notes')).toBe(true);
+  });
+
+  it('supports unicode folder metadata and reports not_found for missing folders', async () => {
+    const folderPath = 'プロジェクト/mañana';
+    await makeVaultFolder(ctx, folderPath);
+
+    await expect(setFolderMetadata(ctx, folderPath, { color: 'sky', icon: 'book' }))
+      .resolves.toMatchObject({ ok: true, value: { path: folderPath, metadata: { color: 'sky', icon: 'book' } } });
+    await expect(getFolderMetadata(ctx, folderPath))
+      .resolves.toMatchObject({ ok: true, value: { metadata: { color: 'sky', icon: 'book' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { [folderPath]: { color: 'sky', icon: 'book' } } }
+    });
+
+    await expect(getFolderMetadata(ctx, 'missing')).resolves.toMatchObject({ ok: false, error: 'not_found' });
+    await expect(setFolderMetadata(ctx, 'missing', { color: 'sky' })).resolves.toMatchObject({ ok: false, error: 'not_found' });
+    await expect(getFolderMetadata(ctx, '../missing')).resolves.toMatchObject({ ok: false, error: 'invalid_path' });
+    await expect(setFolderMetadata(ctx, '../missing', { color: 'sky' })).resolves.toMatchObject({ ok: false, error: 'invalid_path' });
+  });
+
+  it('rejects invalid folder metadata values before writing', async () => {
+    await makeVaultFolder(ctx, 'notes');
+
+    await expect(setFolderMetadata(ctx, 'notes', { color: 'amber' }))
+      .resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
+    await expect(setFolderMetadata(ctx, 'notes', { icon: 'not-an-icon' }))
+      .resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
+    await expect(stat(path.join(root, '.kb2', 'folders.yml'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails loudly for malformed folders.yml instead of silently defaulting', async () => {
+    await makeVaultFolder(ctx, 'notes');
+    await writeFileWithParents(path.join(root, '.kb2', 'folders.yml'), 'folders: [', 'utf8');
+
+    await expect(listFolderMetadata(ctx)).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    await expect(getFolderMetadata(ctx, 'notes')).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    await expect(setFolderMetadata(ctx, 'notes', { color: 'coral' })).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    await expect(listVaultTree(ctx)).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    await expect(deleteVaultFolder(ctx, { path: 'notes', permanent: true })).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    await expect(moveVaultPath(ctx, { kind: 'folder', fromPath: 'notes', toPath: 'renamed' })).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+    expect((await stat(path.join(root, 'notes'))).isDirectory()).toBe(true);
+  });
+
+  it.each([
+    '[]',
+    'folders:\n  notes: coral\n',
+    'folders:\n  notes:\n    color: amber\n',
+    'folders:\n  notes:\n    icon: not-an-icon\n',
+    'folders:\n  ../escape:\n    color: coral\n'
+  ])('fails loudly for invalid folders.yml shape %#', async (content) => {
+    await writeFileWithParents(path.join(root, '.kb2', 'folders.yml'), content, 'utf8');
+    await expect(listFolderMetadata(ctx)).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
+  });
+
+  it('rethrows unexpected folders.yml read errors instead of converting them to defaults', async () => {
+    await mkdir(path.join(root, '.kb2', 'folders.yml'), { recursive: true });
+    await expect(listFolderMetadata(ctx)).rejects.toMatchObject({ code: 'EISDIR' });
+  });
+
+  it('propagates folder metadata through folder moves and removes it on folder delete', async () => {
+    await writeVaultFile(ctx, { path: 'alpha/child/deep.md', content: 'deep' });
+    await makeVaultFolder(ctx, 'other');
+    await setFolderMetadata(ctx, 'alpha', { color: 'mint' });
+    await setFolderMetadata(ctx, 'alpha/child', { icon: 'folder' });
+    await setFolderMetadata(ctx, 'other', { color: 'rose' });
+
+    await expect(moveVaultPath(ctx, { kind: 'folder', fromPath: 'alpha', toPath: 'renamed/alpha' }))
+      .resolves.toMatchObject({ ok: true, value: { fromPath: 'alpha', toPath: 'renamed/alpha' } });
+    await expect(getFolderMetadata(ctx, 'renamed/alpha')).resolves.toMatchObject({ ok: true, value: { metadata: { color: 'mint' } } });
+    await expect(getFolderMetadata(ctx, 'renamed/alpha/child')).resolves.toMatchObject({ ok: true, value: { metadata: { icon: 'folder' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: {
+        folders: {
+          other: { color: 'rose' },
+          'renamed/alpha': { color: 'mint' },
+          'renamed/alpha/child': { icon: 'folder' }
+        }
+      }
+    });
+
+    await expect(deleteVaultFolder(ctx, { path: 'renamed/alpha', recursive: true, permanent: true }))
+      .resolves.toMatchObject({ ok: true, value: { path: 'renamed/alpha' } });
+    await expect(listFolderMetadata(ctx)).resolves.toEqual({ ok: true, value: { folders: { other: { color: 'rose' } } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({ parsed: { folders: { other: { color: 'rose' } } } });
+  });
+
+  it('removes overwritten target subtree metadata when folder moves overwrite', async () => {
+    await writeVaultFile(ctx, { path: 'source/child.md', content: 'source' });
+    await writeVaultFile(ctx, { path: 'target/old.md', content: 'target' });
+    await setFolderMetadata(ctx, 'source', { color: 'sage' });
+    await setFolderMetadata(ctx, 'target', { color: 'rose' });
+
+    await expect(moveVaultPath(ctx, { kind: 'folder', fromPath: 'source', toPath: 'target', overwrite: true }))
+      .resolves.toMatchObject({ ok: true, value: { fromPath: 'source', toPath: 'target' } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({ parsed: { folders: { target: { color: 'sage' } } } });
+  });
+
+  it('preserves concurrent folder metadata updates across set and move interleavings', async () => {
+    await writeVaultFile(ctx, { path: 'moving/child.md', content: 'moving' });
+    await Promise.all(Array.from({ length: 12 }, async (_value, index) => {
+      await makeVaultFolder(ctx, `projects/folder-${index}`);
+    }));
+    await setFolderMetadata(ctx, 'moving', { icon: 'folder' });
+
+    const colors = ['coral', 'peach', 'butter', 'sage', 'mint', 'lime', 'sky', 'periwinkle', 'lavender', 'rose', 'teal', 'slate'] as const;
+    await Promise.all([
+      moveVaultPath(ctx, { kind: 'folder', fromPath: 'moving', toPath: 'archive/moving' }),
+      ...colors.map((color, index) => setFolderMetadata(ctx, `projects/folder-${index}`, { color }))
+    ]);
+
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: {
+        folders: {
+          'archive/moving': { icon: 'folder' },
+          'projects/folder-0': { color: 'coral' },
+          'projects/folder-1': { color: 'peach' },
+          'projects/folder-2': { color: 'butter' },
+          'projects/folder-3': { color: 'sage' },
+          'projects/folder-4': { color: 'mint' },
+          'projects/folder-5': { color: 'lime' },
+          'projects/folder-6': { color: 'sky' },
+          'projects/folder-7': { color: 'periwinkle' },
+          'projects/folder-8': { color: 'lavender' },
+          'projects/folder-9': { color: 'rose' },
+          'projects/folder-10': { color: 'teal' },
+          'projects/folder-11': { color: 'slate' }
+        }
+      }
+    });
+  });
+
+  it('continues folder metadata mutations after queued write failures', async () => {
+    await makeVaultFolder(ctx, 'notes');
+    await mkdir(path.join(root, '.kb2', 'folders.yml'), { recursive: true });
+    try {
+      await expect(Promise.all([
+        setFolderMetadata(ctx, 'notes', { color: 'coral' }),
+        setFolderMetadata(ctx, 'notes', { icon: 'folder' })
+      ])).rejects.toMatchObject({ code: 'EISDIR' });
+    } finally {
+      await rm(path.join(root, '.kb2', 'folders.yml'), { recursive: true, force: true });
+    }
+
+    await expect(setFolderMetadata(ctx, 'notes', { color: 'mint' }))
+      .resolves.toMatchObject({ ok: true, value: { metadata: { color: 'mint' } } });
+    await expect(readRawFolderMetadata(root)).resolves.toMatchObject({
+      parsed: { folders: { notes: { color: 'mint' } } }
+    });
+  });
+
+  it('property: folder moves relocate metadata keys exactly', async () => {
+    const segment = fc.stringMatching(/^[a-z][a-z0-9]{0,4}$/).filter((value) => value !== 'moved');
+    const folderPath = fc.array(segment, { minLength: 1, maxLength: 3 }).map((segments) => segments.join('/'));
+    const folderSet = fc.uniqueArray(folderPath, { minLength: 2, maxLength: 8 });
+
+    await fc.assert(fc.asyncProperty(folderSet, async (folders) => {
+      const propertyRoot = await mkdtemp(path.join(tmpdir(), 'kb2-vault-core-metadata-property-'));
+      const propertyCtx: VaultContext = { root: propertyRoot, actor: { kind: 'user', client: 'property' } };
+      try {
+        const sortedFolders = [...folders].sort();
+        for (const folder of sortedFolders) {
+          await makeVaultFolder(propertyCtx, folder);
+        }
+
+        const initialMetadata: Record<string, { color: 'coral' | 'mint' }> = {};
+        for (const [index, folder] of sortedFolders.entries()) {
+          const color = index % 2 === 0 ? 'coral' : 'mint';
+          initialMetadata[folder] = { color };
+          await setFolderMetadata(propertyCtx, folder, { color });
+        }
+
+        const fromPath = sortedFolders[0]!;
+        const toPath = `moved/${fromPath}`;
+        await expect(moveVaultPath(propertyCtx, { kind: 'folder', fromPath, toPath }))
+          .resolves.toMatchObject({ ok: true });
+
+        const expected = expectedMovedMetadata(initialMetadata, fromPath, toPath);
+        await expect(listFolderMetadata(propertyCtx)).resolves.toEqual({ ok: true, value: { folders: expected } });
+        await expect(readRawFolderMetadata(propertyRoot)).resolves.toMatchObject({ parsed: { folders: expected } });
+      } finally {
+        await rm(propertyRoot, { recursive: true, force: true });
+      }
+    }), { numRuns: 25 });
   });
 });
 
@@ -610,10 +842,33 @@ async function readAuditLines(root: string): Promise<unknown[]> {
   return content.trim().split('\n').map((line) => JSON.parse(line) as unknown);
 }
 
+async function readRawFolderMetadata(root: string): Promise<{ raw: string; parsed: unknown }> {
+  const raw = await readFile(path.join(root, '.kb2/folders.yml'), 'utf8');
+  return { raw, parsed: parseYaml(raw) };
+}
+
 async function writeFileWithParents(pathname: string, content: string, encoding: BufferEncoding): Promise<void> {
   await writeFile(pathname, content, encoding).catch(async (error: unknown) => {
     if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
     await mkdir(path.dirname(pathname), { recursive: true });
     await writeFile(pathname, content, encoding);
   });
+}
+
+function expectedMovedMetadata(
+  metadata: Record<string, { color: 'coral' | 'mint' }>,
+  fromPath: string,
+  toPath: string
+): Record<string, { color: 'coral' | 'mint' }> {
+  const next: Record<string, { color: 'coral' | 'mint' }> = {};
+  for (const [folderPath, folderMetadata] of Object.entries(metadata)) {
+    if (folderPath === fromPath) {
+      next[toPath] = folderMetadata;
+    } else if (folderPath.startsWith(`${fromPath}/`)) {
+      next[path.posix.join(toPath, folderPath.slice(fromPath.length + 1))] = folderMetadata;
+    } else {
+      next[folderPath] = folderMetadata;
+    }
+  }
+  return Object.fromEntries(Object.entries(next).sort(([left], [right]) => left.localeCompare(right)));
 }

@@ -81,12 +81,35 @@ export function createLocalMcpServer(service: LocalMcpVaultService): McpServer {
   }, async () => service.vaultInfo());
 
   registerTool<{ under?: string; depth?: number }>(server, 'list_files', {
-    description: 'List files and folders under a vault folder. Depth and entry caps mirror the daemon API. Read-only; writes no audit row.',
+    description: 'List files and folders under a vault folder, including inline metadata on folder entries. Depth and entry caps mirror the daemon API. Read-only; writes no audit row.',
     inputSchema: {
       under: z.string().optional().describe('Folder path to list under. Omit for the vault root.'),
       depth: z.number().int().nonnegative().optional().describe('Maximum recursive depth to return.')
     }
   }, async (input) => service.listFiles(input));
+
+  registerTool<{ path: string }>(server, 'get_folder_metadata', {
+    description: 'Read durable folder color/icon metadata from .kb2/folders.yml. Read-only; writes no audit row.',
+    inputSchema: {
+      path: z.string().describe('Vault-relative folder path.')
+    }
+  }, async (input) => service.getFolderMetadata(input));
+
+  registerTool<{ path: string; color?: string | null; icon?: string | null }>(server, 'set_folder_metadata', {
+    description: 'Merge durable folder color/icon metadata into .kb2/folders.yml. Use null to clear a key. Mutations are audited as mcp_client.',
+    inputSchema: {
+      path: z.string().describe('Vault-relative folder path.'),
+      color: z.string().nullable().optional().describe('Accent color name to set, or null to clear.'),
+      icon: z.string().nullable().optional().describe('Icon name to set, or null to clear.')
+    }
+  }, async (input) => service.setFolderMetadata({
+    path: input.path,
+    metadata: {
+      ...(Object.prototype.hasOwnProperty.call(input, 'color') ? { color: input.color } : {}),
+      ...(Object.prototype.hasOwnProperty.call(input, 'icon') ? { icon: input.icon } : {})
+    },
+    actor: actor()
+  }));
 
   registerTool<{ path: string }>(server, 'read_note', {
     description: 'Read a Markdown note and return content, stat fields, and baseline. Use baseline for edit_note retry loops. Read-only; writes no audit row.',

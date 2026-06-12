@@ -1,4 +1,10 @@
 export { emitVaultAudit, type AuditEntry, type VaultActor } from './audit.js';
+export {
+  folderMetadataColorNames,
+  folderMetadataIconNames,
+  type FolderMetadataColor,
+  type FolderMetadataIcon
+} from './folder-metadata-options.js';
 export { isNodeError, statOrNull } from './fs.js';
 export { InvalidPathError, resolveVaultPath, validateVaultPath } from './path.js';
 export {
@@ -21,13 +27,20 @@ export {
 export {
   deleteVaultFile,
   deleteVaultFolder,
+  getFolderMetadata,
   getVaultInfo,
+  listFolderMetadata,
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
   readVaultFile,
+  setFolderMetadata,
   writeVaultFile,
   type DeleteValue,
+  type FolderMetadata,
+  type FolderMetadataInput,
+  type FolderMetadataMap,
+  type FolderMetadataValue,
   type MoveValue,
   type ReadFileValue,
   type VaultContext,

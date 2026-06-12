@@ -33,7 +33,18 @@ describe('local MCP server', () => {
     const mutationActors: VaultActor[] = [];
     const service: LocalMcpVaultService = {
       vaultInfo: async () => ({ ok: true, rootName: 'demo-vault', fileCount: 1, folderCount: 1 }),
-      listFiles: async (input) => ({ ok: true, entries: [{ path: input.under ?? 'note.md', kind: 'file', size: 4, mtimeMs: 1 }] }),
+      listFiles: async (input) => ({ ok: true, entries: [{ path: input.under ?? 'note.md', kind: input.under ? 'folder' : 'file', size: 4, mtimeMs: 1, metadata: input.under ? { color: 'coral' } : undefined }] }),
+      listFolderMetadata: async () => ({ ok: true, folders: { notes: { color: 'coral' } } }),
+      getFolderMetadata: async (input) => ({ ok: true, path: input.path, metadata: { color: 'coral' } }),
+      setFolderMetadata: async (input) => recordActor(mutationActors, input.actor, {
+        ok: true,
+        path: input.path,
+        metadata: {
+          ...(input.metadata.color ? { color: input.metadata.color } : {}),
+          ...(input.metadata.icon ? { icon: input.metadata.icon } : {})
+        },
+        audit: audit(input.actor, 'write')
+      }),
       readNote: async () => ({ ok: true, path: 'note.md', content: 'alpha beta', baseline: 'b1', size: 10, mtimeMs: 1 }),
       createNote: async (input) => recordActor(mutationActors, input.actor, { ok: true, path: input.path, audit: audit(input.actor, 'create') }),
       editNote: async (input) => recordActor(mutationActors, input.actor, input.baseline === 'stale'
@@ -69,17 +80,21 @@ describe('local MCP server', () => {
       'delete_folder',
       'delete_note',
       'edit_note',
+      'get_folder_metadata',
       'list_files',
       'move_folder',
       'move_note',
       'prepend_note',
       'read_note',
       'search',
+      'set_folder_metadata',
       'vault_info'
     ]);
 
     expect(await toolJson(client, 'vault_info', {})).toMatchObject({ ok: true, rootName: 'demo-vault' });
-    expect(await toolJson(client, 'list_files', { under: 'notes', depth: 1 })).toMatchObject({ ok: true, entries: [{ path: 'notes' }] });
+    expect(await toolJson(client, 'list_files', { under: 'notes', depth: 1 })).toMatchObject({ ok: true, entries: [{ path: 'notes', metadata: { color: 'coral' } }] });
+    expect(await toolJson(client, 'get_folder_metadata', { path: 'notes' })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'coral' } });
+    expect(await toolJson(client, 'set_folder_metadata', { path: 'notes', color: 'mint', icon: null })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'mint' } });
     expect(await toolJson(client, 'read_note', { path: 'note.md' })).toMatchObject({ ok: true, baseline: 'b1' });
     expect(await toolJson(client, 'create_note', { path: 'created.md', content: 'created' })).toMatchObject({ ok: true, path: 'created.md' });
     expect(await toolJson(client, 'edit_note', { path: 'note.md', baseline: 'b1', old_text: 'alpha', new_text: 'ALPHA' })).toMatchObject({ ok: true, content: 'ALPHA' });
@@ -99,7 +114,7 @@ describe('local MCP server', () => {
     expect(stale.isError).toBe(true);
     expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}');
 
-    expect(mutationActors).toHaveLength(10);
+    expect(mutationActors).toHaveLength(11);
     expect(mutationActors.every((actor) => actor.kind === 'mcp_client' && actor.client === 'sdk-test-client')).toBe(true);
 
     await transport.terminateSession();
@@ -146,6 +161,9 @@ function emptyService(): LocalMcpVaultService {
     listFiles: ok,
     readNote: ok,
     createNote: ok,
+    listFolderMetadata: ok,
+    getFolderMetadata: ok,
+    setFolderMetadata: ok,
     editNote: ok,
     appendNote: ok,
     prependNote: ok,
