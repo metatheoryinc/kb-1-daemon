@@ -24,6 +24,22 @@ export { default as Panel } from './layout/Panel.svelte';
 export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
 export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
+export { default as DocumentHeader } from './local-editor/DocumentHeader.svelte';
+export { default as FileNode } from './local-editor/FileNode.svelte';
+export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
+export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
+export { default as FolderNode } from './local-editor/FolderNode.svelte';
+export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
+export type {
+  LocalFileAction,
+  LocalFileNode,
+  LocalFolderAction,
+  LocalFolderMetadata,
+  LocalFolderNode,
+  LocalSearchResult,
+  LocalTreeAction,
+  LocalTreeNode,
+} from './local-editor/types';
 export type {
   DocumentSaveBannerProps,
   DocumentSaveBannerVariant,
