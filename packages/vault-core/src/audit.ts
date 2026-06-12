@@ -2,7 +2,9 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export interface VaultActor {
-  kind: 'user' | 'mcp_client' | 'integration' | 'system';
+  kind: 'user' | 'mcp_client' | 'integration' | 'system' | 'unknown';
+  id?: string;
+  name?: string;
   client?: string;
 }
 

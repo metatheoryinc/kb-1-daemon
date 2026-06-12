@@ -4,6 +4,7 @@ import {
   DEFAULT_HOST,
   DEFAULT_PORT,
   createDaemonConfig,
+  resolveActorDefault,
   resolveKb2Home,
   resolvePort,
   resolveRelayConfig,
@@ -54,6 +55,7 @@ describe('daemon config', () => {
         relayUrl: 'http://127.0.0.1:9920/t/dev1',
         token: 'test-token'
       },
+      actorDefault: 'user',
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
       vaultRoot: join(kb2Home, 'demo-vault'),
@@ -68,6 +70,7 @@ describe('daemon config', () => {
 
     expect(config.host).toBe(DEFAULT_HOST);
     expect(config.port).toBe(DEFAULT_PORT);
+    expect(config.actorDefault).toBe('user');
   });
 
   it('rejects invalid ports', () => {
@@ -98,5 +101,12 @@ describe('daemon config', () => {
       relayUrl: 'http://127.0.0.1:9920/t/dev1',
       token: 'test-token'
     });
+  });
+
+  it('resolves the REST actor default mode', () => {
+    expect(resolveActorDefault({})).toBe('user');
+    expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: ' unknown ' })).toBe('unknown');
+    expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: 'user' })).toBe('user');
+    expect(() => resolveActorDefault({ KB2_ACTOR_DEFAULT: 'system' })).toThrow(/KB2_ACTOR_DEFAULT/);
   });
 });

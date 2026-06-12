@@ -49,7 +49,8 @@ export async function startDaemon(): Promise<StartedDaemon> {
     demoDocumentSession,
     mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
-    webProxyTarget: config.webProxyTarget
+    webProxyTarget: config.webProxyTarget,
+    actorDefault: config.actorDefault
   });
 
   return new Promise((resolve, reject) => {
