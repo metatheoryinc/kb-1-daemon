@@ -1,4 +1,4 @@
-import { PersistFailedError, type DocumentSessionManager, type SessionSpliceReject } from '@kb-2/doc-session';
+import { PersistFailedError, type DocumentSessionEvent, type DocumentSessionManager, type SessionSpliceReject } from '@kb-2/doc-session';
 import {
   InvalidPathError,
   appendContent,
@@ -12,6 +12,7 @@ import {
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  onVaultAudit,
   prependContent,
   readVaultFile,
   searchVaultFiles,
@@ -19,6 +20,7 @@ import {
   validateVaultPath,
   writeVaultFile,
   type AnchoredSpliceRequest,
+  type AuditChangeEventOptions,
   type AuditEntry,
   type FolderMetadataInput,
   type VaultActor,
@@ -50,6 +52,30 @@ export type ServiceFailure =
 
 export type ServiceResult<T extends object = object> = ({ ok: true } & T) | ServiceFailure;
 
+export type VaultChangeEventKind =
+  | 'content_persisted'
+  | 'file_created'
+  | 'folder_created'
+  | 'file_deleted'
+  | 'folder_deleted'
+  | 'file_moved'
+  | 'folder_moved'
+  | 'folder_metadata_changed'
+  | 'external_change_detected'
+  | 'persist_failure'
+  | 'persist_recovered';
+
+export interface VaultChangeEvent {
+  kind: VaultChangeEventKind;
+  path: string;
+  actor: VaultActor;
+  ts: string;
+  fromPath?: string;
+  toPath?: string;
+}
+
+export type VaultChangeEventHandler = (event: VaultChangeEvent) => void;
+
 export interface EditNoteInput {
   path: string;
   baseline: string;
@@ -79,15 +105,66 @@ export interface LocalMcpVaultService {
   search(input: { query: string; under?: string; context?: number; limit?: number; offset?: number }): Promise<ServiceResult>;
 }
 
+export interface VaultService extends LocalMcpVaultService {
+  flushDirtySessions(): Promise<ServiceResult<{ flushed: number; durableAsOf: string }>>;
+  onEvent(handler: VaultChangeEventHandler): () => void;
+}
+
 export interface VaultServiceOptions {
   vaultRoot: string;
   documentSessions: DocumentSessionManager;
 }
 
-export function createVaultService(options: VaultServiceOptions): LocalMcpVaultService {
+export function createVaultService(options: VaultServiceOptions): VaultService {
   const ctx = (actor?: VaultActor) => ({ root: options.vaultRoot, ...(actor ? { actor } : {}) });
+  const eventHandlers = new Set<VaultChangeEventHandler>();
+  const emitChange = (event: VaultChangeEvent) => {
+    for (const handler of eventHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.warn('KB-2 vault change event handler failed.', error);
+      }
+    }
+  };
+  let unsubscribeAudit: (() => void) | undefined;
+  const ensureAuditSubscription = () => {
+    if (unsubscribeAudit) return;
+    unsubscribeAudit = onVaultAudit((audit, input) => {
+      if (input.root !== options.vaultRoot) return;
+      emitAuditChange(emitChange, audit, input.changeEvent);
+    });
+  };
+  const releaseAuditSubscription = () => {
+    if (eventHandlers.size > 0) return;
+    unsubscribeAudit?.();
+    unsubscribeAudit = undefined;
+  };
+  options.documentSessions.onEvent((event) => {
+    const change = changeEventFromDocumentSessionEvent(event);
+    if (change) emitChange(change);
+  });
 
   return {
+    onEvent(handler) {
+      eventHandlers.add(handler);
+      ensureAuditSubscription();
+      return () => {
+        eventHandlers.delete(handler);
+        releaseAuditSubscription();
+      };
+    },
+
+    async flushDirtySessions() {
+      const result = await mapWriteFailure(() => options.documentSessions.flushDirtySessions());
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        flushed: result.value.flushed,
+        durableAsOf: new Date().toISOString()
+      };
+    },
+
     async vaultInfo() {
       return serviceResult(await getVaultInfo(ctx()));
     },
@@ -105,7 +182,8 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
     },
 
     async setFolderMetadata(input) {
-      return serviceResult(await setVaultFolderMetadata(ctx(input.actor), input.path, input.metadata));
+      const result = serviceResult(await setVaultFolderMetadata(ctx(input.actor), input.path, input.metadata));
+      return result;
     },
 
     async readNote(input) {
@@ -139,7 +217,8 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
           operation: 'write',
           entityKind: 'file',
           path: input.path,
-          summary: `Wrote ${input.path}`
+          summary: `Wrote ${input.path}`,
+          changeEvent: { skipContentPersisted: true }
         });
         return {
           ok: true,
@@ -150,11 +229,12 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         };
       }
 
-      return serviceResult(await writeVaultFile(ctx(input.actor), {
+      const result = serviceResult(await writeVaultFile(ctx(input.actor), {
         path: input.path,
         content: input.content,
         overwrite: input.overwrite
       }));
+      return result;
     },
 
     async editNote(input) {
@@ -179,7 +259,8 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         operation: 'splice',
         entityKind: 'file',
         path: input.path,
-        summary: `Spliced ${input.path}`
+        summary: `Spliced ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
       return {
         ok: true,
@@ -205,7 +286,8 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         operation: 'append',
         entityKind: 'file',
         path: input.path,
-        summary: `Appended to ${input.path}`
+        summary: `Appended to ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
       return {
         ok: true,
@@ -229,7 +311,8 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
         operation: 'prepend',
         entityKind: 'file',
         path: input.path,
-        summary: `Prepended to ${input.path}`
+        summary: `Prepended to ${input.path}`,
+        changeEvent: { skipContentPersisted: true }
       });
       return {
         ok: true,
@@ -253,10 +336,11 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
       if (deletedLive.value) {
         return { ok: true, ...deleted!, live: true };
       }
-      return serviceResult(await deleteVaultFile(ctx(input.actor), {
+      const result = serviceResult(await deleteVaultFile(ctx(input.actor), {
         path: input.path,
         permanent: input.permanent
       }));
+      return result;
     },
 
     async moveNote(input) {
@@ -273,15 +357,17 @@ export function createVaultService(options: VaultServiceOptions): LocalMcpVaultS
       if (movedLive.value) {
         return { ok: true, ...moved!, live: true };
       }
-      return serviceResult(await moveVaultPath(ctx(input.actor), {
+      const result = serviceResult(await moveVaultPath(ctx(input.actor), {
         kind: 'file',
         fromPath: input.fromPath,
         toPath: input.toPath
       }));
+      return result;
     },
 
     async createFolder(input) {
-      return serviceResult(await makeVaultFolder(ctx(input.actor), input.path));
+      const result = serviceResult(await makeVaultFolder(ctx(input.actor), input.path));
+      return result;
     },
 
     async deleteFolder(input) {
@@ -345,6 +431,80 @@ function serviceResult<T extends object>(result: VaultResult<T>): ServiceResult<
 
 function failure(error: SimpleServiceErrorCode, message: string): ServiceFailure {
   return { ok: false, error, message };
+}
+
+function changeEventFromDocumentSessionEvent(event: DocumentSessionEvent): VaultChangeEvent | undefined {
+  const actor: VaultActor = { kind: 'system' };
+  const base = {
+    path: event.path,
+    actor,
+    ts: new Date(event.ts).toISOString()
+  };
+
+  switch (event.kind) {
+    case 'content-persisted':
+      return { ...base, kind: 'content_persisted' };
+    case 'external-merge':
+    case 'external-change':
+      return { ...base, kind: 'external_change_detected' };
+    case 'persist-failure':
+      return { ...base, kind: 'persist_failure' };
+    case 'persist-recovered':
+      return { ...base, kind: 'persist_recovered' };
+    case 'doc-moved':
+    case 'doc-deleted':
+      return undefined;
+  }
+  /* v8 ignore next -- Exhaustive switch guard for future document-session event codes. */
+  return assertNever(event.kind);
+}
+
+function emitAuditChange(
+  emit: VaultChangeEventHandler,
+  audit: AuditEntry,
+  options: AuditChangeEventOptions = {}
+): void {
+  const kind = auditChangeEventKind(audit, options);
+  if (!kind) return;
+
+  emit({
+    kind,
+    path: audit.toPath ?? audit.path,
+    actor: audit.actor,
+    ts: audit.ts,
+    ...(audit.fromPath !== undefined ? { fromPath: audit.fromPath } : {}),
+    ...(audit.toPath !== undefined ? { toPath: audit.toPath } : {})
+  });
+}
+
+function auditChangeEventKind(
+  audit: AuditEntry,
+  options: AuditChangeEventOptions
+): VaultChangeEventKind | undefined {
+  switch (audit.operation) {
+    case 'create':
+      return audit.entityKind === 'file' ? 'file_created' : 'folder_created';
+    case 'mkdir':
+      return 'folder_created';
+    case 'write':
+      if (audit.entityKind === 'folder') return 'folder_metadata_changed';
+      return options.skipContentPersisted === true ? undefined : 'content_persisted';
+    case 'splice':
+    case 'append':
+    case 'prepend':
+      return options.skipContentPersisted === true ? undefined : 'content_persisted';
+    case 'delete':
+      return audit.entityKind === 'file' ? 'file_deleted' : 'folder_deleted';
+    case 'move':
+      return audit.entityKind === 'file' ? 'file_moved' : 'folder_moved';
+  }
+  /* v8 ignore next -- Exhaustive switch guard for future audit operation codes. */
+  return assertNever(audit.operation);
+}
+
+/* v8 ignore next -- Called only by exhaustive guards when a future union member is missing above. */
+function assertNever(value: never): never {
+  throw new Error(`Unhandled event code: ${String(value)}`);
 }
 
 function validateServiceFilePath(filePath: string): ServiceResult<{ path: string }> {

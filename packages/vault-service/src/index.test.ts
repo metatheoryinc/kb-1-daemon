@@ -3,7 +3,7 @@ import { DocumentSessionManager } from '@kb-2/doc-session';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { createVaultService, type ServiceResult } from './index.js';
+import { createVaultService, type ServiceResult, type VaultChangeEvent } from './index.js';
 
 describe('vault service failure mapping', () => {
   let root: string;
@@ -226,6 +226,124 @@ describe('vault service failure mapping', () => {
     ]);
   });
 
+  it('flushes dirty sessions and emits normalized change events without content bytes', async () => {
+    const service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const events: VaultChangeEvent[] = [];
+    service.onEvent((event) => events.push(event));
+
+    await expect(service.createFolder({ path: 'notes', actor: { kind: 'user' } })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes'
+    });
+    await expect(service.createNote({
+      path: 'notes/a.md',
+      content: 'initial\n',
+      actor: { kind: 'integration', client: 'test' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/a.md'
+    });
+    await expect(service.createNote({
+      path: 'notes/a.md',
+      content: 'overwritten\n',
+      overwrite: true,
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/a.md'
+    });
+    await expect(service.setFolderMetadata({
+      path: 'notes',
+      metadata: { color: 'mint' },
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes'
+    });
+
+    const session = sessions.getSession('notes/a.md');
+    await session.open();
+    session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'SECRET_SERVICE_EVENT');
+    await expect(service.flushDirtySessions()).resolves.toMatchObject({
+      ok: true,
+      flushed: 1,
+      durableAsOf: expect.any(String)
+    });
+    await expect(readFile(join(root, 'notes', 'a.md'), 'utf8')).resolves.toBe('overwritten\nSECRET_SERVICE_EVENT');
+
+    await expect(service.moveNote({
+      fromPath: 'notes/a.md',
+      toPath: 'notes/moved.md',
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      fromPath: 'notes/a.md',
+      toPath: 'notes/moved.md'
+    });
+    await expect(service.deleteNote({
+      path: 'notes/moved.md',
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/moved.md'
+    });
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'folder_created',
+      'file_created',
+      'content_persisted',
+      'folder_metadata_changed',
+      'content_persisted',
+      'file_moved',
+      'file_deleted'
+    ]);
+    expect(events[1]).toMatchObject({
+      path: 'notes/a.md',
+      actor: { kind: 'integration', client: 'test' }
+    });
+    expect(events[2]).toMatchObject({
+      path: 'notes/a.md',
+      actor: { kind: 'user' }
+    });
+    expect(events[4]).toMatchObject({
+      path: 'notes/a.md',
+      actor: { kind: 'system' }
+    });
+    expect(events[5]).toMatchObject({
+      path: 'notes/moved.md',
+      fromPath: 'notes/a.md',
+      toPath: 'notes/moved.md'
+    });
+    expect(JSON.stringify(events)).not.toContain('SECRET_SERVICE_EVENT');
+  });
+
+  it('emits external change events from the document-session spine', async () => {
+    sessions = new DocumentSessionManager({
+      root,
+      defaultContent: '',
+      watchDebounceMs: 10,
+      watchPollMs: 50
+    });
+    const service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const events: VaultChangeEvent[] = [];
+    service.onEvent((event) => events.push(event));
+    await writeFileWithParents(join(root, 'notes', 'external.md'), 'base\n');
+    const session = sessions.getSession('notes/external.md');
+    await session.open();
+
+    await writeFile(join(root, 'notes', 'external.md'), 'external\n', 'utf8');
+
+    await waitUntil(() => events.some((event) => event.kind === 'external_change_detected'), () =>
+      `Timed out waiting for external change event; events=${JSON.stringify(events)}`
+    );
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'external_change_detected',
+      path: 'notes/external.md',
+      actor: { kind: 'system' }
+    }));
+    await expect(session.getContent()).resolves.toBe('external\n');
+  });
+
   it('uses cold disk paths for file move and delete when no session is open', async () => {
     await writeFileWithParents(join(root, 'cold', 'move.md'), 'move\n');
     await writeFileWithParents(join(root, 'cold', 'delete.md'), 'delete\n');
@@ -286,6 +404,16 @@ describe('vault service failure mapping', () => {
       ok: false,
       error: 'ambiguous',
       match_count: 2
+    });
+    await expect(service.editNote({
+      path: 'notes/edit.md',
+      baseline,
+      oldText: 'missing',
+      newText: 'x',
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'not_found'
     });
     await expect(service.editNote({
       path: 'notes/edit.md',
@@ -385,6 +513,46 @@ describe('vault service failure mapping', () => {
     });
   });
 
+  it('re-drives a failed flush after disk permissions recover', async () => {
+    await writeFileWithParents(join(root, 'notes', 'retry.md'), 'base\n');
+    const service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const events: VaultChangeEvent[] = [];
+    service.onEvent((event) => events.push(event));
+
+    await service.readNote({ path: 'notes/retry.md' });
+    const session = sessions.getOpenSession('notes/retry.md');
+    if (!session) throw new Error('expected live session');
+    const notesDir = join(root, 'notes');
+
+    try {
+      await chmod(notesDir, 0o500);
+      session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'stuck edit\n');
+
+      await expect(service.flushDirtySessions()).resolves.toEqual({
+        ok: false,
+        error: 'persist_failed',
+        message: 'Document edit could not be durably saved to disk.'
+      });
+      await expect(readFile(join(root, 'notes', 'retry.md'), 'utf8')).resolves.toBe('base\n');
+
+      await chmod(notesDir, 0o700);
+      await expect(service.flushDirtySessions()).resolves.toMatchObject({
+        ok: true,
+        flushed: 1,
+        durableAsOf: expect.any(String)
+      });
+
+      await expect(readFile(join(root, 'notes', 'retry.md'), 'utf8')).resolves.toBe('base\nstuck edit\n');
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'persist_recovered',
+        path: 'notes/retry.md',
+        actor: { kind: 'system' }
+      }));
+    } finally {
+      await chmod(notesDir, 0o700).catch(() => undefined);
+    }
+  });
+
   it('maps live move and folder subtree failures from vault operations', async () => {
     await writeFileWithParents(join(root, 'notes', 'live.md'), 'live\n');
     await writeFileWithParents(join(root, 'notes', 'target.md'), 'target\n');
@@ -433,4 +601,16 @@ function requireBaseline(result: ServiceResult): string {
     throw new Error('Expected result to include a live document baseline');
   }
   return value.baseline;
+}
+
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  errorMessage: () => string,
+): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(errorMessage());
 }

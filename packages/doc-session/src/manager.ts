@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import { OneFileDocumentSession, type OneFileDocumentSessionOptions } from './session.js';
+import { OneFileDocumentSession, type DocumentSessionEventHandler, type OneFileDocumentSessionOptions } from './session.js';
 
 export const DEFAULT_IDLE_SESSION_GRACE_MS = 30_000;
 
@@ -14,6 +14,10 @@ export interface ClientDocumentSession {
   release: () => void;
 }
 
+export interface FlushDocumentSessionsResult {
+  flushed: number;
+}
+
 export class DocumentSessionManager {
   private readonly root: string;
   private readonly options: Omit<OneFileDocumentSessionOptions, 'eventPath'>;
@@ -21,12 +25,20 @@ export class DocumentSessionManager {
   private readonly sessions = new Map<string, OneFileDocumentSession>();
   private readonly clientCounts = new Map<string, number>();
   private readonly idleCloseTimers = new Map<string, NodeJS.Timeout>();
+  private readonly eventHandlers = new Set<DocumentSessionEventHandler>();
 
   constructor(options: DocumentSessionManagerOptions) {
     this.root = options.root;
     this.idleSessionGraceMs = options.idleSessionGraceMs ?? DEFAULT_IDLE_SESSION_GRACE_MS;
     const { root: _root, idleSessionGraceMs: _idleSessionGraceMs, ...sessionOptions } = options;
     this.options = sessionOptions;
+  }
+
+  onEvent(handler: DocumentSessionEventHandler): () => void {
+    this.eventHandlers.add(handler);
+    return () => {
+      this.eventHandlers.delete(handler);
+    };
   }
 
   getSession(vaultPath: string, overrides: Partial<Pick<OneFileDocumentSessionOptions, 'defaultContent'>> = {}): OneFileDocumentSession {
@@ -48,6 +60,7 @@ export class DocumentSessionManager {
           }
         }
       }
+      this.emitEvent(event);
     });
     return session;
   }
@@ -95,6 +108,16 @@ export class DocumentSessionManager {
 
   getOpenSessionCount(): number {
     return this.sessions.size;
+  }
+
+  async flushDirtySessions(): Promise<FlushDocumentSessionsResult> {
+    const dirtySessions = [...this.sessions.values()].filter((session) => session.hasUnsettledPersist());
+    const results = await Promise.allSettled(dirtySessions.map((session) => session.flush()));
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) {
+      throw rejected.reason;
+    }
+    return { flushed: dirtySessions.length };
   }
 
   async moveSession(
@@ -177,6 +200,16 @@ export class DocumentSessionManager {
     await Promise.all([...this.sessions.values()].map((session) => session.close()));
     this.sessions.clear();
     this.clientCounts.clear();
+  }
+
+  private emitEvent(event: Parameters<DocumentSessionEventHandler>[0]): void {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.warn('KB-2 document session manager event handler failed.', error);
+      }
+    }
   }
 
   private toFilePath(vaultPath: string): string {

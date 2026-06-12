@@ -29,6 +29,10 @@ export interface AuditEntry {
   summary: string;
 }
 
+export interface AuditChangeEventOptions {
+  skipContentPersisted?: boolean;
+}
+
 export interface AuditInput {
   root: string;
   actor?: VaultActor;
@@ -38,10 +42,34 @@ export interface AuditInput {
   fromPath?: string;
   toPath?: string;
   summary: string;
+  changeEvent?: AuditChangeEventOptions;
+}
+
+export type VaultAuditHandler = (audit: AuditEntry, input: AuditInput) => void;
+
+const vaultAuditHandlers = new Set<VaultAuditHandler>();
+
+export function onVaultAudit(handler: VaultAuditHandler): () => void {
+  vaultAuditHandlers.add(handler);
+  return () => {
+    vaultAuditHandlers.delete(handler);
+  };
 }
 
 export async function emitVaultAudit(input: AuditInput): Promise<AuditEntry> {
-  return writeAuditEntry(input);
+  const entry = await writeAuditEntry(input);
+  notifyVaultAuditHandlers(entry, input);
+  return entry;
+}
+
+function notifyVaultAuditHandlers(entry: AuditEntry, input: AuditInput): void {
+  for (const handler of vaultAuditHandlers) {
+    try {
+      handler(entry, input);
+    } catch (error) {
+      console.warn('KB-2 vault audit handler failed.', error);
+    }
+  }
 }
 
 async function writeAuditEntry(input: AuditInput): Promise<AuditEntry> {

@@ -21,6 +21,28 @@ pnpm dev     # one command: web UI + API behind one daemon port
 Port/env overrides: `KB2_PORT` (daemon), `KB2_WEB_PORT` (internal Vite dev
 server), `KB2_HOME` (daemon state directory, defaults to `~/.kb2`).
 
+## Local API Primitives
+
+`POST /api/ops/flush` is the backup primitive. It forces every dirty live
+document session through the existing doc-session materialization path and
+returns only after those writes have settled:
+
+```json
+{ "ok": true, "flushed": 1, "durableAsOf": "2026-06-12T09:00:00.000Z" }
+```
+
+Call it before snapshotting or syncing the vault. A clean vault returns
+`flushed: 0`. If any session cannot persist, the response uses the same
+canonical failure dialect as the rest of the API, and the existing save-warning
+event path still fires.
+
+`GET /api/events` is the tooling primitive. It is a Server-Sent Events stream
+for watchers, backup triggers, and future live tree refresh. Events report
+change kind, vault-relative paths, actor attribution, and timestamps for
+persisted content, file/folder create/delete/move, folder metadata changes,
+external file changes, and persist failure/recovery. Event payloads never carry
+file content; consumers fetch content through the normal read APIs.
+
 ## MCP
 
 The daemon hosts a streamable-HTTP MCP server at `/mcp` on the same loopback

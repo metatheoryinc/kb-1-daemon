@@ -26,6 +26,7 @@ import {
   writeVaultFile,
   type VaultContext
 } from './vault-ops.js';
+import { onVaultAudit } from './audit.js';
 import { searchVaultFiles } from './search.js';
 import { validateVaultPath } from './path.js';
 import { anchoredSpliceContractCases } from './splice-contract-cases.test-support.js';
@@ -145,6 +146,34 @@ describe('vault-core filesystem operations', () => {
       operation: 'write',
       path: 'notes/a.md'
     });
+  });
+
+  it('notifies observers from the audit chokepoint without breaking the mutation', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const observed: Array<{ operation: string; root: string }> = [];
+    const unsubscribeThrowing = onVaultAudit(() => {
+      throw new Error('observer failed');
+    });
+    const unsubscribe = onVaultAudit((audit, input) => {
+      observed.push({ operation: audit.operation, root: input.root });
+    });
+
+    try {
+      await expect(writeVaultFile(ctx, { path: 'notes/a.md', content: 'first' }))
+        .resolves.toMatchObject({ ok: true });
+      expect(observed).toEqual([{ operation: 'create', root }]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('vault audit handler failed'), expect.any(Error));
+
+      unsubscribe();
+      unsubscribeThrowing();
+      await expect(writeVaultFile(ctx, { path: 'notes/b.md', content: 'second' }))
+        .resolves.toMatchObject({ ok: true });
+      expect(observed).toEqual([{ operation: 'create', root }]);
+    } finally {
+      unsubscribe();
+      unsubscribeThrowing();
+      warnSpy.mockRestore();
+    }
   });
 
   it('creates folders idempotently and lists trees excluding .kb2 trash/audit', async () => {

@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -10,6 +11,7 @@ import { tmpdir } from 'node:os';
 import * as Y from 'yjs';
 
 import { anchoredSpliceContractCases } from '@kb-2/vault-core';
+import type { VaultChangeEvent } from '@kb-2/vault-service';
 import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
@@ -970,6 +972,129 @@ describe('daemon routing', () => {
     await sessions.close();
   });
 
+  it('flushes dirty live sessions through a real HTTP barrier with durable file content', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const session = sessions.getSession('notes/flush.md');
+    await session.open();
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const server = await startHttpApp(app);
+
+    try {
+      session.ydoc.getText('markdown').insert(0, 'flush me now\n');
+      const response = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      const body = await response.json() as { ok: boolean; flushed: number; durableAsOf: string };
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, flushed: 1 });
+      expect(new Date(body.durableAsOf).toISOString()).toBe(body.durableAsOf);
+      await expect(readFile(join(config.vaultRoot, 'notes/flush.md'), 'utf8')).resolves.toBe('flush me now\n');
+
+      const clean = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      await expect(clean.json()).resolves.toMatchObject({ ok: true, flushed: 0 });
+    } finally {
+      await server.close();
+      await sessions.close();
+    }
+  });
+
+  it('maps flush persist failures through the canonical dialect while the loud session event fires', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    await writeFileWithParents(join(config.vaultRoot, 'notes', 'readonly.md'), 'base\n');
+    const session = sessions.getSession('notes/readonly.md');
+    const events: DocumentSessionEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await session.open();
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const server = await startHttpApp(app);
+    const notesDir = join(config.vaultRoot, 'notes');
+
+    try {
+      await chmod(notesDir, 0o500);
+      session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'unsaved\n');
+      await waitUntil(() => events.some((event) => event.kind === 'persist-failure'), () =>
+        `Timed out waiting for persist-failure; events=${JSON.stringify(events)}`
+      );
+
+      const response = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: 'persist_failed',
+        message: 'Document edit could not be durably saved to disk.'
+      });
+      await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'persist-failure', path: 'notes/readonly.md' }));
+    } finally {
+      await chmod(notesDir, 0o700).catch(() => undefined);
+      if (session.hasActivePersistFailure()) {
+        session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'recovered\n');
+        await session.flush().catch(() => undefined);
+      }
+      await server.close();
+      await sessions.close();
+    }
+  });
+
+  it('streams change events over SSE without content bytes and disconnects cleanly', async () => {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const server = await startHttpApp(app);
+    const stream = await openSseStream(`${server.origin}/api/events`);
+    const folderPath = 'notes/ユニコード';
+    const notePath = `${folderPath}/stream.md`;
+    const movedPath = `${folderPath}/moved.md`;
+    const secret = 'SECRET_STREAM_BYTES_012';
+
+    try {
+      await expect(fetchJson(`${server.origin}/api/folders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: folderPath })
+      })).resolves.toMatchObject({ ok: true, path: folderPath });
+      await expect(fetchText(`${server.origin}/api/files/${encodeVaultPath(notePath)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'text/plain' },
+        body: 'initial visible content\n'
+      })).resolves.toMatchObject({ ok: true, path: notePath });
+      await expect(fetchJson(`${server.origin}/api/folders/${encodeVaultPath(folderPath)}/metadata`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ color: 'mint', icon: 'folder' })
+      })).resolves.toMatchObject({ ok: true, path: folderPath });
+      await expect(fetchJson(`${server.origin}/api/files/${encodeVaultPath(notePath)}/append`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: secret })
+      })).resolves.toMatchObject({ ok: true, path: notePath });
+      await expect(fetchJson(`${server.origin}/api/files/${encodeVaultPath(notePath)}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: movedPath })
+      })).resolves.toMatchObject({ ok: true, fromPath: notePath, toPath: movedPath });
+
+      const events = await stream.waitForEvents(5);
+      expect(events.map((event) => event.kind)).toEqual([
+        'folder_created',
+        'file_created',
+        'folder_metadata_changed',
+        'content_persisted',
+        'file_moved'
+      ]);
+      expect(events[0]).toMatchObject({ path: folderPath, actor: { kind: 'user' } });
+      expect(events[3]).toMatchObject({ path: notePath, actor: { kind: 'system' } });
+      expect(events[4]).toMatchObject({ fromPath: notePath, toPath: movedPath, actor: { kind: 'user' } });
+      expect(stream.raw()).not.toContain(secret);
+      await expect(readFile(join(config.vaultRoot, movedPath), 'utf8')).resolves.toBe(`initial visible content\n${secret}`);
+    } finally {
+      await stream.close();
+      await server.close();
+      await sessions.close();
+    }
+  });
+
   it('keeps live move failures classified and resumes old-path watching', async () => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
     const sessions = new DocumentSessionManager({
@@ -1099,6 +1224,132 @@ describe('daemon routing', () => {
     await rm(webBuildDir, { force: true, recursive: true });
   });
 });
+
+interface StartedHttpApp {
+  origin: string;
+  close: () => Promise<void>;
+}
+
+async function startHttpApp(app: Hono): Promise<StartedHttpApp> {
+  return new Promise((resolve, reject) => {
+    const server = serve({
+      fetch: app.fetch,
+      hostname: '127.0.0.1',
+      port: 0
+    }, (info) => {
+      resolve({
+        origin: `http://${info.address}:${info.port}`,
+        close: () => closeStartedHttpApp(server)
+      });
+    });
+    server.once('error', reject);
+  });
+}
+
+function closeStartedHttpApp(server: ReturnType<typeof serve>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+interface OpenSseStream {
+  waitForEvents: (count: number) => Promise<VaultChangeEvent[]>;
+  raw: () => string;
+  close: () => Promise<void>;
+}
+
+async function openSseStream(url: string): Promise<OpenSseStream> {
+  const abort = new AbortController();
+  const response = await fetch(url, { signal: abort.signal });
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toContain('text/event-stream');
+  if (!response.body) {
+    throw new Error('Expected SSE response body');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const events: VaultChangeEvent[] = [];
+  let raw = '';
+  let buffer = '';
+  let notify: (() => void) | undefined;
+
+  const pump = (async () => {
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) return;
+        const text = decoder.decode(chunk.value, { stream: true });
+        raw += text;
+        buffer += text;
+        parseSseBuffer();
+        notify?.();
+      }
+    } catch (error) {
+      if (!abort.signal.aborted) throw error;
+    }
+  })();
+
+  function parseSseBuffer(): void {
+    let separator = buffer.indexOf('\n\n');
+    while (separator !== -1) {
+      const frame = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const data = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice('data: '.length))
+        .join('\n');
+      if (data) {
+        events.push(JSON.parse(data) as VaultChangeEvent);
+      }
+      separator = buffer.indexOf('\n\n');
+    }
+  }
+
+  return {
+    waitForEvents: async (count) => {
+      const deadline = Date.now() + 3000;
+      while (events.length < count && Date.now() < deadline) {
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+          setTimeout(resolve, 25);
+        });
+      }
+      if (events.length < count) {
+        throw new Error(`Timed out waiting for ${count} SSE events; got ${JSON.stringify(events)}`);
+      }
+      return events.slice(0, count);
+    },
+    raw: () => raw,
+    close: async () => {
+      abort.abort();
+      await reader.cancel().catch(() => undefined);
+      await pump.catch(() => undefined);
+    }
+  };
+}
+
+async function fetchJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  const response = await fetch(url, init);
+  expect(response.ok).toBe(true);
+  return await response.json() as Record<string, unknown>;
+}
+
+async function fetchText(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  return fetchJson(url, init);
+}
+
+function encodeVaultPath(vaultPath: string): string {
+  return vaultPath.split('/').map((part) => encodeURIComponent(part)).join('/');
+}
 
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
