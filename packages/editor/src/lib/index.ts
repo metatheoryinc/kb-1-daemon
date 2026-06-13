@@ -4,4 +4,15 @@ export {
   PLAINTEXT_USER_ORIGIN,
 } from './content-format';
 export type { LivePath, OrgPerson } from './markdown-core';
-
+export {
+  buildPlaintextCursorDecorations,
+  decodePlaintextCursor,
+  encodePlaintextRelativePosition,
+  plaintextCursorConsumer,
+  plaintextCursorProducer,
+  resolvePlaintextRelativePosition,
+  snapshotRemotePlaintextCursors,
+  type EncodedRelPos,
+  type PlaintextAwarenessCursor,
+  type RemotePlaintextCursor,
+} from './plaintext-awareness';

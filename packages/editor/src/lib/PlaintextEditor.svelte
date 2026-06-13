@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Doc } from 'yjs';
+  import type { Awareness } from 'y-protocols/awareness';
   import * as Y from 'yjs';
   import {
     EditorState,
@@ -32,12 +33,20 @@
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
+  import {
+    plaintextCursorConsumer,
+    plaintextCursorProducer,
+  } from './plaintext-awareness';
 
   interface Props {
     /** Shared Y.Doc supplied by the host app/provider. */
     ydoc: Doc;
     /** Bound Y.Text supplied by the host app/provider. */
     ytext: Y.Text;
+    /** Stable document identity for host-supplied collaborative awareness. */
+    noteId?: string;
+    /** Host-supplied Yjs awareness. The editor package never creates transport. */
+    awareness?: Awareness;
     /** Disables typing. Mirror of MarkdownEditor's prop. */
     readOnly?: boolean;
     /** Accessibility label for the editor host. */
@@ -95,6 +104,8 @@
   let {
     ydoc,
     ytext,
+    noteId = '',
+    awareness,
     readOnly = false,
     ariaLabel = 'Markdown editor',
     class: className,
@@ -159,6 +170,8 @@
       handler(encoded, event);
     };
     const stableText = ytext;
+    const stableNoteId = noteId;
+    const stableAwareness = awareness;
 
     // --- Sync plugin (replaces y-codemirror.next's `ySync`) ---------
     //
@@ -368,6 +381,12 @@
       editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
+      ...(stableAwareness
+        ? [
+            plaintextCursorProducer(stableAwareness, stableText, stableNoteId),
+            plaintextCursorConsumer(stableAwareness, stableText, stableNoteId),
+          ]
+        : []),
       // Live-preview-style markdown decorations. They are document +
       // selection driven and compose through EditorView.decorations:
       // line decos wrap the line element, mark decos wrap their range,
