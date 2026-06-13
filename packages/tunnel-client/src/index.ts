@@ -202,7 +202,7 @@ export class TunnelClient {
       }
 
       this.clearControlHeartbeatDeadline();
-      control.send(encodeJsonBytes({ type: 'control.ping' }));
+      control.send(encodeTunnelMessage({ type: 'control.ping' }));
       this.controlHeartbeatDeadline = setTimeout(() => {
         if (this.control !== control || this.stopped) return;
 
