@@ -24,6 +24,7 @@ export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
 export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
 export { default as DocumentHeader } from './local-editor/DocumentHeader.svelte';
+export { default as EditorSaveNotifications } from './local-editor/EditorSaveNotifications.svelte';
 export { default as DocumentNotFoundState } from './local-editor/DocumentNotFoundState.svelte';
 export { default as FileNode } from './local-editor/FileNode.svelte';
 export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
@@ -44,6 +45,13 @@ export type {
   DocumentSaveBannerProps,
   DocumentSaveBannerVariant,
 } from './notifications/DocumentSaveBanner.svelte';
+export type { EditorSaveNotificationsProps } from './local-editor/EditorSaveNotifications.svelte';
+export type {
+  EditorSaveNotificationCopy,
+  EditorSaveNotificationFlags,
+  EditorSaveNotificationsCopy,
+  EditorSaveNotificationVariant,
+} from './local-editor/editor-save-notifications';
 export {
   accentForId,
   accentHex,

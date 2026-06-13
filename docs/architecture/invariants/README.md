@@ -25,6 +25,10 @@ Engineering invariants — how the codebase stays healthy:
 - [Tests are gated and real](./engineering/tests-are-gated-and-real.md)
 - [One failure dialect](./engineering/one-failure-dialect.md)
 
+UI invariants — how shared editor surfaces stay in lockstep:
+
+- [Shared editor chrome](./ui/shared-editor-chrome.md)
+
 ## How To Read These
 
 Each invariant should stay short and concrete:
