@@ -23,13 +23,6 @@ A PR that changes editor chrome in one app without routing it through
 
 - Presence cursors and roster are cloud-only. The local product has no presence
   by settled decision. No expiry.
-- Cloud save-notifications are mid-migration. The cloud editor still renders save
-  notifications via its own `EditorSaveBanners` component, behavior- and
-  placement-matched to the shared `EditorSaveNotifications` (fixed top-right
-  overlay; `persist-recovered` suppressed). It MUST adopt the shared component.
-  Until it does, any change to save-notification chrome must be applied to BOTH
-  the shared component and the cloud fork, so they cannot drift in the window.
-  Expiry: the cloud save-notifications adoption chunk.
 
 ## Violations
 
