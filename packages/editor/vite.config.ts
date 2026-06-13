@@ -9,7 +9,7 @@ export default defineConfig({
       formats: ['es']
     },
     rollupOptions: {
-      external: ['svelte', 'yjs', '@kb-2/ui']
+      external: ['svelte', 'yjs', 'y-protocols/awareness', '@kb-2/ui']
     }
   },
   test: {
