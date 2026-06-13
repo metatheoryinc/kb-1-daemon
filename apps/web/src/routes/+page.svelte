@@ -12,7 +12,7 @@
   import { PlaintextEditor, type LivePath, type OrgPerson } from '@kb-2/editor';
   import {
     DocumentNotFoundState,
-    DocumentSaveBanner,
+    EditorSaveNotifications,
     LocalEditorShell,
     type AccentName,
     type LocalSearchResult,
@@ -75,6 +75,25 @@
   ]);
 
   const orgPeople: OrgPerson[] = [];
+
+  const editorSaveNotificationCopy = {
+    externalMerge: {
+      title: 'External edit merged',
+      message: 'Merged an edit made outside KB-2.',
+    },
+    externalChange: {
+      title: 'File changed outside KB-2',
+      message: 'This file changed outside KB-2 and was reloaded from disk.',
+    },
+    persistFailure: {
+      title: 'Changes are NOT saving to disk.',
+      message: 'Keep this tab open. KB-2 will keep retrying until saving recovers.',
+    },
+    docDeleted: {
+      title: 'Document deleted',
+      message: 'This file was deleted or moved to trash. The editor is read-only.',
+    },
+  };
 
   const daemonLabel = $derived(
     status === 'open'
@@ -529,57 +548,24 @@
     void handleTreeAction(action);
   }}
 >
-  {#if externalMergeVisible || externalChangeVisible || persistFailureActive || persistRecoveredVisible || docDeleted}
-    <section class="banner-strip" aria-label="Document save notifications">
-      {#if externalMergeVisible}
-        <DocumentSaveBanner
-          variant="external-merge"
-          title="External edit merged"
-          message="Merged an edit made outside KB-2."
-          ondismiss={() => {
-            externalMergeVisible = false;
-            if (externalMergeTimer) {
-              clearTimeout(externalMergeTimer);
-              externalMergeTimer = undefined;
-            }
-          }}
-        />
-      {/if}
-
-      {#if externalChangeVisible}
-        <DocumentSaveBanner
-          variant="external-change"
-          title="File changed outside KB-2"
-          message="This file changed outside KB-2 and was reloaded from disk."
-          ondismiss={() => {
-            externalChangeVisible = false;
-          }}
-        />
-      {/if}
-
-      {#if persistFailureActive}
-        <DocumentSaveBanner
-          variant="persist-failure"
-          title="Changes are NOT saving to disk."
-          message="Keep this tab open. KB-2 will keep retrying until saving recovers."
-        />
-      {:else if persistRecoveredVisible}
-        <DocumentSaveBanner
-          variant="persist-recovered"
-          title="Saving restored"
-          message="KB-2 is saving changes to disk again."
-        />
-      {/if}
-
-      {#if docDeleted}
-        <DocumentSaveBanner
-          variant="doc-deleted"
-          title="Document deleted"
-          message="This file was deleted or moved to trash. The editor is read-only."
-        />
-      {/if}
-    </section>
-  {/if}
+  <EditorSaveNotifications
+    externalMergeVisible={externalMergeVisible}
+    externalChangeVisible={externalChangeVisible}
+    persistFailureActive={persistFailureActive}
+    persistRecoveredVisible={persistRecoveredVisible}
+    docDeleted={docDeleted}
+    copy={editorSaveNotificationCopy}
+    onDismissExternalMerge={() => {
+      externalMergeVisible = false;
+      if (externalMergeTimer) {
+        clearTimeout(externalMergeTimer);
+        externalMergeTimer = undefined;
+      }
+    }}
+    onDismissExternalChange={() => {
+      externalChangeVisible = false;
+    }}
+  />
 
   <section class="document-shell" aria-label="Markdown document">
     {#if notFoundPath === documentPath}
@@ -606,18 +592,6 @@
 </LocalEditorShell>
 
 <style>
-  .banner-strip {
-    display: grid;
-    gap: 8px;
-    padding: 12px 22px 0;
-    background: var(--rd-bg);
-  }
-
-  .banner-strip :global(.document-save-banner) {
-    width: min(100%, 760px);
-    justify-self: center;
-  }
-
   .document-shell {
     min-height: 0;
     height: 100%;
@@ -668,10 +642,6 @@
   @media (max-width: 720px) {
     .document-shell {
       grid-template-columns: 12px minmax(0, 1fr) 12px;
-    }
-
-    .banner-strip {
-      padding: 10px 12px 0;
     }
 
     .error {
