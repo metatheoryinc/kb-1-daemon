@@ -20,6 +20,14 @@ it("round-trips an HTTP response envelope", () => {
   expect(decodeTunnelMessage(encodeTunnelMessage(message))).toEqual(message);
 });
 
+it("round-trips control heartbeat envelopes", () => {
+  const ping = { type: "control.ping" } as const;
+  const pong = { type: "control.pong" } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(ping))).toEqual(ping);
+  expect(decodeTunnelMessage(encodeTunnelMessage(pong))).toEqual(pong);
+});
+
 it("round-trips chunked HTTP request envelopes", () => {
   const start = {
     type: "http.request.start",

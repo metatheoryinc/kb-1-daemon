@@ -115,6 +115,14 @@ export type TunnelControlServerReady = {
   version: TunnelProtocolVersion;
 };
 
+export type TunnelControlPing = {
+  type: "control.ping";
+};
+
+export type TunnelControlPong = {
+  type: "control.pong";
+};
+
 export type TunnelControlServerError = {
   type: "control.error";
   code: "unauthorized" | "unsupported-version" | "bad-message" | "relay-error";
@@ -197,6 +205,7 @@ export type TunnelWebSocketDialbackHello = {
 
 export type TunnelControlClientMessage =
   | TunnelControlClientHello
+  | TunnelControlPing
   | TunnelHttpResponseEnvelope
   | TunnelHttpResponseStartEnvelope
   | TunnelHttpResponseChunkEnvelope
@@ -204,6 +213,7 @@ export type TunnelControlClientMessage =
 
 export type TunnelControlServerMessage =
   | TunnelControlServerReady
+  | TunnelControlPong
   | TunnelControlServerError
   | TunnelHttpRequestEnvelope
   | TunnelHttpRequestStartEnvelope
