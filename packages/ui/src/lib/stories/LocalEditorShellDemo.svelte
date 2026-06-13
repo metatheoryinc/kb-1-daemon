@@ -12,6 +12,7 @@
 <LocalEditorShell
   vaultName="demo-vault"
   daemonLabel="Daemon · live"
+  daemonStatus="open"
   documentPath={localEditorDocumentPath}
   colorMode="light"
   tree={localEditorTreeFixture}

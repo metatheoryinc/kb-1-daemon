@@ -15,6 +15,7 @@
   style="width: {size}px; height: {size}px; background: {color};"
   role={title ? 'img' : undefined}
   aria-label={title}
+  title={title}
 ></span>
 
 <style>

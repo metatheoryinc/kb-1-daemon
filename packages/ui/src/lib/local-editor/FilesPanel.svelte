@@ -1,7 +1,7 @@
 <script lang="ts">
   import IconButton from '../primitives/IconButton.svelte';
   import Icon from '../primitives/Icon.svelte';
-  import LiveStatusChip from '../primitives/LiveStatusChip.svelte';
+  import LiveDot from '../primitives/LiveDot.svelte';
   import SearchInput from '../primitives/SearchInput.svelte';
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
@@ -11,6 +11,7 @@
   interface Props {
     vaultName: string;
     daemonLabel: string;
+    daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     colorMode?: 'light' | 'dark';
     searchValue?: string;
     tree: LocalTreeNode[];
@@ -31,6 +32,7 @@
   let {
     vaultName,
     daemonLabel,
+    daemonStatus = 'open',
     colorMode = 'light',
     searchValue = '',
     tree,
@@ -49,6 +51,14 @@
   }: Props = $props();
 
   const searching = $derived(searchValue.trim().length > 0);
+  const dotColor = $derived(
+    daemonStatus === 'open'
+      ? '#1f8a4d'
+      : daemonStatus === 'connecting'
+        ? '#c27a14'
+        : '#c74436',
+  );
+  const dotPulse = $derived(daemonStatus === 'connecting');
 </script>
 
 <aside class="files-panel" aria-label="Vault files">
@@ -56,7 +66,10 @@
     <div class="title-row">
       <div class="vault-title">
         <span>Vault</span>
-        <strong>{vaultName}</strong>
+        <div class="vault-name">
+          <strong>{vaultName}</strong>
+          <LiveDot size={8} color={dotColor} pulse={dotPulse} title={daemonLabel} />
+        </div>
       </div>
       <IconButton
         title={colorMode === 'dark' ? 'Use light mode' : 'Use dark mode'}
@@ -67,7 +80,6 @@
         <Icon name={colorMode === 'dark' ? 'sun' : 'moon'} size={14} />
       </IconButton>
     </div>
-    <LiveStatusChip label={daemonLabel} />
     <SearchInput
       value={searchValue}
       placeholder="Search files"
@@ -156,6 +168,13 @@
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .vault-name {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 7px;
   }
 
   .panel-body {

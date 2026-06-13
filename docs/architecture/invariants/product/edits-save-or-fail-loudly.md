@@ -34,6 +34,13 @@ now because offline detection, reconnect, and read-only-on-disconnect have
 not been built. This exception expires when those ship (see horizons); it
 must not be used to justify any new silent-failure path.
 
+Cloud 004 demo polish: the cloud editor may suppress successful/idle and
+recovered save banners, and may render save-failure warnings as non-layout-
+shifting chrome (the connection dot turns red, with an overlay warning) instead
+of an in-flow banner. This is only for the live staging demo polish pass and
+must be reverted or reworked into a full non-reflowing loud-save design before
+any real use.
+
 ## Violations
 
 - A failed materialization that only writes a daemon log line.
