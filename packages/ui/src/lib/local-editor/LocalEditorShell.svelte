@@ -6,6 +6,7 @@
   interface Props {
     vaultName: string;
     daemonLabel: string;
+    daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     documentPath: string;
     colorMode?: 'light' | 'dark';
     searchValue?: string;
@@ -27,6 +28,7 @@
   let {
     vaultName,
     daemonLabel,
+    daemonStatus = 'open',
     documentPath,
     colorMode = 'light',
     searchValue = '',
@@ -50,6 +52,7 @@
   <FilesPanel
     {vaultName}
     {daemonLabel}
+    {daemonStatus}
     {colorMode}
     {searchValue}
     {tree}

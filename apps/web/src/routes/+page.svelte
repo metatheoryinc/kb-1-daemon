@@ -87,6 +87,15 @@
           ? 'Daemon · error'
           : 'Daemon · closed',
   );
+  const daemonStatus = $derived<'open' | 'connecting' | 'closed' | 'error'>(
+    persistFailureActive || status === 'error'
+      ? 'error'
+      : status === 'open'
+        ? 'open'
+        : status === 'connecting' || status === 'syncing'
+          ? 'connecting'
+          : 'closed',
+  );
 
   function handleSessionEvent(event: DocumentSessionEvent): void {
     if (event.kind === 'doc-moved') {
@@ -499,6 +508,7 @@
 <LocalEditorShell
   {vaultName}
   {daemonLabel}
+  {daemonStatus}
   {documentPath}
   {colorMode}
   {tree}
