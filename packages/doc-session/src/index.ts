@@ -1,6 +1,7 @@
 export {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_NOT_FOUND_FAILURE,
+  DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   DocumentSessionNotFoundError,
   OneFileDocumentSession,
   PersistFailedError,

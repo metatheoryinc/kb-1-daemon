@@ -1,9 +1,11 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
 
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   DocumentSessionNotFoundError,
   PersistFailedError,
   type OneFileDocumentSession
@@ -11,6 +13,7 @@ import {
 import { MESSAGE_SYNC, encodeSessionEvent, encodeSyncedMessage } from './protocol.js';
 
 const socketOpen = 1;
+const Y_TEXT_NAME = 'markdown';
 
 export interface YjsWebSocketLike {
   readyState: number;
@@ -92,7 +95,9 @@ export async function bindYjsWebSocket(
       }
 
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      syncProtocol.readSyncMessage(decoder, encoder, session.ydoc, socket);
+      if (!processYjsSyncPayload(session, socket, decoder, encoder)) {
+        return;
+      }
 
       if (encoding.length(encoder) > 1) {
         sendEncoded(socket, encoder);
@@ -157,6 +162,74 @@ function sendBytes(socket: YjsWebSocketLike, bytes: Uint8Array): void {
   }
 
   socket.send(bytes);
+}
+
+function processYjsSyncPayload(
+  session: OneFileDocumentSession,
+  socket: YjsWebSocketLike,
+  decoder: decoding.Decoder,
+  encoder: encoding.Encoder
+): boolean {
+  const syncMessageType = decoding.readVarUint(decoder);
+  if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
+    const remoteStateVector = decoding.readVarUint8Array(decoder);
+    syncProtocol.writeSyncStep2(encoder, session.ydoc, remoteStateVector);
+    return true;
+  }
+
+  if (syncMessageType === syncProtocol.messageYjsSyncStep2 || syncMessageType === syncProtocol.messageYjsUpdate) {
+    const update = decoding.readVarUint8Array(decoder);
+    if (hasUnsafeIndependentUpdate(session, update)) {
+      closeUnsafeDivergence(socket);
+      return false;
+    }
+    Y.applyUpdate(session.ydoc, update, socket);
+    return true;
+  }
+
+  throw new Error('Unknown Yjs sync message type');
+}
+
+function hasUnsafeIndependentUpdate(session: OneFileDocumentSession, update: Uint8Array): boolean {
+  if (!session.hasNonEmptyMaterializedContent()) {
+    return false;
+  }
+
+  const localDoc = session.ydoc;
+  const localText = localDoc.getText(Y_TEXT_NAME).toString();
+  if (localText.length === 0) {
+    return false;
+  }
+
+  const incomingDoc = new Y.Doc();
+  Y.applyUpdate(incomingDoc, update);
+  const incomingText = incomingDoc.getText(Y_TEXT_NAME).toString();
+  if (incomingText.length === 0) {
+    incomingDoc.destroy();
+    return false;
+  }
+
+  const localState = Y.decodeStateVector(Y.encodeStateVector(localDoc));
+  const incomingState = Y.decodeStateVector(Y.encodeStateVector(incomingDoc));
+  incomingDoc.destroy();
+  if (stateVectorsShareClient(localState, incomingState)) {
+    return false;
+  }
+
+  return true;
+}
+
+function stateVectorsShareClient(left: Map<number, number>, right: Map<number, number>): boolean {
+  for (const clientId of left.keys()) {
+    if (right.has(clientId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function closeUnsafeDivergence(socket: YjsWebSocketLike): void {
+  socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE));
 }
 
 function toUint8Array(data: unknown): Uint8Array | undefined {
