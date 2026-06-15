@@ -35,7 +35,7 @@ export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 // Deliberately re-declared at the doc-session boundary to keep this package decoupled from service/transport mappers while preserving the closed one-failure-dialect shape.
 export interface DocumentSessionFailure {
   ok: false;
-  error: 'not_found';
+  error: 'not_found' | 'unsafe_divergence';
   message: string;
 }
 
@@ -43,6 +43,12 @@ export const DOCUMENT_SESSION_NOT_FOUND_FAILURE: DocumentSessionFailure = {
   ok: false,
   error: 'not_found',
   message: 'file not found'
+};
+
+export const DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE: DocumentSessionFailure = {
+  ok: false,
+  error: 'unsafe_divergence',
+  message: 'document history diverged from durable content; reload the document to reconnect from disk'
 };
 
 export const DOCUMENT_SESSION_FAILURE_CLOSE_CODE = 1008;
@@ -101,6 +107,7 @@ export class OneFileDocumentSession {
   private openPromise: Promise<void> | undefined;
   private lastWrittenHash: string | undefined;
   private lastWrittenContent: string | undefined;
+  private nonEmptyMaterializedContent = false;
   // Set only around this session's own atomic write so file-watch echoes can be distinguished from external edits.
   private pendingWriteHash: string | undefined;
   private persistRequested = false;
@@ -135,6 +142,10 @@ export class OneFileDocumentSession {
     return this.opened && !this.deleted;
   }
 
+  hasNonEmptyMaterializedContent(): boolean {
+    return this.nonEmptyMaterializedContent;
+  }
+
   async open(options: { createIfMissing?: boolean } = {}): Promise<void> {
     if (this.opened) {
       return;
@@ -152,6 +163,7 @@ export class OneFileDocumentSession {
   private async loadFromFile(createIfMissing: boolean): Promise<void> {
     const content = await this.readFile({ createIfMissing });
     this.text.insert(0, content);
+    this.nonEmptyMaterializedContent = content.length > 0;
     this.lastWrittenHash = hashContent(content);
     this.lastWrittenContent = content;
     this.doc.on('update', this.handleDocumentUpdate);
@@ -436,6 +448,7 @@ export class OneFileDocumentSession {
       await atomicWriteFile(this.filePath, content);
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
+      this.nonEmptyMaterializedContent = content.length > 0;
       this.markPersistRecovered();
       this.emitEvent('content-persisted');
     } finally {
@@ -618,6 +631,7 @@ export class OneFileDocumentSession {
     if (current === content) {
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
+      this.nonEmptyMaterializedContent = content.length > 0;
       return;
     }
 
@@ -633,6 +647,7 @@ export class OneFileDocumentSession {
     this.lastWrittenHash = contentHash;
     // Mirrors the last materialized string; revisit resident memory cost before multi-file sessions.
     this.lastWrittenContent = content;
+    this.nonEmptyMaterializedContent = content.length > 0;
     this.emitEvent(eventKind);
   }
 

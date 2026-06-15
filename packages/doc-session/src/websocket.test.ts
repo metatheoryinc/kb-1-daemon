@@ -12,6 +12,7 @@ import * as Y from 'yjs';
 
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   OneFileDocumentSession,
@@ -117,6 +118,128 @@ describe('Yjs WebSocket session', () => {
     await session.close();
   });
 
+  it('persists the first edit from a freshly synced client after loading durable content', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(vaultDir, 'hello-world.md');
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(filePath, 'from disk\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    await waitForSharedContent([client], (content) => content === 'from disk\n');
+
+    client.text.insert(client.text.length, 'fresh edit\n');
+    await waitForDiskContent(filePath, (content) => content === 'from disk\nfresh edit\n');
+
+    client.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await session.close();
+  });
+
+  it('protects a previously empty existing file after its first durable edit', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(vaultDir, 'empty-first.md');
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(filePath, '', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(session, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    client.text.insert(0, 'first durable edit\n');
+    await waitForDiskContent(filePath, (content) => content === 'first durable edit\n');
+
+    const staleSocket = new FakeSocket();
+    const staleBinding = await bindYjsWebSocket(session, staleSocket);
+    const stalePeer = new Y.Doc();
+    stalePeer.getText('markdown').insert(0, 'first durable edit\nindependent stale text\n');
+
+    staleSocket.emitMessage(encodeSyncMessage((encoder) => {
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+      encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
+    }));
+    await session.flush();
+
+    expect(staleSocket.closed).toEqual([{
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+    }]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('first durable edit\n');
+    expect(session.ydoc.getText('markdown').toString()).toBe('first durable edit\n');
+
+    staleSocket.emitClose();
+    await staleBinding.closed;
+    client.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await session.close();
+    stalePeer.destroy();
+  });
+
+  it('serves durable content after a daemon restart from filesystem truth', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(vaultDir, 'hello-world.md');
+    await mkdir(vaultDir, { recursive: true });
+    await writeFile(filePath, 'restart truth\n', 'utf8');
+
+    const firstSession = new OneFileDocumentSession(filePath);
+    await firstSession.open();
+    await firstSession.close();
+
+    const secondSession = new OneFileDocumentSession(filePath);
+    const server = createServer();
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (request, socket, head) => {
+      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+        socket.destroy();
+        return;
+      }
+
+      webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        void bindYjsWebSocket(secondSession, webSocket);
+      });
+    });
+    await listen(server);
+
+    const port = (server.address() as AddressInfo).port;
+    const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
+    await waitForSharedContent([client], (content) => content === 'restart truth\n');
+
+    client.close();
+    await closeWebSocketServer(webSocketServer);
+    await closeServer(server);
+    await secondSession.close();
+  });
+
   it('fails missing document binds with canonical not_found and does not create parent folders', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'typo', 'missing.md');
     const session = new OneFileDocumentSession(filePath);
@@ -148,6 +271,159 @@ describe('Yjs WebSocket session', () => {
 
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
+  });
+
+  it('rejects stale independent peer updates without amplifying durable bytes', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'stable bytes\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+
+    const binding = await bindYjsWebSocket(session, socket);
+    const stalePeer = new Y.Doc();
+    stalePeer.getText('markdown').insert(0, 'stable bytes\n');
+
+    socket.emitMessage(encodeSyncMessage((encoder) => {
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+      encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
+    }));
+    await session.flush();
+
+    expect(socket.closed).toEqual([{
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+    }]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('stable bytes\n');
+    expect(session.ydoc.getText('markdown').toString()).toBe('stable bytes\n');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    stalePeer.destroy();
+  });
+
+  it('rejects divergent stale peer updates that would append duplicate durable prefixes', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'abc\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+
+    const binding = await bindYjsWebSocket(session, socket);
+    const stalePeer = new Y.Doc();
+    stalePeer.getText('markdown').insert(0, 'abc\nplus');
+
+    socket.emitMessage(encodeSyncMessage((encoder) => {
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+      encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
+    }));
+    await session.flush();
+
+    expect(socket.closed).toEqual([{
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+    }]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('abc\n');
+    expect(session.ydoc.getText('markdown').toString()).toBe('abc\n');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    stalePeer.destroy();
+  });
+
+  it('rejects short stale peer updates after a non-empty durable seed', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'short.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'x', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+
+    const binding = await bindYjsWebSocket(session, socket);
+    const stalePeer = new Y.Doc();
+    stalePeer.getText('markdown').insert(0, 'xy');
+
+    socket.emitMessage(encodeSyncMessage((encoder) => {
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+      encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
+    }));
+    await session.flush();
+
+    expect(socket.closed).toEqual([{
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+    }]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('x');
+    expect(session.ydoc.getText('markdown').toString()).toBe('x');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    stalePeer.destroy();
+  });
+
+  it('rejects the stale browser-provider response generated from the daemon sync handshake', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'stable provider bytes\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath);
+    const socket = new FakeSocket();
+
+    const binding = await bindYjsWebSocket(session, socket);
+    const staleBrowserDoc = new Y.Doc();
+    const staleBrowserText = staleBrowserDoc.getText('markdown');
+    staleBrowserText.insert(0, 'stable provider bytes\n');
+    const response = receiveSyncMessage(staleBrowserDoc, socket.sent[0]);
+
+    expect(response).toBeDefined();
+    socket.emitMessage(response);
+    await session.flush();
+
+    expect(socket.closed).toEqual([{
+      code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+      reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+    }]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('stable provider bytes\n');
+    expect(session.ydoc.getText('markdown').toString()).toBe('stable provider bytes\n');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    staleBrowserDoc.destroy();
+  });
+
+  it('keeps durable bytes stable across repeated stale reconnect updates', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'stable bytes across reconnects\n', 'utf8');
+    const stalePeer = new Y.Doc();
+    stalePeer.getText('markdown').insert(0, 'stable bytes across reconnects\n');
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      const session = new OneFileDocumentSession(filePath);
+      const socket = new FakeSocket();
+      const binding = await bindYjsWebSocket(session, socket);
+
+      socket.emitMessage(encodeSyncMessage((encoder) => {
+        encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep2);
+        encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
+      }));
+      await session.flush();
+
+      expect(socket.closed).toEqual([{
+        code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+        reason: JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE)
+      }]);
+      await expect(readFile(filePath, 'utf8')).resolves.toBe('stable bytes across reconnects\n');
+      expect(session.ydoc.getText('markdown').toString()).toBe('stable bytes across reconnects\n');
+
+      socket.emitClose();
+      await binding.closed;
+      await session.close();
+    }
+
+    stalePeer.destroy();
   });
 
   it('reconciles idle external file changes and broadcasts the quiet merge event to every client', async () => {
@@ -468,6 +744,29 @@ function sendSync(socket: WebSocket, write: (encoder: encoding.Encoder) => void)
   encoding.writeVarUint(encoder, MESSAGE_SYNC);
   write(encoder);
   socket.send(encoding.toUint8Array(encoder));
+}
+
+function encodeSyncMessage(write: (encoder: encoding.Encoder) => void): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  write(encoder);
+  return encoding.toUint8Array(encoder);
+}
+
+function receiveSyncMessage(doc: Y.Doc, message: Uint8Array): Uint8Array | undefined {
+  const decoder = decoding.createDecoder(message);
+  const encoder = encoding.createEncoder();
+  const messageType = decoding.readVarUint(decoder);
+  if (messageType !== MESSAGE_SYNC) {
+    return undefined;
+  }
+
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  syncProtocol.readSyncMessage(decoder, encoder, doc, 'daemon');
+  if (encoding.length(encoder) <= 1) {
+    return undefined;
+  }
+  return encoding.toUint8Array(encoder);
 }
 
 function toUint8Array(data: WebSocket.RawData): Uint8Array {
