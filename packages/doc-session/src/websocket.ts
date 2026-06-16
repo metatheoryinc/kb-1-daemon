@@ -49,6 +49,7 @@ export async function bindYjsWebSocket(
     rejectClosed = reject;
   });
   let unsubscribeSessionEvents: () => void = () => {};
+  const deferredPersistedAckIds = new Set<string>();
 
   const updateHandler = (update: Uint8Array, origin: unknown) => {
     if (origin === socket) {
@@ -111,6 +112,7 @@ export async function bindYjsWebSocket(
           sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
         }, (error: unknown) => {
           if (error instanceof PersistFailedError) {
+            deferredPersistedAckIds.add(ackedUpdate.ackId);
             return;
           }
           console.warn('KB-2 failed to acknowledge persisted Yjs update.', error);
@@ -154,6 +156,12 @@ export async function bindYjsWebSocket(
   session.ydoc.on('update', updateHandler);
   unsubscribeSessionEvents = session.onEvent((event) => {
     sendBytes(socket, encodeSessionEvent(event));
+    if (event.kind === 'content-persisted' && deferredPersistedAckIds.size > 0) {
+      for (const ackId of deferredPersistedAckIds) {
+        sendBytes(socket, encodeSyncUpdateAck({ ackId, ts: event.ts }));
+      }
+      deferredPersistedAckIds.clear();
+    }
   });
 
   const activePersistFailure = session.getActivePersistFailureEvent();

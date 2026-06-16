@@ -111,7 +111,7 @@ describe('Yjs WebSocket session', () => {
     clientDoc.destroy();
   });
 
-  it('does not acknowledge tagged client updates that fail to persist', async () => {
+  it('defers tagged client update acknowledgement until failed persistence recovers', async () => {
     const vaultDir = join(kb2Home, 'demo-vault');
     await mkdir(vaultDir, { recursive: true });
     const filePath = join(vaultDir, 'readonly.md');
@@ -135,6 +135,13 @@ describe('Yjs WebSocket session', () => {
       );
 
       expect(findSyncUpdateAck(socket.sent, 'update-fails')).toBeUndefined();
+
+      await chmod(vaultDir, 0o700);
+      await session.flush();
+      await waitUntil(
+        () => Boolean(findSyncUpdateAck(socket.sent, 'update-fails')),
+        () => `Timed out waiting for recovered update ack; sent=${describeMessages(socket.sent)}`
+      );
     } finally {
       await chmod(vaultDir, 0o700).catch(() => undefined);
       socket.emitClose();
