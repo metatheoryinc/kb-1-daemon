@@ -413,7 +413,17 @@ export class DialbackBridge {
 
       if (this.options.relaySocket.readyState === WebSocket.OPEN) {
         this.options.relaySocket.send(data, { binary: isBinary });
+        return;
       }
+
+      this.logger.log('warn', 'daemon frame arrived while relay dial-back was not open', {
+        streamId: this.options.streamId,
+        relayReadyState: this.options.relaySocket.readyState,
+      });
+      this.closeBoth(
+        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+        'Relay dial-back socket was not open for daemon frame',
+      );
     });
 
     this.options.relaySocket.on('close', (code, reason) => {

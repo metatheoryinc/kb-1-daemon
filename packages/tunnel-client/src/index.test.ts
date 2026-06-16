@@ -257,15 +257,28 @@ describe('DialbackBridge', () => {
     });
   });
 
-  it('drops daemon frames while the relay socket is not open', () => {
+  it('closes both sockets when daemon frames arrive while the relay socket is not open', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
-    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket }).start();
+    const logger = { log: vi.fn() };
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
 
     daemonSocket.open();
     daemonSocket.message(Buffer.from([4]), true);
 
     expect(relaySocket.sent).toEqual([]);
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back socket was not open for daemon frame',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back socket was not open for daemon frame',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'daemon frame arrived while relay dial-back was not open', {
+      streamId: 'stream-1',
+      relayReadyState: 0,
+    });
   });
 
   it('accepts array-buffer, chunk-array, and string relay frames in the pending buffer', () => {
