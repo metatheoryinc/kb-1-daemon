@@ -15,6 +15,7 @@ import {
   type TunnelHttpRequestEnvelope,
   type TunnelHttpRequestStartEnvelope,
   type TunnelHttpResponseEnvelope,
+  type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketOpenEnvelope,
 } from '@kb-2/tunnel-protocol';
 import { WebSocket } from 'ws';
@@ -314,6 +315,7 @@ export class TunnelClient {
       relaySocket,
       daemonSocket,
       logger: this.logger,
+      onRetrySafeClose: (message) => this.sendControlStreamClose(message),
     });
 
     relaySocket.on('open', () => {
@@ -326,6 +328,17 @@ export class TunnelClient {
     });
 
     bridge.start();
+  }
+
+  private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
+    if (!this.control || this.control.readyState !== WebSocket.OPEN) {
+      this.logger.log('warn', 'cannot notify relay about stale stream because control is not open', {
+        streamId: message.streamId,
+      });
+      return;
+    }
+
+    this.control.send(encodeJsonBytes(message));
   }
 }
 /* v8 ignore stop */
@@ -345,6 +358,7 @@ export type DialbackBridgeOptions = {
   relaySocket: BridgeSocket;
   daemonSocket: BridgeSocket;
   logger?: TunnelClientLogger;
+  onRetrySafeClose?: (message: TunnelWebSocketCloseEnvelope) => void;
 };
 
 export class DialbackBridge {
@@ -389,7 +403,19 @@ export class DialbackBridge {
       }
 
       if (this.options.daemonSocket.readyState === WebSocket.OPEN) {
-        this.options.daemonSocket.send(data, { binary: isBinary });
+        this.sendToDaemon(data, isBinary);
+        return;
+      }
+
+      if (this.options.daemonSocket.readyState !== WebSocket.CONNECTING) {
+        this.logger.log('warn', 'relay frame arrived while daemon websocket was not open', {
+          streamId: this.options.streamId,
+          daemonReadyState: this.options.daemonSocket.readyState,
+        });
+        this.closeBoth(
+          TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+          'Daemon websocket was not open for relay frame',
+        );
         return;
       }
 
@@ -444,6 +470,7 @@ export class DialbackBridge {
         streamId: this.options.streamId,
         relayReadyState: this.options.relaySocket.readyState,
       });
+      this.notifyRetrySafeClose('Relay dial-back socket was not open for daemon frame');
       this.closeBoth(
         TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
         'Relay dial-back socket was not open for daemon frame',
@@ -481,6 +508,23 @@ export class DialbackBridge {
     });
   }
 
+  private sendToDaemon(data: WebSocket.RawData, isBinary: boolean): boolean {
+    try {
+      this.options.daemonSocket.send(data, { binary: isBinary });
+      return true;
+    } catch (error) {
+      this.logger.log('warn', 'daemon websocket send failed', {
+        streamId: this.options.streamId,
+        error: String(error),
+      });
+      this.closeBoth(
+        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+        'Daemon websocket send failed; reconnect required',
+      );
+      return false;
+    }
+  }
+
   private sendToRelay(data: WebSocket.RawData, isBinary: boolean): boolean {
     try {
       this.options.relaySocket.send(data, { binary: isBinary });
@@ -490,12 +534,22 @@ export class DialbackBridge {
         streamId: this.options.streamId,
         error: String(error),
       });
+      this.notifyRetrySafeClose('Relay dial-back send failed; reconnect required');
       this.closeBoth(
         TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
         'Relay dial-back send failed; reconnect required',
       );
       return false;
     }
+  }
+
+  private notifyRetrySafeClose(reason: string): void {
+    this.options.onRetrySafeClose?.({
+      type: 'ws.close',
+      streamId: this.options.streamId,
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason,
+    });
   }
 
   private closeBoth(code: number, reason: string): void {

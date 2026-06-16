@@ -203,9 +203,17 @@ export type TunnelWebSocketDialbackHello = {
   streamId: string;
 };
 
+export type TunnelWebSocketCloseEnvelope = {
+  type: "ws.close";
+  streamId: string;
+  code: TunnelCloseCode;
+  reason: string;
+};
+
 export type TunnelControlClientMessage =
   | TunnelControlClientHello
   | TunnelControlPing
+  | TunnelWebSocketCloseEnvelope
   | TunnelHttpResponseEnvelope
   | TunnelHttpResponseStartEnvelope
   | TunnelHttpResponseChunkEnvelope

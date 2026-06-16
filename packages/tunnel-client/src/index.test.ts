@@ -211,6 +211,56 @@ describe('DialbackBridge', () => {
     expect(daemonSocket.sent).toEqual([{ data: Buffer.from([9]), options: { binary: true } }]);
   });
 
+  it.each([2, 3])('closes both sockets when relay frames arrive while the daemon websocket state is %i', (readyState) => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+
+    relaySocket.open();
+    daemonSocket.readyState = readyState;
+    relaySocket.message(Buffer.from([9]));
+
+    expect(daemonSocket.sent).toEqual([]);
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket was not open for relay frame',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket was not open for relay frame',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'relay frame arrived while daemon websocket was not open', {
+      streamId: 'stream-1',
+      daemonReadyState: readyState,
+    });
+  });
+
+  it('closes both sockets when sending relay frames to the daemon fails', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    daemonSocket.sendError = new Error('daemon send failed');
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+
+    relaySocket.open();
+    daemonSocket.open();
+    relaySocket.message(Buffer.from([9]));
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket send failed; reconnect required',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket send failed; reconnect required',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'daemon websocket send failed', {
+      streamId: 'stream-1',
+      error: 'Error: daemon send failed',
+    });
+  });
+
   it('closes both sockets when a relay websocket frame exceeds the tunnel cap', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
@@ -307,13 +357,20 @@ describe('DialbackBridge', () => {
     });
   });
 
-  it('closes both sockets when daemon frames arrive after the relay socket is closing', () => {
+  it.each([2, 3])('closes both sockets when daemon frames arrive after the relay socket state is %i', (readyState) => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
     const logger = { log: vi.fn() };
-    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+    const onRetrySafeClose = vi.fn();
+    new DialbackBridge({
+      streamId: 'stream-1',
+      relaySocket,
+      daemonSocket,
+      logger,
+      onRetrySafeClose,
+    }).start();
 
-    relaySocket.readyState = 2;
+    relaySocket.readyState = readyState;
     daemonSocket.open();
     daemonSocket.message(Buffer.from([4]), true);
 
@@ -328,7 +385,41 @@ describe('DialbackBridge', () => {
     });
     expect(logger.log).toHaveBeenCalledWith('warn', 'daemon frame arrived while relay dial-back was not open', {
       streamId: 'stream-1',
-      relayReadyState: 2,
+      relayReadyState: readyState,
+    });
+    expect(onRetrySafeClose).toHaveBeenCalledWith({
+      type: 'ws.close',
+      streamId: 'stream-1',
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back socket was not open for daemon frame',
+    });
+  });
+
+  it('notifies relay control when daemon frames arrive after the relay socket is closed', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const onRetrySafeClose = vi.fn();
+    new DialbackBridge({
+      streamId: 'stream-1',
+      relaySocket,
+      daemonSocket,
+      onRetrySafeClose,
+    }).start();
+
+    relaySocket.readyState = 3;
+    daemonSocket.open();
+    daemonSocket.message(Buffer.from([4]), true);
+
+    expect(relaySocket.sent).toEqual([]);
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back socket was not open for daemon frame',
+    });
+    expect(onRetrySafeClose).toHaveBeenCalledWith({
+      type: 'ws.close',
+      streamId: 'stream-1',
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back socket was not open for daemon frame',
     });
   });
 
