@@ -388,7 +388,7 @@ export class DialbackBridge {
     this.options.daemonSocket.on('open', () => {
       clearTimeout(this.pairTimeout);
       for (const frame of this.pendingRelayFrames.drain()) {
-        this.options.daemonSocket.send(Buffer.from(frame), { binary: true });
+        if (!this.sendToDaemon(Buffer.from(frame), true)) return;
       }
     });
 

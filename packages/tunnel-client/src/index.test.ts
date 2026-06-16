@@ -149,6 +149,31 @@ describe('DialbackBridge', () => {
     ]);
   });
 
+  it('closes both sockets when flushing pending relay frames to the daemon fails', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+
+    relaySocket.open();
+    relaySocket.message(Buffer.from([1, 2]));
+    daemonSocket.sendError = new Error('daemon send failed');
+    daemonSocket.open();
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket send failed; reconnect required',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket send failed; reconnect required',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'daemon websocket send failed', {
+      streamId: 'stream-1',
+      error: 'Error: daemon send failed',
+    });
+  });
+
   it('closes both sockets when the dial-back pending frame cap overflows', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
