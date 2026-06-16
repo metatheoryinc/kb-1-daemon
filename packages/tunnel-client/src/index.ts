@@ -350,6 +350,7 @@ export type DialbackBridgeOptions = {
 export class DialbackBridge {
   private readonly logger: TunnelClientLogger;
   private readonly pendingRelayFrames = new PendingFrameBuffer();
+  private readonly pendingDaemonFrames = new PendingFrameBuffer();
   private readonly pairTimeout: ReturnType<typeof setTimeout>;
   private closed = false;
 
@@ -364,6 +365,12 @@ export class DialbackBridge {
   }
 
   start(): void {
+    this.options.relaySocket.on('open', () => {
+      for (const frame of this.pendingDaemonFrames.drain()) {
+        if (!this.sendToRelay(Buffer.from(frame), true)) return;
+      }
+    });
+
     this.options.daemonSocket.on('open', () => {
       clearTimeout(this.pairTimeout);
       for (const frame of this.pendingRelayFrames.drain()) {
@@ -412,7 +419,24 @@ export class DialbackBridge {
       }
 
       if (this.options.relaySocket.readyState === WebSocket.OPEN) {
-        this.options.relaySocket.send(data, { binary: isBinary });
+        this.sendToRelay(data, isBinary);
+        return;
+      }
+
+      if (this.options.relaySocket.readyState === WebSocket.CONNECTING) {
+        const queued = this.pendingDaemonFrames.push(frame);
+        if (!queued.ok) {
+          this.logger.log('warn', 'dial-back pending daemon buffer overflow', {
+            streamId: this.options.streamId,
+            reason: queued.reason,
+            queuedFrames: queued.queuedFrames,
+            queuedBytes: queued.queuedBytes,
+          });
+          this.closeBoth(
+            TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
+            `Pending daemon-to-relay buffer exceeded ${queued.reason} cap`,
+          );
+        }
         return;
       }
 
@@ -457,6 +481,23 @@ export class DialbackBridge {
     });
   }
 
+  private sendToRelay(data: WebSocket.RawData, isBinary: boolean): boolean {
+    try {
+      this.options.relaySocket.send(data, { binary: isBinary });
+      return true;
+    } catch (error) {
+      this.logger.log('warn', 'relay dial-back send failed', {
+        streamId: this.options.streamId,
+        error: String(error),
+      });
+      this.closeBoth(
+        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+        'Relay dial-back send failed; reconnect required',
+      );
+      return false;
+    }
+  }
+
   private closeBoth(code: number, reason: string): void {
     /* v8 ignore next -- Defensive against reciprocal close re-entry; socket close propagation covers the practical path. */
     if (this.closed) return;
@@ -464,6 +505,7 @@ export class DialbackBridge {
     this.closed = true;
     clearTimeout(this.pairTimeout);
     this.pendingRelayFrames.clear();
+    this.pendingDaemonFrames.clear();
     this.options.relaySocket.close(code, reason);
     this.options.daemonSocket.close(code, reason);
   }

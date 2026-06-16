@@ -18,8 +18,10 @@ class FakeSocket extends EventEmitter implements BridgeSocket {
   readyState = 0;
   readonly sent: Array<{ data: unknown; options?: { binary?: boolean } }> = [];
   readonly closes: Array<{ code?: number; reason?: string }> = [];
+  sendError: Error | undefined;
 
   send(data: unknown, options?: { binary?: boolean }): void {
+    if (this.sendError) throw this.sendError;
     this.sent.push({ data, options });
   }
 
@@ -238,6 +240,54 @@ describe('DialbackBridge', () => {
     expect(relaySocket.sent).toEqual([{ data: Buffer.from([4]), options: { binary: true } }]);
   });
 
+  it('buffers daemon frames until the relay dial-back opens, then flushes in order', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket }).start();
+
+    daemonSocket.open();
+    daemonSocket.message(Buffer.from([4]), true);
+    daemonSocket.message(Buffer.from([5, 6]), true);
+    expect(relaySocket.sent).toEqual([]);
+    expect(relaySocket.closes).toEqual([]);
+    expect(daemonSocket.closes).toEqual([]);
+
+    relaySocket.open();
+
+    expect(relaySocket.sent).toEqual([
+      { data: Buffer.from([4]), options: { binary: true } },
+      { data: Buffer.from([5, 6]), options: { binary: true } },
+    ]);
+  });
+
+  it('closes both sockets when the daemon-to-relay pending frame cap overflows', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+
+    daemonSocket.open();
+    for (let index = 0; index < TUNNEL_PENDING_STREAM_FRAME_LIMIT; index++) {
+      daemonSocket.message(Buffer.from([index]), true);
+    }
+    daemonSocket.message(Buffer.from([255]), true);
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
+      reason: 'Pending daemon-to-relay buffer exceeded frames cap',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
+      reason: 'Pending daemon-to-relay buffer exceeded frames cap',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'dial-back pending daemon buffer overflow', {
+      streamId: 'stream-1',
+      reason: 'frames',
+      queuedFrames: TUNNEL_PENDING_STREAM_FRAME_LIMIT,
+      queuedBytes: TUNNEL_PENDING_STREAM_FRAME_LIMIT,
+    });
+  });
+
   it('closes both sockets when a daemon websocket frame exceeds the tunnel cap', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
@@ -257,12 +307,13 @@ describe('DialbackBridge', () => {
     });
   });
 
-  it('closes both sockets when daemon frames arrive while the relay socket is not open', () => {
+  it('closes both sockets when daemon frames arrive after the relay socket is closing', () => {
     const relaySocket = new FakeSocket();
     const daemonSocket = new FakeSocket();
     const logger = { log: vi.fn() };
     new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
 
+    relaySocket.readyState = 2;
     daemonSocket.open();
     daemonSocket.message(Buffer.from([4]), true);
 
@@ -277,7 +328,32 @@ describe('DialbackBridge', () => {
     });
     expect(logger.log).toHaveBeenCalledWith('warn', 'daemon frame arrived while relay dial-back was not open', {
       streamId: 'stream-1',
-      relayReadyState: 0,
+      relayReadyState: 2,
+    });
+  });
+
+  it('closes both sockets when sending daemon frames to the relay fails', () => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    relaySocket.sendError = new Error('relay send failed');
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+
+    relaySocket.open();
+    daemonSocket.open();
+    daemonSocket.message(Buffer.from([4]), true);
+
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back send failed; reconnect required',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Relay dial-back send failed; reconnect required',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'relay dial-back send failed', {
+      streamId: 'stream-1',
+      error: 'Error: relay send failed',
     });
   });
 
