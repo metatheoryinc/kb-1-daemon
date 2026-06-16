@@ -13,10 +13,14 @@ import * as Y from 'yjs';
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
+  MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
+  MESSAGE_SYNC_UPDATE_ACK,
   OneFileDocumentSession,
+  decodeSyncUpdateAck,
   decodeSessionEvent,
+  encodeAckedSyncUpdate,
   type DocumentSessionEvent,
   type YjsWebSocketLike
 } from './index.js';
@@ -74,6 +78,70 @@ describe('Yjs WebSocket session', () => {
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
     await session.close();
+  });
+
+  it('acknowledges a tagged client update only after it is persisted', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'acked.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'acked browser edit\n');
+
+    socket.emitMessage(encodeAckedSyncUpdate({
+      ackId: 'update-1',
+      update: Y.encodeStateAsUpdate(clientDoc)
+    }));
+
+    await waitForDiskContent(filePath, (content) => content === 'acked browser edit\n');
+    await waitUntil(
+      () => Boolean(findSyncUpdateAck(socket.sent, 'update-1')),
+      () => `Timed out waiting for update ack; sent=${describeMessages(socket.sent)}`
+    );
+
+    const ack = findSyncUpdateAck(socket.sent, 'update-1');
+    expect(ack?.ackId).toBe('update-1');
+    expect(typeof ack?.ts).toBe('number');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    clientDoc.destroy();
+  });
+
+  it('does not acknowledge tagged client updates that fail to persist', async () => {
+    const vaultDir = join(kb2Home, 'demo-vault');
+    await mkdir(vaultDir, { recursive: true });
+    const filePath = join(vaultDir, 'readonly.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'unsaved browser edit\n');
+
+    try {
+      await chmod(vaultDir, 0o500);
+      socket.emitMessage(encodeAckedSyncUpdate({
+        ackId: 'update-fails',
+        update: Y.encodeStateAsUpdate(clientDoc)
+      }));
+
+      await waitUntil(
+        () => socket.sent.some((message) => sessionEventKind(message) === 'persist-failure'),
+        () => `Timed out waiting for persist-failure; sent=${describeMessages(socket.sent)}`
+      );
+
+      expect(findSyncUpdateAck(socket.sent, 'update-fails')).toBeUndefined();
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      socket.emitClose();
+      await binding.closed;
+      await session.close();
+      clientDoc.destroy();
+    }
   });
 
   it('buffers the initial client sync request while a cold session opens', async () => {
@@ -753,6 +821,50 @@ function encodeSyncMessage(write: (encoder: encoding.Encoder) => void): Uint8Arr
   return encoding.toUint8Array(encoder);
 }
 
+function findSyncUpdateAck(messages: Uint8Array[], ackId: string) {
+  for (const message of messages) {
+    const decoder = decoding.createDecoder(message);
+    const messageType = decoding.readVarUint(decoder);
+    if (messageType !== MESSAGE_SYNC_UPDATE_ACK) {
+      continue;
+    }
+    const ack = decodeSyncUpdateAck(decoder);
+    if (ack?.ackId === ackId) {
+      return ack;
+    }
+  }
+  return undefined;
+}
+
+function sessionEventKind(message: Uint8Array): DocumentSessionEvent['kind'] | undefined {
+  const decoder = decoding.createDecoder(message);
+  const messageType = decoding.readVarUint(decoder);
+  if (messageType !== MESSAGE_SESSION_EVENT) {
+    return undefined;
+  }
+  return decodeSessionEvent(decoder)?.kind;
+}
+
+function describeMessages(messages: Uint8Array[]): string {
+  return JSON.stringify(messages.map((message) => {
+    const decoder = decoding.createDecoder(message);
+    const messageType = decoding.readVarUint(decoder);
+    if (messageType === MESSAGE_SYNC_UPDATE_ACK) {
+      return { type: 'sync-update-ack', ack: decodeSyncUpdateAck(decoder) };
+    }
+    if (messageType === MESSAGE_SESSION_EVENT) {
+      return { type: 'session-event', event: decodeSessionEvent(decoder) };
+    }
+    if (messageType === MESSAGE_ACKED_SYNC_UPDATE) {
+      return { type: 'acked-sync-update' };
+    }
+    if (messageType === MESSAGE_SYNC) {
+      return { type: 'sync' };
+    }
+    return { type: messageType };
+  }));
+}
+
 function receiveSyncMessage(doc: Y.Doc, message: Uint8Array): Uint8Array | undefined {
   const decoder = decoding.createDecoder(message);
   const encoder = encoding.createEncoder();
@@ -830,9 +942,16 @@ async function waitForDiskContent(
   filePath: string,
   predicate: (content: string) => boolean,
 ): Promise<void> {
-  await waitUntil(async () => predicate(await readFile(filePath, 'utf8')), () =>
-    `Timed out waiting for disk content at ${filePath}`
-  );
+  await waitUntil(async () => {
+    try {
+      return predicate(await readFile(filePath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return false;
+      }
+      throw error;
+    }
+  }, () => `Timed out waiting for disk content at ${filePath}`);
 }
 
 async function waitUntil(

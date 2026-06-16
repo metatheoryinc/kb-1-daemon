@@ -28,10 +28,18 @@ export {
 export {
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
+  MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_SYNCED,
+  MESSAGE_SYNC_UPDATE_ACK,
+  decodeAckedSyncUpdate,
   decodeSessionEvent,
+  decodeSyncUpdateAck,
+  encodeAckedSyncUpdate,
   encodeSessionEvent,
+  encodeSyncUpdateAck,
   encodeSyncedMessage,
+  type AckedSyncUpdate,
   type DocumentSessionEvent,
-  type DocumentSessionEventKind
+  type DocumentSessionEventKind,
+  type SyncUpdateAck
 } from './protocol.js';

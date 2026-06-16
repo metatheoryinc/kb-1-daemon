@@ -10,7 +10,14 @@ import {
   PersistFailedError,
   type OneFileDocumentSession
 } from './session.js';
-import { MESSAGE_SYNC, encodeSessionEvent, encodeSyncedMessage } from './protocol.js';
+import {
+  MESSAGE_ACKED_SYNC_UPDATE,
+  MESSAGE_SYNC,
+  decodeAckedSyncUpdate,
+  encodeSessionEvent,
+  encodeSyncUpdateAck,
+  encodeSyncedMessage
+} from './protocol.js';
 
 const socketOpen = 1;
 const Y_TEXT_NAME = 'markdown';
@@ -89,6 +96,27 @@ export async function bindYjsWebSocket(
       const decoder = decoding.createDecoder(message);
       const encoder = encoding.createEncoder();
       const messageType = decoding.readVarUint(decoder);
+
+      if (messageType === MESSAGE_ACKED_SYNC_UPDATE) {
+        const ackedUpdate = decodeAckedSyncUpdate(decoder);
+        if (!ackedUpdate) {
+          return;
+        }
+        if (hasUnsafeIndependentUpdate(session, ackedUpdate.update)) {
+          closeUnsafeDivergence(socket);
+          return;
+        }
+        Y.applyUpdate(session.ydoc, ackedUpdate.update, socket);
+        void session.flush().then(() => {
+          sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
+        }, (error: unknown) => {
+          if (error instanceof PersistFailedError) {
+            return;
+          }
+          console.warn('KB-2 failed to acknowledge persisted Yjs update.', error);
+        });
+        return;
+      }
 
       if (messageType !== MESSAGE_SYNC) {
         return;
