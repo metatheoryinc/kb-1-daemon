@@ -1,12 +1,8 @@
 <script lang="ts">
-  import IconButton from '../primitives/IconButton.svelte';
-  import Icon from '../primitives/Icon.svelte';
-  import ContextMenu from '../menus/ContextMenu.svelte';
   import VaultGroup from './VaultGroup.svelte';
   import VaultFilterButton from './VaultFilterButton.svelte';
   import VaultFilterPopover from './VaultFilterPopover.svelte';
   import type { AccentName } from '../primitives/accent';
-  import type { MenuItem } from '../menus/ContextMenu.svelte';
   import type { LocalTreeAction, LocalTreeNode, VaultFilterEntry } from './types';
 
   interface Props {
@@ -75,18 +71,7 @@
     onToggleVaultHidden,
   }: Props = $props();
 
-  let newMenuRect = $state<DOMRect | null>(null);
   let filterOpen = $state(false);
-
-  const newMenuItems = $derived<MenuItem[]>([
-    { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
-    { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder' }) }
-  ]);
-
-  function openNewMenu(event: MouseEvent): void {
-    const trigger = event.currentTarget as HTMLElement;
-    newMenuRect = trigger.getBoundingClientRect();
-  }
 
   // The filter lists the panel's own vault when no explicit set is given.
   const allVaults = $derived<VaultFilterEntry[]>(
@@ -114,9 +99,6 @@
   <header class="panel-header">
     <div class="title-row">
       <h2>Files &amp; Vaults</h2>
-      <IconButton size="sm" title="New" ariaLabel="New note or folder" onclick={openNewMenu}>
-        <Icon name="plus" size={15} />
-      </IconButton>
     </div>
 
     <div class="filter-row">
@@ -166,17 +148,6 @@
       </nav>
     {/if}
   </div>
-
-  {#if newMenuRect}
-    <ContextMenu
-      items={newMenuItems}
-      position={{ mode: 'anchor', rect: newMenuRect }}
-      ariaLabel="New note or folder"
-      onclose={() => {
-        newMenuRect = null;
-      }}
-    />
-  {/if}
 </aside>
 
 <style>
