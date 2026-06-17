@@ -97,33 +97,21 @@
 
   .actions-cell {
     grid-area: actions;
+    display: flex;
+    align-items: center;
   }
 
-  /* Below this width the header drops to two rows. Breadcrumb takes the
-     full top row so it stays readable; status + actions share the second
-     row, with actions anchored on the right. The grid lives on an inner
-     element so the @container query can target it — a container can only
-     be queried by its descendants, not by itself. */
+  /* At narrow container widths the header stays a single, vertically
+     centered row: only the breadcrumb cell yields space (it has
+     min-width: 0 and scrolls/truncates within its own column), while
+     the meta + actions cells keep their `auto` track and stay on the
+     line. The grid lives on an inner element so the @container query
+     can target it — a container can only be queried by its
+     descendants, not by itself. */
   @container (max-width: 720px) {
     .grid {
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas:
-        'breadcrumb breadcrumb'
-        'meta actions';
-      row-gap: 10px;
+      column-gap: 10px;
       padding: 12px 20px;
-    }
-  }
-
-  /* Two-row mobile layout needs more vertical room than the single-row
-     desktop minimum. 62px isn't enough for breadcrumb + meta+actions
-     without crushing them; 92px gives both rows the same breathing
-     room they get on desktop. Lives on @media (not @container) because
-     a container can't query itself — the rule has to apply to the
-     element that defines the container, not a descendant. */
-  @media (max-width: 720px) {
-    .document-header {
-      min-height: 92px;
     }
   }
 </style>
