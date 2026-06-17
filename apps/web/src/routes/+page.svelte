@@ -20,11 +20,13 @@
     ConfirmDialog,
     DocumentNotFoundState,
     EditorSaveNotifications,
+    FolderCanvas,
     LocalEditorShell,
     MovePickerDialog,
     TextInputDialog,
     type AccentName,
     type DialogField,
+    type LocalFolderNode,
     type LocalTreeAction,
     type LocalTreeNode,
     type RailNavId,
@@ -187,6 +189,54 @@
   }
 
   const orgPeople: OrgPerson[] = [];
+
+  // Find a node by its vault-relative path in the live tree. Returns the
+  // matching folder or file node, or `undefined` when the path isn't in
+  // the tree yet (first paint, or a path the vault doesn't carry).
+  function findNode(
+    nodes: LocalTreeNode[],
+    path: string,
+  ): LocalTreeNode | undefined {
+    for (const node of nodes) {
+      if (node.path === path) return node;
+      if (node.kind === 'folder') {
+        const hit = findNode(node.children, path);
+        if (hit) return hit;
+      }
+    }
+    return undefined;
+  }
+
+  // The node the URL currently points at, resolved against the live
+  // tree. Mirrors KB-1's selector resolution: the tree decides whether
+  // a path is a folder or a note, and the route renders the matching
+  // canvas. `undefined` while the tree loads or for a path not (yet) in
+  // it — treated as a document so a deep-linked note still opens.
+  const activeNode = $derived(findNode(tree, documentPath));
+  const viewingFolder = $derived(
+    documentPath === '' || activeNode?.kind === 'folder',
+  );
+  // The folder node backing the canvas — its `children` is the full
+  // subtree (direct children plus descendants) the canvas renders. At
+  // vault root there is no node, so the canvas reads the whole tree.
+  const activeFolderNode = $derived<LocalFolderNode | undefined>(
+    activeNode?.kind === 'folder' ? activeNode : undefined,
+  );
+  // The active folder row key for the tree highlight + three-state
+  // click. Empty path (vault root) has no folder row to highlight.
+  const activeFolderId = $derived(
+    viewingFolder && documentPath !== ''
+      ? expansionKey('folder', vaultId, documentPath)
+      : undefined,
+  );
+
+  // Pull the vault-relative folder path back out of an opaque folder key
+  // (`folder:<vaultId>:<path>`). The shell's three-state click hands us
+  // the key; navigation needs the path.
+  function folderPathFromKey(key: string): string {
+    const prefix = `folder:${vaultId}:`;
+    return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+  }
 
   const editorSaveNotificationCopy = {
     externalMerge: {
@@ -359,6 +409,22 @@
 
   function rebindDocument(path: string): void {
     documentPath = path;
+    // A folder (or the vault root) renders the folder canvas, which
+    // needs no Yjs document. Tear down any open provider and skip
+    // opening a new one — mirrors KB-1's selector picking FolderCanvas
+    // over DocumentCanvas. The folder/file split is decided against the
+    // live tree; a path the tree doesn't carry falls through as a
+    // document so deep-linked notes still open.
+    const node = findNode(tree, path);
+    if (path === '' || node?.kind === 'folder') {
+      provider?.destroy();
+      provider = null;
+      providerSynced = false;
+      status = 'connecting';
+      notFoundPath = null;
+      docDeleted = false;
+      return;
+    }
     openProvider(path);
   }
 
@@ -367,13 +433,11 @@
   }
 
   // The tree row's three-state click reaches its "open + not active"
-  // branch via onOpenFolder, which a folder canvas would consume to
-  // navigate. This shell has no folder page, so the closest sensible
-  // behavior is to collapse the row — fall back to the expansion toggle.
-  // (Follow-up: a folder canvas/route would wire this to a real
-  // navigation and supply activeFolderId for the active row.)
+  // branch via onOpenFolder: navigate to the folder so its canvas
+  // renders and the row goes active. (Closed → expand and open + active
+  // → collapse are handled inside the row itself via onToggleFolder.)
   function openFolder(key: string): void {
-    toggleFolder(key);
+    void openDocument(folderPathFromKey(key));
   }
 
   function toggleVault(key: string): void {
@@ -820,6 +884,19 @@
     });
   });
 
+  // A folder deep-link on cold load opens a provider before the tree has
+  // loaded (the folder/file split can't be made yet). Once the tree
+  // arrives and the path resolves to a folder, tear that stray provider
+  // down — the folder canvas renders instead of the editor.
+  $effect(() => {
+    if (!viewingFolder || !provider) return;
+    untrack(() => {
+      provider?.destroy();
+      provider = null;
+      providerSynced = false;
+    });
+  });
+
   afterNavigate((navigation) => {
     if (!mounted || !navigation.to?.url) return;
     const nextPath = documentPathFromUrl(navigation.to.url);
@@ -877,6 +954,7 @@
   {secondaryRailWidth}
   {expandedFolderIds}
   {expandedVaultIds}
+  {activeFolderId}
   {favoritedFolderPaths}
   {favoritedNotePaths}
   starredFolders={starredView.folders}
@@ -916,37 +994,57 @@
     }}
   />
 
-  <!-- Document scroll structure ported from the reference DocumentCanvas:
-       `.doc-body` is the full-width scroll container so the whole pane
-       scrolls (header stays pinned in the shell above), and `.doc-column`
-       centers the content at a fixed prose measure with `margin: 0 auto`.
-       The editor mounts with `scroll="external"`, handing scroll ownership
-       to `.doc-body`. There are no side gutter columns, so no dark bands
-       beside the document. -->
-  <div class="doc-body-wrap">
-    <div class="doc-body">
-      {#if notFoundPath === documentPath}
-        <DocumentNotFoundState path={documentPath} />
-      {:else if provider && providerSynced}
-        <div class="doc-column">
-          {#key provider}
-            <PlaintextEditor
-              ydoc={provider.doc}
-              ytext={provider.text}
-              livePaths={livePaths}
-              orgPeople={orgPeople}
-              readOnly={docDeleted}
-              scroll="external"
-              class="vault-editor"
-              onWikilinkClick={handleWikilinkClick}
-            />
-          {/key}
-        </div>
-      {:else if mounted}
-        <div class="loading">Opening document…</div>
-      {/if}
+  {#if viewingFolder}
+    <!-- Folder view: the tree resolved this path to a folder (or the
+         vault root), so render the folder canvas instead of the editor.
+         The shell's DocumentHeader above already shows the breadcrumb +
+         title; the canvas owns the body (stats + contents). Child rows
+         navigate — a note opens the editor, a folder opens its canvas. -->
+    <FolderCanvas
+      {vaultName}
+      folderPath={documentPath}
+      metadata={activeFolderNode?.metadata}
+      children={activeFolderNode?.children ?? tree}
+      onOpenFile={(path) => {
+        void openDocument(path);
+      }}
+      onOpenFolder={(path) => {
+        void openDocument(path);
+      }}
+    />
+  {:else}
+    <!-- Document scroll structure ported from the reference DocumentCanvas:
+         `.doc-body` is the full-width scroll container so the whole pane
+         scrolls (header stays pinned in the shell above), and `.doc-column`
+         centers the content at a fixed prose measure with `margin: 0 auto`.
+         The editor mounts with `scroll="external"`, handing scroll ownership
+         to `.doc-body`. There are no side gutter columns, so no dark bands
+         beside the document. -->
+    <div class="doc-body-wrap">
+      <div class="doc-body">
+        {#if notFoundPath === documentPath}
+          <DocumentNotFoundState path={documentPath} />
+        {:else if provider && providerSynced}
+          <div class="doc-column">
+            {#key provider}
+              <PlaintextEditor
+                ydoc={provider.doc}
+                ytext={provider.text}
+                livePaths={livePaths}
+                orgPeople={orgPeople}
+                readOnly={docDeleted}
+                scroll="external"
+                class="vault-editor"
+                onWikilinkClick={handleWikilinkClick}
+              />
+            {/key}
+          </div>
+        {:else if mounted}
+          <div class="loading">Opening document…</div>
+        {/if}
+      </div>
     </div>
-  </div>
+  {/if}
 
   {#if error}
     <p class="error">{error}</p>
