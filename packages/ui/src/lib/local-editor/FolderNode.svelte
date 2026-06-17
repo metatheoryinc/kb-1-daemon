@@ -5,31 +5,41 @@
   import { accentHex, accentNames, type AccentName } from '../primitives/accent';
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
+  import { folderKey } from './expansion';
   import type { LocalFolderNode, LocalTreeAction } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
 
   interface Props {
     node: LocalFolderNode;
+    /** Vault id the row belongs to. Used to mint the opaque expansion
+        key (`folder:<vaultId>:<path>`) the shell's store reads. */
+    vaultId: string;
     activePath?: string;
-    expandedPaths?: Set<string>;
+    /** Allow-list of expanded folder keys. The single source of truth
+        for whether a row is open — the shell owns this set. */
+    expandedFolderIds?: Set<string>;
     depth?: number;
-    onToggle?: (path: string) => void;
+    /** Toggle a folder row. Called with the row's opaque key. */
+    onToggleFolder?: (key: string) => void;
     onOpen?: (path: string) => void;
     onAction?: (action: LocalTreeAction) => void;
   }
 
   let {
     node,
+    vaultId,
     activePath = '',
-    expandedPaths = new Set<string>(),
+    expandedFolderIds = new Set<string>(),
     depth = 0,
-    onToggle,
+    onToggleFolder,
     onOpen,
     onAction,
   }: Props = $props();
 
   let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
-  const expanded = $derived(expandedPaths.has(node.path));
+  const key = $derived(folderKey(vaultId, node.path));
+  const open = $derived(expandedFolderIds.has(key));
+  const indent = $derived(12 + depth * 14);
   const folderColor = $derived(accentHex[node.metadata?.color ?? 'slate']);
   const folderIcon = $derived(node.metadata?.icon ?? null);
 
@@ -59,40 +69,60 @@
     event.preventDefault();
     menuPosition = { mode: 'cursor', x: event.clientX, y: event.clientY };
   }
+
+  function toggle(): void {
+    onToggleFolder?.(key);
+  }
+
+  // Caret click toggles without opening the canvas; the row body click
+  // toggles too — a single-vault tree has no separate folder canvas, so
+  // both affordances collapse to the same toggle.
+  function handleCaretClick(event: MouseEvent): void {
+    event.stopPropagation();
+    toggle();
+  }
 </script>
 
 <div class="folder-node" style:--depth={depth}>
-  <button
-    type="button"
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
     class="row"
-    aria-expanded={expanded}
+    style="padding-left: {indent}px;"
     oncontextmenu={openMenu}
-    onclick={() => onToggle?.(node.path)}
   >
-    <span class="chevron" class:expanded>
-      <Icon name="chevron" size={11} weight="bold" />
-    </span>
-    <FolderIcon color={folderColor} icon={folderIcon} size="sm" label={`${node.name} folder`} />
-    <span class="label">{node.name}</span>
-  </button>
+    <button
+      type="button"
+      class="caret"
+      aria-label={open ? `Collapse ${node.name}` : `Expand ${node.name}`}
+      aria-expanded={open}
+      onclick={handleCaretClick}
+    >
+      <span class="chev" class:collapsed={!open} aria-hidden="true">
+        <Icon name="chevron-down" size={12} weight="bold" />
+      </span>
+    </button>
+    <button type="button" class="activate" onclick={toggle}>
+      <FolderIcon color={folderColor} icon={folderIcon} size="sm" variant="filled" label={`${node.name} folder`} />
+      <span class="name">{node.name}</span>
+    </button>
+  </div>
 
-  {#if expanded}
+  {#if open}
     <div class="children">
       {#each node.children as child (child.path)}
         {#if child.kind === 'folder'}
           <FolderNode
             node={child}
+            {vaultId}
             {activePath}
-            {expandedPaths}
+            {expandedFolderIds}
             depth={depth + 1}
-            {onToggle}
+            {onToggleFolder}
             {onOpen}
             {onAction}
           />
         {:else}
-          <div class="file-indent">
-            <FileNode node={child} {activePath} {onOpen} {onAction} />
-          </div>
+          <FileNode node={child} depth={depth + 1} {activePath} {onOpen} {onAction} />
         {/if}
       {/each}
     </div>
@@ -111,26 +141,18 @@
 </div>
 
 <style>
-  .folder-node {
-    --indent: calc(var(--depth) * 14px);
-  }
-
   .row {
-    display: grid;
-    grid-template-columns: 12px 16px minmax(0, 1fr);
+    display: flex;
     align-items: center;
     gap: 7px;
     width: 100%;
     min-height: 28px;
-    border: none;
-    border-radius: 5px;
+    border-radius: 6px;
     background: transparent;
     color: var(--rd-ink-2);
-    padding: 4px 8px 4px calc(8px + var(--indent));
+    padding: 4px 6px;
     font-family: var(--rd-ui);
-    font-size: 12.5px;
-    text-align: left;
-    cursor: pointer;
+    font-size: 12px;
   }
 
   .row:hover {
@@ -138,33 +160,55 @@
     color: var(--rd-ink-1);
   }
 
-  .chevron {
+  .caret {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--rd-ink-4);
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .chev {
+    display: inline-flex;
+    align-items: center;
+    color: var(--rd-ink-3);
+    opacity: 0.85;
+    transition: transform 200ms ease;
+  }
+
+  .chev.collapsed {
     transform: rotate(-90deg);
-    transition: transform 100ms ease;
   }
 
-  .chevron.expanded {
-    transform: rotate(0deg);
-  }
-
-  .label {
+  .activate {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
     min-width: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .name {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-weight: 600;
   }
 
   .children {
     display: grid;
     gap: 1px;
-  }
-
-  .file-indent {
-    padding-left: calc(var(--indent) + 14px);
   }
 </style>

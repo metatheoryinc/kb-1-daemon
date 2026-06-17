@@ -26,14 +26,32 @@ export const colorModes: readonly ColorMode[] = ['light', 'dark', 'system'];
 /** Default persistence slot. Stable across releases — renaming wipes state. */
 export const DEFAULT_PERSIST_KEY = 'kb2:app-state';
 
-/** Shape of the persisted blob. Versioned by structure, not by a flag. */
+/**
+ * Shape of the persisted blob. Versioned by structure, not by a flag.
+ *
+ * The two expansion sets persist as plain string arrays (JSON has no
+ * `Set`); they rehydrate back into `Set<string>` on load.
+ */
 interface PersistedState {
   colorMode: ColorMode;
+  expandedFolderIds: string[];
+  collapsedVaultIds: string[];
 }
 
 /** The live, in-memory app state. Mirrors the persisted slice plus actions. */
 export interface AppState {
   colorMode: ColorMode;
+  /**
+   * Allow-list of expanded folder keys (`folder:<vaultId>:<path>`).
+   * Folders default closed; a key present here means "show me unfurled."
+   */
+  expandedFolderIds: Set<string>;
+  /**
+   * Deny-list of collapsed vault ids. Vaults default open, so the
+   * persisted shape is the inverse of the folder set — a vault id here
+   * means "the user explicitly collapsed this vault group."
+   */
+  collapsedVaultIds: Set<string>;
 }
 
 export interface AppStateStore {
@@ -43,6 +61,16 @@ export interface AppStateStore {
   setColorMode: (mode: ColorMode) => void;
   /** Cycle light → dark → system → light. */
   cycleColorMode: () => void;
+  /** Toggle a folder key's expansion in the allow-list. */
+  toggleFolderExpanded: (key: string) => void;
+  /**
+   * Bulk-add folder keys to the allow-list with a single write. Used by
+   * the active-file ancestor auto-expand so a deep chain doesn't issue
+   * one mutation per ancestor (and a fully-expanded chain is a no-op).
+   */
+  expandFolders: (keys: Iterable<string>) => void;
+  /** Set a vault id's collapsed state in the deny-list. */
+  setVaultCollapsed: (vaultId: string, collapsed: boolean) => void;
 }
 
 export interface CreateAppStateOptions {
@@ -56,7 +84,11 @@ export interface CreateAppStateOptions {
   persistKey?: string;
 }
 
-const DEFAULT_STATE: AppState = { colorMode: 'system' };
+const DEFAULT_STATE: AppState = {
+  colorMode: 'system',
+  expandedFolderIds: new Set<string>(),
+  collapsedVaultIds: new Set<string>(),
+};
 
 function nextColorMode(mode: ColorMode): ColorMode {
   return mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -66,19 +98,30 @@ function isColorMode(value: unknown): value is ColorMode {
   return value === 'light' || value === 'dark' || value === 'system';
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
 function readPersisted(
   storage: Pick<Storage, 'getItem' | 'setItem'> | undefined,
   key: string,
-): Partial<PersistedState> {
+): Partial<{ colorMode: ColorMode; expandedFolderIds: string[]; collapsedVaultIds: string[] }> {
   if (!storage) return {};
   const raw = storage.getItem(key);
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object' && 'colorMode' in parsed) {
-      const { colorMode } = parsed as { colorMode: unknown };
-      if (isColorMode(colorMode)) return { colorMode };
-    }
+    if (!parsed || typeof parsed !== 'object') return {};
+    const blob = parsed as Record<string, unknown>;
+    const out: Partial<{
+      colorMode: ColorMode;
+      expandedFolderIds: string[];
+      collapsedVaultIds: string[];
+    }> = {};
+    if (isColorMode(blob.colorMode)) out.colorMode = blob.colorMode;
+    if ('expandedFolderIds' in blob) out.expandedFolderIds = stringArray(blob.expandedFolderIds);
+    if ('collapsedVaultIds' in blob) out.collapsedVaultIds = stringArray(blob.collapsedVaultIds);
+    return out;
   } catch {
     // Corrupt blob — fall back to defaults rather than throwing.
   }
@@ -98,13 +141,19 @@ export function createAppState(
   let state: AppState = {
     ...DEFAULT_STATE,
     colorMode: persisted.colorMode ?? DEFAULT_STATE.colorMode,
+    expandedFolderIds: new Set(persisted.expandedFolderIds ?? []),
+    collapsedVaultIds: new Set(persisted.collapsedVaultIds ?? []),
   };
 
   const listeners = new Set<(state: AppState) => void>();
 
   function persist(): void {
     if (!storage) return;
-    const blob: PersistedState = { colorMode: state.colorMode };
+    const blob: PersistedState = {
+      colorMode: state.colorMode,
+      expandedFolderIds: [...state.expandedFolderIds],
+      collapsedVaultIds: [...state.collapsedVaultIds],
+    };
     try {
       storage.setItem(persistKey, JSON.stringify(blob));
     } catch {
@@ -113,9 +162,8 @@ export function createAppState(
     }
   }
 
-  function set(partial: Partial<AppState>): void {
-    const next = { ...state, ...partial };
-    if (next.colorMode === state.colorMode) return;
+  /** Commit `next` as the new state, persist, and notify subscribers. */
+  function commit(next: AppState): void {
     state = next;
     persist();
     for (const listener of listeners) listener(state);
@@ -127,7 +175,34 @@ export function createAppState(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    setColorMode: (mode) => set({ colorMode: mode }),
-    cycleColorMode: () => set({ colorMode: nextColorMode(state.colorMode) }),
+    setColorMode: (mode) => {
+      if (mode === state.colorMode) return;
+      commit({ ...state, colorMode: mode });
+    },
+    cycleColorMode: () => commit({ ...state, colorMode: nextColorMode(state.colorMode) }),
+    toggleFolderExpanded: (key) => {
+      const next = new Set(state.expandedFolderIds);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      commit({ ...state, expandedFolderIds: next });
+    },
+    expandFolders: (keys) => {
+      let next: Set<string> | null = null;
+      for (const key of keys) {
+        if (state.expandedFolderIds.has(key)) continue;
+        if (next === null) next = new Set(state.expandedFolderIds);
+        next.add(key);
+      }
+      if (next === null) return;
+      commit({ ...state, expandedFolderIds: next });
+    },
+    setVaultCollapsed: (vaultId, collapsed) => {
+      const present = state.collapsedVaultIds.has(vaultId);
+      if (collapsed === present) return;
+      const next = new Set(state.collapsedVaultIds);
+      if (collapsed) next.add(vaultId);
+      else next.delete(vaultId);
+      commit({ ...state, collapsedVaultIds: next });
+    },
   };
 }

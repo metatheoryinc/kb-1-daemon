@@ -1,12 +1,21 @@
 <script lang="ts">
   import { LocalEditorShell, type RailNavId } from '../index';
+  import { folderKey } from '../local-editor/expansion';
   import {
     localEditorDocumentPath,
     localEditorSearchFixture,
     localEditorTreeFixture
   } from '../local-editor/fixtures';
 
-  let expandedPaths = $state(new Set(['projects', 'projects/active', 'research']));
+  const VAULT_ID = 'demo-vault';
+
+  let expandedFolderIds = $state(
+    new Set([
+      folderKey(VAULT_ID, 'projects'),
+      folderKey(VAULT_ID, 'projects/active'),
+      folderKey(VAULT_ID, 'research')
+    ])
+  );
   let activeNav = $state<RailNavId>('files');
   let colorModeChoice = $state<'light' | 'dark' | 'system'>('system');
 
@@ -22,8 +31,9 @@
   colorMode="light"
   {colorModeChoice}
   {activeNav}
+  vaultId={VAULT_ID}
   tree={localEditorTreeFixture}
-  {expandedPaths}
+  {expandedFolderIds}
   searchValue=""
   searchResults={localEditorSearchFixture}
   searchTotal={localEditorSearchFixture.length}
@@ -33,14 +43,14 @@
   onToggleColorMode={() => {
     colorModeChoice = cycle(colorModeChoice);
   }}
-  onToggleFolder={(path) => {
-    const next = new Set(expandedPaths);
-    if (next.has(path)) {
-      next.delete(path);
+  onToggleFolder={(key) => {
+    const next = new Set(expandedFolderIds);
+    if (next.has(key)) {
+      next.delete(key);
     } else {
-      next.add(path);
+      next.add(key);
     }
-    expandedPaths = next;
+    expandedFolderIds = next;
   }}
 >
   <div class="fake-editor">

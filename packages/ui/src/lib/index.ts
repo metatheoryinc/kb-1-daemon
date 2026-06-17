@@ -30,6 +30,7 @@ export { default as FileNode } from './local-editor/FileNode.svelte';
 export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
 export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
 export { default as FolderNode } from './local-editor/FolderNode.svelte';
+export { default as VaultGroup } from './local-editor/VaultGroup.svelte';
 export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
 export { default as StarredPanel } from './local-editor/StarredPanel.svelte';
 export { default as PrimaryRail, type RailNavId } from './local-editor/primary-rail/PrimaryRail.svelte';

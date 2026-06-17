@@ -1,38 +1,50 @@
 <script lang="ts">
   import LiveDot from '../primitives/LiveDot.svelte';
   import SearchInput from '../primitives/SearchInput.svelte';
-  import FileNode from './FileNode.svelte';
-  import FolderNode from './FolderNode.svelte';
+  import VaultGroup from './VaultGroup.svelte';
   import FilesSearchResults from './FilesSearchResults.svelte';
+  import type { AccentName } from '../primitives/accent';
   import type { LocalSearchResult, LocalTreeAction, LocalTreeNode } from './types';
 
   interface Props {
     vaultName: string;
+    /** Stable vault id — seeds the tree's expansion keys. Defaults to
+        the display name when the shell has nothing more durable. */
+    vaultId?: string;
+    /** Accent for the vault group's folder token. */
+    vaultAccent?: AccentName;
     daemonLabel: string;
     daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     searchValue?: string;
     tree: LocalTreeNode[];
     activePath?: string;
-    expandedPaths?: Set<string>;
+    /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
+    expandedFolderIds?: Set<string>;
+    /** Set of expanded vault keys (`vault:<id>`). Omit to render open. */
+    expandedVaultIds?: Set<string>;
     searchResults?: LocalSearchResult[];
     searchTotal?: number;
     searchTruncated?: boolean;
     searchLoading?: boolean;
     onSearchInput?: (value: string) => void;
     onSearchClear?: () => void;
-    onToggleFolder?: (path: string) => void;
+    onToggleFolder?: (key: string) => void;
+    onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
   }
 
   let {
     vaultName,
+    vaultId = vaultName,
+    vaultAccent = 'slate',
     daemonLabel,
     daemonStatus = 'open',
     searchValue = '',
     tree,
     activePath = '',
-    expandedPaths = new Set<string>(),
+    expandedFolderIds = new Set<string>(),
+    expandedVaultIds,
     searchResults = [],
     searchTotal = searchResults.length,
     searchTruncated = false,
@@ -40,6 +52,7 @@
     onSearchInput,
     onSearchClear,
     onToggleFolder,
+    onToggleVault,
     onOpenFile,
     onTreeAction,
   }: Props = $props();
@@ -90,20 +103,19 @@
       <p class="loading">No notes yet.</p>
     {:else}
       <nav class="tree" aria-label="Files">
-        {#each tree as node (node.path)}
-          {#if node.kind === 'folder'}
-            <FolderNode
-              {node}
-              {activePath}
-              {expandedPaths}
-              onToggle={onToggleFolder}
-              onOpen={onOpenFile}
-              onAction={onTreeAction}
-            />
-          {:else}
-            <FileNode node={node} {activePath} onOpen={onOpenFile} onAction={onTreeAction} />
-          {/if}
-        {/each}
+        <VaultGroup
+          {vaultId}
+          {vaultName}
+          accent={vaultAccent}
+          {tree}
+          {activePath}
+          {expandedFolderIds}
+          {expandedVaultIds}
+          {onToggleFolder}
+          {onToggleVault}
+          {onOpenFile}
+          {onTreeAction}
+        />
       </nav>
     {/if}
   </div>

@@ -21,8 +21,13 @@
     type RailNavId,
   } from '@kb-2/ui';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
-  import { useAppState, type ColorMode } from '$lib/app-state';
-  import { onMount } from 'svelte';
+  import {
+    useAppState,
+    ancestorKeysForPath,
+    expansionKey,
+    type ColorMode,
+  } from '$lib/app-state';
+  import { onMount, untrack } from 'svelte';
 
   interface ApiFailure {
     ok: false;
@@ -60,7 +65,9 @@
   let documentPath = $state('hello-world.md');
   let vaultName = $state('Vault');
   let tree = $state<LocalTreeNode[]>([]);
-  let expandedPaths = $state(new Set<string>());
+  // Stable id seeding the tree's expansion keys. The single local vault
+  // has no durable id of its own, so the vault name stands in.
+  const vaultId = $derived(vaultName);
   let searchValue = $state('');
   let searchResults = $state<LocalSearchResult[]>([]);
   let searchTotal = $state(0);
@@ -77,6 +84,18 @@
   // resolve `'system'` against `prefers-color-scheme` here for the icon.
   const appState = useAppState();
   let colorModePref = $state<ColorMode>(appState.getState().colorMode);
+  // Tree expansion lives in the persisted app-state store. Mirror the
+  // two sets into local `$state` so the template tracks them; the store
+  // owns mutation and localStorage persistence.
+  let expandedFolderIds = $state<Set<string>>(appState.getState().expandedFolderIds);
+  let collapsedVaultIds = $state<Set<string>>(appState.getState().collapsedVaultIds);
+  // Vaults default open: the persisted shape is a collapse deny-list, so
+  // the expanded set is its complement over the one local vault.
+  const expandedVaultIds = $derived.by<Set<string>>(() => {
+    const out = new Set<string>();
+    if (!collapsedVaultIds.has(vaultId)) out.add(expansionKey('vault', vaultId));
+    return out;
+  });
   let systemPrefersDark = $state(false);
   const colorMode = $derived<'light' | 'dark'>(
     colorModePref === 'system'
@@ -251,14 +270,14 @@
     }
   }
 
-  function toggleFolder(path: string): void {
-    const next = new Set(expandedPaths);
-    if (next.has(path)) {
-      next.delete(path);
-    } else {
-      next.add(path);
-    }
-    expandedPaths = next;
+  function toggleFolder(key: string): void {
+    appState.toggleFolderExpanded(key);
+  }
+
+  function toggleVault(key: string): void {
+    // The vault key encodes the id (`vault:<id>`); the deny-list is
+    // keyed by raw id, so collapse iff the vault is currently expanded.
+    appState.setVaultCollapsed(vaultId, expandedVaultIds.has(key));
   }
 
   function toggleColorMode(): void {
@@ -391,7 +410,11 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: nextPath }),
       });
-      expandedPaths = new Set([...expandedPaths, action.path, nextPath]);
+      // Unfurl the parent and the new folder so the addition is visible.
+      appState.expandFolders([
+        expansionKey('folder', vaultId, action.path),
+        expansionKey('folder', vaultId, nextPath),
+      ]);
       return;
     }
 
@@ -496,6 +519,32 @@
     });
   });
 
+  // Mirror the store's expansion sets so the template re-renders when a
+  // toggle (or the ancestor auto-expand) mutates them.
+  $effect(() => {
+    const snapshot = appState.getState();
+    expandedFolderIds = snapshot.expandedFolderIds;
+    collapsedVaultIds = snapshot.collapsedVaultIds;
+    return appState.subscribe((s) => {
+      expandedFolderIds = s.expandedFolderIds;
+      collapsedVaultIds = s.collapsedVaultIds;
+    });
+  });
+
+  // On load and on navigation, walk the active file's ancestor chain
+  // into the expanded set so a deep-linked note's row is visible. The
+  // vault un-collapse keeps a refresh-into-a-collapsed-vault honest.
+  // `untrack` keeps the store writes from re-triggering this effect.
+  $effect(() => {
+    const path = documentPath;
+    const id = vaultId;
+    untrack(() => {
+      appState.setVaultCollapsed(id, false);
+      const keys = ancestorKeysForPath(path, id);
+      if (keys.length > 0) appState.expandFolders(keys);
+    });
+  });
+
   // Track the OS preference so the toggle icon resolves `'system'`
   // correctly. Only meaningful while the preference is `'system'`, but
   // kept current unconditionally so the derived mode is always right.
@@ -558,6 +607,7 @@
 
 <LocalEditorShell
   {vaultName}
+  {vaultId}
   {daemonLabel}
   {daemonStatus}
   {documentPath}
@@ -565,7 +615,8 @@
   colorModeChoice={colorModePref}
   {activeNav}
   {tree}
-  {expandedPaths}
+  {expandedFolderIds}
+  {expandedVaultIds}
   {searchValue}
   {searchResults}
   {searchTotal}
@@ -578,6 +629,7 @@
   onSearchClear={clearSearch}
   onToggleColorMode={toggleColorMode}
   onToggleFolder={toggleFolder}
+  onToggleVault={toggleVault}
   onOpenFile={(path) => {
     void openDocument(path);
   }}

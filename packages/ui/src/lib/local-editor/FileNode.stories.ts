@@ -6,6 +6,7 @@ const meta = {
   component: FileNode,
   args: {
     node: { kind: 'file', path: 'projects/active/editor-shell.md', name: 'editor-shell.md' },
+    depth: 0,
     activePath: 'projects/active/editor-shell.md'
   }
 } satisfies Meta<typeof FileNode>;
@@ -14,3 +15,16 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Active: Story = {};
+
+export const Inactive: Story = {
+  args: {
+    activePath: 'somewhere/else.md'
+  }
+};
+
+export const Nested: Story = {
+  args: {
+    depth: 2,
+    activePath: 'somewhere/else.md'
+  }
+};

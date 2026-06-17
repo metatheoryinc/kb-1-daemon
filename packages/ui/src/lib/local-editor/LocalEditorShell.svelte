@@ -3,10 +3,15 @@
   import StarredPanel from './StarredPanel.svelte';
   import DocumentHeader from './DocumentHeader.svelte';
   import PrimaryRail, { type RailNavId } from './primary-rail/PrimaryRail.svelte';
+  import type { AccentName } from '../primitives/accent';
   import type { LocalSearchResult, LocalTreeAction, LocalTreeNode } from './types';
 
   interface Props {
     vaultName: string;
+    /** Stable vault id seeding the tree's expansion keys. */
+    vaultId?: string;
+    /** Accent for the vault group's folder token. */
+    vaultAccent?: AccentName;
     daemonLabel: string;
     daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     documentPath: string;
@@ -20,7 +25,10 @@
     userLabel?: string;
     searchValue?: string;
     tree: LocalTreeNode[];
-    expandedPaths?: Set<string>;
+    /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
+    expandedFolderIds?: Set<string>;
+    /** Set of expanded vault keys. Omit to render the vault open. */
+    expandedVaultIds?: Set<string>;
     searchResults?: LocalSearchResult[];
     searchTotal?: number;
     searchTruncated?: boolean;
@@ -29,7 +37,8 @@
     onSearchInput?: (value: string) => void;
     onSearchClear?: () => void;
     onToggleColorMode?: () => void;
-    onToggleFolder?: (path: string) => void;
+    onToggleFolder?: (key: string) => void;
+    onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
     children?: import('svelte').Snippet;
@@ -37,6 +46,8 @@
 
   let {
     vaultName,
+    vaultId = vaultName,
+    vaultAccent = 'slate',
     daemonLabel,
     daemonStatus = 'open',
     documentPath,
@@ -46,7 +57,8 @@
     userLabel = 'Local user',
     searchValue = '',
     tree,
-    expandedPaths = new Set<string>(),
+    expandedFolderIds = new Set<string>(),
+    expandedVaultIds,
     searchResults = [],
     searchTotal = searchResults.length,
     searchTruncated = false,
@@ -56,6 +68,7 @@
     onSearchClear,
     onToggleColorMode,
     onToggleFolder,
+    onToggleVault,
     onOpenFile,
     onTreeAction,
     children,
@@ -76,12 +89,15 @@
   {:else}
     <FilesPanel
       {vaultName}
+      {vaultId}
+      {vaultAccent}
       {daemonLabel}
       {daemonStatus}
       {searchValue}
       {tree}
       activePath={documentPath}
-      {expandedPaths}
+      {expandedFolderIds}
+      {expandedVaultIds}
       {searchResults}
       {searchTotal}
       {searchTruncated}
@@ -89,6 +105,7 @@
       {onSearchInput}
       {onSearchClear}
       {onToggleFolder}
+      {onToggleVault}
       {onOpenFile}
       {onTreeAction}
     />
