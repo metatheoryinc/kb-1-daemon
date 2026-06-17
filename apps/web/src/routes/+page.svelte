@@ -20,6 +20,7 @@
     type LocalTreeNode,
   } from '@kb-2/ui';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
+  import { useAppState, type ColorMode } from '$lib/app-state';
   import { onMount } from 'svelte';
 
   interface ApiFailure {
@@ -64,8 +65,22 @@
   let searchTotal = $state(0);
   let searchTruncated = $state(false);
   let searchLoading = $state(false);
-  let colorMode = $state<'light' | 'dark'>('light');
   let mounted = $state(false);
+
+  // The app-state store owns the persisted light / dark / system choice
+  // and the root layout applies it to the DOM. The FilesPanel toggle is
+  // prop-driven on a *resolved* mode, so mirror the store's choice and
+  // resolve `'system'` against `prefers-color-scheme` here for the icon.
+  const appState = useAppState();
+  let colorModePref = $state<ColorMode>(appState.getState().colorMode);
+  let systemPrefersDark = $state(false);
+  const colorMode = $derived<'light' | 'dark'>(
+    colorModePref === 'system'
+      ? systemPrefersDark
+        ? 'dark'
+        : 'light'
+      : colorModePref,
+  );
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -243,13 +258,7 @@
   }
 
   function toggleColorMode(): void {
-    colorMode = colorMode === 'dark' ? 'light' : 'dark';
-    applyColorMode(colorMode);
-  }
-
-  function applyColorMode(mode: 'light' | 'dark'): void {
-    document.documentElement.classList.toggle('dark', mode === 'dark');
-    document.documentElement.dataset.rdMode = mode;
+    appState.cycleColorMode();
   }
 
   function updateSearch(value: string): void {
@@ -474,6 +483,29 @@
     return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
   }
 
+  // Mirror the store's persisted choice so the toggle icon reflects the
+  // live preference. The root layout owns applying the mode to the DOM.
+  $effect(() => {
+    colorModePref = appState.getState().colorMode;
+    return appState.subscribe((s) => {
+      colorModePref = s.colorMode;
+    });
+  });
+
+  // Track the OS preference so the toggle icon resolves `'system'`
+  // correctly. Only meaningful while the preference is `'system'`, but
+  // kept current unconditionally so the derived mode is always right.
+  $effect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    systemPrefersDark = mql.matches;
+    const listener = () => {
+      systemPrefersDark = mql.matches;
+    };
+    mql.addEventListener('change', listener);
+    return () => mql.removeEventListener('change', listener);
+  });
+
   afterNavigate((navigation) => {
     if (!mounted || !navigation.to?.url) return;
     const nextPath = documentPathFromUrl(navigation.to.url);
@@ -491,10 +523,6 @@
       documentPath = initialPath;
     }
 
-    colorMode = document.documentElement.dataset.rdMode === 'dark' || document.documentElement.classList.contains('dark')
-      ? 'dark'
-      : 'light';
-    applyColorMode(colorMode);
     openProvider(documentPath);
     void refreshVaultInfo();
     void refreshTree();

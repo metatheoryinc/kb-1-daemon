@@ -3,4 +3,11 @@
 @import '@fontsource/source-serif-4/400-italic.css';
 @import '@fontsource/source-serif-4/600-italic.css';
 @import '@fontsource-variable/geist/wght.css';
+/* Inter Tight is the UI face (`--rd-ui`); its single variable weight
+   axis covers the 400 / 450 / 500 / 600 weights the chrome uses. */
+@import '@fontsource-variable/inter-tight/wght.css';
+/* JetBrains Mono is the monospace face (`--rd-mono`); 400 + 500 cover
+   code spans and the mono labels. */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
 @import '@kb-2/ui/styles.css';

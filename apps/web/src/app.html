@@ -4,6 +4,40 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>KB-2 Local</title>
+
+    <script>
+      // Pre-hydration color-mode resolution. Reads the persisted
+      // `colorMode` from the same `kb2:app-state` localStorage key the
+      // app-state store writes; defaults to `'system'` when missing or
+      // malformed; resolves `'system'` against `prefers-color-scheme`.
+      // Writes `<html class="dark">` so Tailwind's `.dark` variant is
+      // active before the first paint. The `body[data-rd-mode]` flag is
+      // mirrored from the root layout's reactive effect post-mount —
+      // `<body>` doesn't exist yet at this point in <head>. Inline and
+      // synchronous by design: any flash is a regression.
+      (function () {
+        try {
+          var mode = 'system';
+          var raw = window.localStorage.getItem('kb2:app-state');
+          if (raw) {
+            var blob = JSON.parse(raw);
+            var v = blob && blob.colorMode;
+            if (v === 'light' || v === 'dark' || v === 'system') mode = v;
+          }
+          var resolved = mode;
+          if (mode === 'system') {
+            resolved =
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          }
+          document.documentElement.classList.toggle('dark', resolved === 'dark');
+        } catch (_) {
+          // Storage / JSON / matchMedia failed — leave defaults (light).
+        }
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

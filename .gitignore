@@ -13,3 +13,6 @@ fleet-claude-inbox-*.jsonl
 .claude/
 docs/scratch/
 .fallow/
+
+# Storybook debug output
+debug-storybook.log

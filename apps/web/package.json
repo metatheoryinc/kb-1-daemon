@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/inter-tight": "5.2.7",
+    "@fontsource/jetbrains-mono": "5.2.8",
     "@fontsource/source-serif-4": "5.2.9",
     "@kb-2/doc-session": "workspace:*",
     "@kb-2/editor": "workspace:*",
