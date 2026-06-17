@@ -10,10 +10,17 @@ import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-2/vault-c
 import type { DocumentSessionEvent } from './protocol.js';
 
 const Y_TEXT_NAME = 'markdown';
+const DOCUMENT_SESSION_STATE_VERSION = 1;
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb2.external-change');
 const AGENT_SPLICE_ORIGIN = Symbol('kb2.agent-splice');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
+
+interface DocumentSessionStateFile {
+  version: typeof DOCUMENT_SESSION_STATE_VERSION;
+  contentHash: string;
+  updateBase64: string;
+}
 
 export interface DocumentSessionWarning {
   type: 'external-change-detected';
@@ -25,6 +32,7 @@ export interface DocumentSessionWarning {
 export interface OneFileDocumentSessionOptions {
   defaultContent?: string;
   eventPath?: string;
+  stateFilePath?: string;
   warn?: (warning: DocumentSessionWarning) => void;
   watchDebounceMs?: number;
   watchPollMs?: number;
@@ -96,6 +104,7 @@ export class OneFileDocumentSession {
 
   private readonly defaultContent: string;
   private readonly createMissingOnOpen: boolean;
+  private stateFilePath: string | undefined;
   private eventPath: string;
   private readonly warn: (warning: DocumentSessionWarning) => void;
   private readonly watchDebounceMs: number;
@@ -127,6 +136,7 @@ export class OneFileDocumentSession {
     this.eventPath = options.eventPath ?? filePath;
     this.defaultContent = options.defaultContent ?? '';
     this.createMissingOnOpen = options.defaultContent !== undefined;
+    this.stateFilePath = options.stateFilePath;
     this.watchDebounceMs = options.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
     this.watchPollMs = options.watchPollMs ?? WATCH_POLL_MS;
     this.warn = options.warn ?? ((warning) => {
@@ -162,10 +172,15 @@ export class OneFileDocumentSession {
 
   private async loadFromFile(createIfMissing: boolean): Promise<void> {
     const content = await this.readFile({ createIfMissing });
-    this.text.insert(0, content);
+    const contentHash = hashContent(content);
+    const restoredFromState = await this.tryRestoreStateSnapshot(content, contentHash);
+    if (!restoredFromState) {
+      this.text.insert(0, content);
+    }
     this.nonEmptyMaterializedContent = content.length > 0;
-    this.lastWrittenHash = hashContent(content);
+    this.lastWrittenHash = contentHash;
     this.lastWrittenContent = content;
+    await this.writeStateSnapshot(contentHash);
     this.doc.on('update', this.handleDocumentUpdate);
     this.opened = true;
     this.startWatching();
@@ -290,10 +305,11 @@ export class OneFileDocumentSession {
   async moveTo(
     filePath: string,
     eventPath: string,
-    moveOnDisk: () => Promise<void>
+    moveOnDisk: () => Promise<void>,
+    stateFilePath = this.stateFilePath
   ): Promise<void> {
     await this.prepareForPathTransition();
-    await this.completeMoveAfterTransition(filePath, eventPath, Promise.resolve().then(moveOnDisk));
+    await this.completeMoveAfterTransition(filePath, eventPath, Promise.resolve().then(moveOnDisk), stateFilePath);
   }
 
   // Path transitions are two-phase: flush and stop watching first, then every caller awaits the same disk move before rebinding paths.
@@ -309,18 +325,25 @@ export class OneFileDocumentSession {
   async completeMoveAfterTransition(
     filePath: string,
     eventPath: string,
-    transition: Promise<void>
+    transition: Promise<void>,
+    stateFilePath = this.stateFilePath
   ): Promise<void> {
     const fromPath = this.eventPath;
+    const previousStateFilePath = this.stateFilePath;
     let moved = false;
     const completion = (async () => {
       await transition;
       moved = true;
       this.filePath = filePath;
       this.eventPath = eventPath;
+      this.stateFilePath = stateFilePath;
       const content = this.currentContent();
       const contentHash = hashContent(content);
       await atomicWriteFile(this.filePath, content);
+      await this.writeStateSnapshot(contentHash);
+      if (previousStateFilePath && previousStateFilePath !== this.stateFilePath) {
+        await rm(previousStateFilePath, { force: true });
+      }
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
       this.pendingWriteHash = undefined;
@@ -359,6 +382,7 @@ export class OneFileDocumentSession {
     const transition = (async () => {
       this.stopWatching();
       await deleteOnDisk();
+      await this.deleteStateSnapshot();
       this.markDeleted();
     })();
 
@@ -446,6 +470,7 @@ export class OneFileDocumentSession {
     this.pendingWriteHash = contentHash;
     try {
       await atomicWriteFile(this.filePath, content);
+      await this.writeStateSnapshot(contentHash);
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
       this.nonEmptyMaterializedContent = content.length > 0;
@@ -632,6 +657,7 @@ export class OneFileDocumentSession {
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
       this.nonEmptyMaterializedContent = content.length > 0;
+      await this.writeStateSnapshot(contentHash);
       return;
     }
 
@@ -648,7 +674,54 @@ export class OneFileDocumentSession {
     // Mirrors the last materialized string; revisit resident memory cost before multi-file sessions.
     this.lastWrittenContent = content;
     this.nonEmptyMaterializedContent = content.length > 0;
+    await this.writeStateSnapshot(contentHash);
     this.emitEvent(eventKind);
+  }
+
+  private async tryRestoreStateSnapshot(content: string, contentHash: string): Promise<boolean> {
+    if (!this.stateFilePath) return false;
+    const raw = await readOptionalFile(this.stateFilePath);
+    if (raw === undefined) return false;
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<DocumentSessionStateFile>;
+      if (
+        parsed.version !== DOCUMENT_SESSION_STATE_VERSION ||
+        parsed.contentHash !== contentHash ||
+        typeof parsed.updateBase64 !== 'string'
+      ) {
+        return false;
+      }
+
+      Y.applyUpdate(this.doc, decodeBase64Bytes(parsed.updateBase64), this);
+      if (this.text.toString() === content) {
+        return true;
+      }
+
+      this.doc.transact(() => {
+        this.text.delete(0, this.text.length);
+        this.text.insert(0, content);
+      }, this);
+      return true;
+    } catch (error) {
+      console.warn(`KB-2 ignored invalid Yjs state snapshot for ${this.filePath}.`, error);
+      return false;
+    }
+  }
+
+  private async writeStateSnapshot(contentHash = hashContent(this.currentContent())): Promise<void> {
+    if (!this.stateFilePath) return;
+    const snapshot: DocumentSessionStateFile = {
+      version: DOCUMENT_SESSION_STATE_VERSION,
+      contentHash,
+      updateBase64: encodeBase64Bytes(Y.encodeStateAsUpdate(this.doc))
+    };
+    await atomicWriteFile(this.stateFilePath, `${JSON.stringify(snapshot)}\n`);
+  }
+
+  private async deleteStateSnapshot(): Promise<void> {
+    if (!this.stateFilePath) return;
+    await rm(this.stateFilePath, { force: true });
   }
 
   private markPersistFailed(error: unknown): PersistFailedError {
@@ -756,6 +829,10 @@ function hashContent(content: string): string {
 
 function encodeBase64Bytes(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
+}
+
+function decodeBase64Bytes(value: string): Uint8Array {
+  return Buffer.from(value, 'base64');
 }
 
 function truncateUtf8(value: string, limitBytes: number): string {

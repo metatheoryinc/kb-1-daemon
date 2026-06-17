@@ -468,6 +468,37 @@ describe('Yjs WebSocket session', () => {
     staleBrowserDoc.destroy();
   });
 
+  it('accepts a warm browser-provider response after daemon restart when Yjs state was restored', async () => {
+    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const stateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'hello-world.json');
+    const firstSession = new OneFileDocumentSession(filePath, {
+      defaultContent: 'stable provider bytes\n',
+      stateFilePath
+    });
+    await firstSession.open();
+
+    const browserDoc = new Y.Doc();
+    Y.applyUpdate(browserDoc, Y.encodeStateAsUpdate(firstSession.ydoc));
+    await firstSession.close();
+
+    const restartedSession = new OneFileDocumentSession(filePath, { stateFilePath });
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(restartedSession, socket);
+    const response = receiveSyncMessage(browserDoc, socket.sent[0]);
+
+    if (response) socket.emitMessage(response);
+    await restartedSession.flush();
+
+    expect(socket.closed).toEqual([]);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('stable provider bytes\n');
+    expect(restartedSession.ydoc.getText('markdown').toString()).toBe('stable provider bytes\n');
+
+    socket.emitClose();
+    await binding.closed;
+    await restartedSession.close();
+    browserDoc.destroy();
+  });
+
   it('keeps durable bytes stable across repeated stale reconnect updates', async () => {
     const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
     await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });

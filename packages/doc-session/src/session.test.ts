@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -82,6 +83,57 @@ describe('OneFileDocumentSession', () => {
     await expect(readFile(filePath, 'utf8')).resolves.toBe('seed\n');
     await expect(session.getContent()).resolves.toBe('seed\n');
     await session.close();
+  });
+
+  it('falls back to plaintext when the persisted Yjs state sidecar is stale or invalid', async () => {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, 'stable\n', 'utf8');
+
+    const invalidStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'invalid.json');
+    await mkdir(dirname(invalidStateFilePath), { recursive: true });
+    await writeFile(invalidStateFilePath, '{not-json', 'utf8');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const invalidStateSession = new OneFileDocumentSession(filePath, { stateFilePath: invalidStateFilePath });
+
+    await invalidStateSession.open();
+
+    expect(invalidStateSession.ydoc.getText('markdown').toString()).toBe('stable\n');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('ignored invalid Yjs state snapshot'),
+      expect.any(SyntaxError)
+    );
+    await invalidStateSession.close();
+    warn.mockRestore();
+
+    const mismatchedDoc = new Y.Doc();
+    mismatchedDoc.getText('markdown').insert(0, 'different\n');
+    const mismatchedStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'mismatched.json');
+    const mismatchedUpdateBase64 = Buffer.from(Y.encodeStateAsUpdate(mismatchedDoc)).toString('base64');
+    await writeFile(mismatchedStateFilePath, JSON.stringify({
+      version: 1,
+      contentHash: createHash('sha256').update('stable\n').digest('hex'),
+      updateBase64: mismatchedUpdateBase64
+    }), 'utf8');
+    const mismatchedStateSession = new OneFileDocumentSession(filePath, { stateFilePath: mismatchedStateFilePath });
+
+    await mismatchedStateSession.open();
+
+    expect(mismatchedStateSession.ydoc.getText('markdown').toString()).toBe('stable\n');
+    await mismatchedStateSession.close();
+
+    const staleStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'stale.json');
+    await writeFile(staleStateFilePath, JSON.stringify({
+      version: 1,
+      contentHash: createHash('sha256').update('old\n').digest('hex'),
+      updateBase64: mismatchedUpdateBase64
+    }), 'utf8');
+    const staleStateSession = new OneFileDocumentSession(filePath, { stateFilePath: staleStateFilePath });
+
+    await staleStateSession.open();
+
+    expect(staleStateSession.ydoc.getText('markdown').toString()).toBe('stable\n');
+    await staleStateSession.close();
+    mismatchedDoc.destroy();
   });
 
   it('rejects missing document opens with not_found and leaves parent folders untouched', async () => {

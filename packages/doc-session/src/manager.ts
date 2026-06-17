@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import { OneFileDocumentSession, type DocumentSessionEventHandler, type OneFileDocumentSessionOptions } from './session.js';
 
 export const DEFAULT_IDLE_SESSION_GRACE_MS = 30_000;
+const DOCUMENT_SESSION_STATE_DIR = '.kb2/doc-session-state';
 
 export interface DocumentSessionManagerOptions extends OneFileDocumentSessionOptions {
   root: string;
@@ -49,7 +51,8 @@ export class DocumentSessionManager {
     const session = new OneFileDocumentSession(this.toFilePath(vaultPath), {
       ...this.options,
       ...overrides,
-      eventPath: vaultPath
+      eventPath: vaultPath,
+      stateFilePath: this.toStateFilePath(vaultPath)
     });
     this.sessions.set(vaultPath, session);
     session.onEvent((event) => {
@@ -130,7 +133,7 @@ export class DocumentSessionManager {
     const session = this.sessions.get(fromPath);
     if (!session) return false;
 
-    await session.moveTo(this.toFilePath(toPath), toPath, moveOnDisk);
+    await session.moveTo(this.toFilePath(toPath), toPath, moveOnDisk, this.toStateFilePath(toPath));
     this.sessions.delete(fromPath);
     this.sessions.set(toPath, session);
     return true;
@@ -155,7 +158,7 @@ export class DocumentSessionManager {
     const diskMove = Promise.resolve().then(moveOnDisk);
     await Promise.all(matches.map(async ([fromPath, session]) => {
       const toPath = `${toFolder}/${fromPath.slice(fromFolder.length + 1)}`;
-      await session.completeMoveAfterTransition(this.toFilePath(toPath), toPath, diskMove);
+      await session.completeMoveAfterTransition(this.toFilePath(toPath), toPath, diskMove, this.toStateFilePath(toPath));
       this.sessions.delete(fromPath);
       this.sessions.set(toPath, session);
       moved.push(toPath);
@@ -218,6 +221,10 @@ export class DocumentSessionManager {
     return join(this.root, ...vaultPath.split('/'));
   }
 
+  private toStateFilePath(vaultPath: string): string {
+    return join(this.root, DOCUMENT_SESSION_STATE_DIR, `${hashVaultPath(vaultPath)}.json`);
+  }
+
   private hasClients(vaultPath: string): boolean {
     return (this.clientCounts.get(vaultPath) ?? 0) > 0;
   }
@@ -269,4 +276,8 @@ export class DocumentSessionManager {
       throw error;
     }
   }
+}
+
+function hashVaultPath(vaultPath: string): string {
+  return createHash('sha256').update(vaultPath).digest('hex');
 }
