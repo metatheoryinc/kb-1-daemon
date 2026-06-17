@@ -93,7 +93,7 @@
 
     <PrimaryRailItem
       icon={colorModeIcon}
-      label="Color mode: {colorModeLabel}"
+      label={colorModeLabel}
       subtle
       {collapsed}
       onclick={onToggleColorMode}
