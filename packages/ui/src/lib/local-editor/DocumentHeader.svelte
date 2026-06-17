@@ -1,50 +1,129 @@
 <script lang="ts">
   import Breadcrumb from '../primitives/Breadcrumb.svelte';
   import type { BreadcrumbItem } from '../primitives/Breadcrumb.svelte';
+  import LiveStatusChip from '../primitives/LiveStatusChip.svelte';
+  import DocumentHeaderMenu from './DocumentHeaderMenu.svelte';
 
   interface Props {
-    vaultName: string;
-    path: string;
+    breadcrumbItems: BreadcrumbItem[];
+    statusLabel?: string;
+    favorited?: boolean;
+    onToggleFavorite?: () => void;
+    onRename?: () => void;
+    onMove?: () => void;
+    onDelete?: () => void;
   }
 
-  let { vaultName, path }: Props = $props();
-
-  const title = $derived(path.split('/').filter(Boolean).at(-1) ?? path);
-  const items = $derived<BreadcrumbItem[]>([
-    { label: vaultName },
-    ...path.split('/').filter(Boolean).map((segment, index, parts) => ({
-      label: segment,
-      current: index === parts.length - 1
-    }))
-  ]);
+  let {
+    breadcrumbItems,
+    statusLabel,
+    favorited = false,
+    onToggleFavorite,
+    onRename,
+    onMove,
+    onDelete,
+  }: Props = $props();
 </script>
 
 <header class="document-header">
-  <Breadcrumb {items} />
-  <h1>{title}</h1>
+  <div class="grid">
+    <div class="breadcrumb-cell">
+      <Breadcrumb items={breadcrumbItems} />
+    </div>
+
+    <div class="meta-cell">
+      {#if statusLabel}
+        <LiveStatusChip label={statusLabel} />
+      {/if}
+    </div>
+
+    <div class="actions-cell">
+      <DocumentHeaderMenu
+        {favorited}
+        {onToggleFavorite}
+        {onRename}
+        {onMove}
+        {onDelete}
+      />
+    </div>
+  </div>
 </header>
 
 <style>
   .document-header {
-    display: grid;
-    gap: 7px;
-    min-width: 0;
+    container-type: inline-size;
     border-bottom: 1px solid var(--rd-rule);
-    background: color-mix(in srgb, var(--rd-panel) 92%, transparent);
-    padding: 14px 24px 12px;
+    background: var(--rd-panel);
+    min-height: 62px;
   }
 
-  h1 {
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: 'breadcrumb meta actions';
+    column-gap: 14px;
+    align-items: center;
+    padding: 14px 28px;
+    min-height: inherit;
+    box-sizing: border-box;
+  }
+
+  .breadcrumb-cell {
+    grid-area: breadcrumb;
+    display: flex;
     min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    color: var(--rd-ink-1);
-    font-family: var(--rd-ui);
-    font-size: 18px;
-    font-weight: 650;
-    letter-spacing: 0;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    /* Fade the right edge to hint that the breadcrumb scrolls when it
+       overflows. The mask only paints when content actually overflows
+       because at smaller widths the trail is what extends past the cell. */
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  }
+
+  .breadcrumb-cell::-webkit-scrollbar {
+    display: none;
+  }
+
+  .meta-cell {
+    grid-area: meta;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .actions-cell {
+    grid-area: actions;
+  }
+
+  /* Below this width the header drops to two rows. Breadcrumb takes the
+     full top row so it stays readable; status + actions share the second
+     row, with actions anchored on the right. The grid lives on an inner
+     element so the @container query can target it — a container can only
+     be queried by its descendants, not by itself. */
+  @container (max-width: 720px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'breadcrumb breadcrumb'
+        'meta actions';
+      row-gap: 10px;
+      padding: 12px 20px;
+    }
+  }
+
+  /* Two-row mobile layout needs more vertical room than the single-row
+     desktop minimum. 62px isn't enough for breadcrumb + meta+actions
+     without crushing them; 92px gives both rows the same breathing
+     room they get on desktop. Lives on @media (not @container) because
+     a container can't query itself — the rule has to apply to the
+     element that defines the container, not a descendant. */
+  @media (max-width: 720px) {
+    .document-header {
+      min-height: 92px;
+    }
   }
 </style>

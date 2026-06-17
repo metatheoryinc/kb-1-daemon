@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { LocalEditorShell, type RailNavId } from '../index';
+  import { LocalEditorShell, type BreadcrumbItem, type RailNavId } from '../index';
   import { folderKey } from '../local-editor/expansion';
   import {
     localEditorDocumentPath,
@@ -7,6 +7,22 @@
   } from '../local-editor/fixtures';
 
   const VAULT_ID = 'demo-vault';
+
+  // Breadcrumb trail built from the fixture path, matching how the app
+  // derives it: vault name first, then each path segment with the leaf
+  // marked current.
+  const breadcrumbItems: BreadcrumbItem[] = [
+    { label: 'demo-vault' },
+    ...localEditorDocumentPath
+      .split('/')
+      .filter(Boolean)
+      .map((segment, index, parts) => ({
+        label: segment,
+        current: index === parts.length - 1
+      }))
+  ];
+
+  let documentFavorited = $state(false);
 
   let expandedFolderIds = $state(
     new Set([
@@ -31,6 +47,15 @@
   daemonLabel="Daemon · live"
   daemonStatus="open"
   documentPath={localEditorDocumentPath}
+  {breadcrumbItems}
+  statusLabel="Saved"
+  {documentFavorited}
+  onToggleDocumentFavorite={() => {
+    documentFavorited = !documentFavorited;
+  }}
+  onRenameDocument={() => {}}
+  onMoveDocument={() => {}}
+  onDeleteDocument={() => {}}
   {colorModeChoice}
   {activeNav}
   vaultId={VAULT_ID}

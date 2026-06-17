@@ -5,6 +5,7 @@
   import RailResizeHandle from './RailResizeHandle.svelte';
   import PrimaryRail, { type RailNavId } from './primary-rail/PrimaryRail.svelte';
   import type { AccentName } from '../primitives/accent';
+  import type { BreadcrumbItem } from '../primitives/Breadcrumb.svelte';
   import type {
     LocalTreeAction,
     LocalTreeNode,
@@ -21,6 +22,23 @@
     daemonLabel: string;
     daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     documentPath: string;
+    /** Document-header breadcrumb trail. App-built from the active path so
+        the package stays free of path-parsing policy (prop-driven, matching
+        the reference header). */
+    breadcrumbItems: BreadcrumbItem[];
+    /** Live save/connection chip label. Omit to hide the chip. */
+    statusLabel?: string;
+    /** Whether the active document is favorited — drives the header's
+        favorite toggle. */
+    documentFavorited?: boolean;
+    /** Toggle the active document's favorite state. */
+    onToggleDocumentFavorite?: () => void;
+    /** Rename the active document (header overflow menu). Omit to hide. */
+    onRenameDocument?: () => void;
+    /** Move the active document (header overflow menu). Omit to hide. */
+    onMoveDocument?: () => void;
+    /** Delete the active document (header overflow menu). Omit to hide. */
+    onDeleteDocument?: () => void;
     /** Persisted color-mode preference (light / dark / system). Drives the
         rail toggle's icon. */
     colorModeChoice?: 'light' | 'dark' | 'system';
@@ -87,6 +105,13 @@
     daemonLabel,
     daemonStatus = 'open',
     documentPath,
+    breadcrumbItems,
+    statusLabel,
+    documentFavorited = false,
+    onToggleDocumentFavorite,
+    onRenameDocument,
+    onMoveDocument,
+    onDeleteDocument,
     colorModeChoice = 'system',
     activeNav = 'files',
     starredFolders = [],
@@ -185,7 +210,15 @@
   </div>
 
   <section class="workspace" aria-label="Document workspace">
-    <DocumentHeader {vaultName} path={documentPath} />
+    <DocumentHeader
+      {breadcrumbItems}
+      {statusLabel}
+      favorited={documentFavorited}
+      onToggleFavorite={onToggleDocumentFavorite}
+      onRename={onRenameDocument}
+      onMove={onMoveDocument}
+      onDelete={onDeleteDocument}
+    />
     <div class="editor-region">
       {@render children?.()}
     </div>

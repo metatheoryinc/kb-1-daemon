@@ -25,6 +25,7 @@
     MovePickerDialog,
     TextInputDialog,
     type AccentName,
+    type BreadcrumbItem,
     type DialogField,
     type LocalFolderNode,
     type LocalTreeAction,
@@ -277,6 +278,93 @@
           ? 'connecting'
           : 'closed',
   );
+
+  // The document header's live save/connection chip. Re-homes the
+  // connection indicator into the document chrome (matching the
+  // reference). Persist failure takes precedence so a NOT-saving doc
+  // never reads as "saved"; otherwise the label tracks the provider's
+  // connection state. Folder views (no provider) hide the chip.
+  const statusLabel = $derived.by<string | undefined>(() => {
+    if (viewingFolder) return undefined;
+    if (persistFailureActive) return 'Not saving';
+    switch (status) {
+      case 'open':
+        return 'Saved';
+      case 'syncing':
+        return 'Saving…';
+      case 'connecting':
+        return 'Connecting…';
+      case 'error':
+        return 'Connection error';
+      default:
+        return 'Disconnected';
+    }
+  });
+
+  // The document header breadcrumb trail. Built in the app from the
+  // active path so the package stays free of path-parsing policy
+  // (prop-driven, matching the reference header). The vault name is the
+  // first crumb; each path segment follows, with the leaf marked
+  // current. A folder view marks its own leaf current too.
+  const breadcrumbItems = $derived<BreadcrumbItem[]>([
+    { label: vaultName, current: documentPath === '' },
+    ...documentPath
+      .split('/')
+      .filter(Boolean)
+      .map((segment, index, parts) => ({
+        label: segment,
+        current: index === parts.length - 1,
+      })),
+  ]);
+
+  // Whether the active document is favorited — drives the header's
+  // favorite toggle. Folder views toggle the folder's favorite instead.
+  const documentFavorited = $derived(
+    viewingFolder
+      ? favoritedFolderPaths.has(documentPath)
+      : favoritedNotePaths.has(documentPath),
+  );
+
+  // ---- Document-header actions ----------------------------------------
+  // These reuse the same dialog/favorites orchestration the tree-row
+  // menus use, synthesizing a LocalTreeAction for the active document so
+  // the header's overflow menu and the tree menu run identical flows.
+
+  function toggleDocumentFavorite(): void {
+    if (documentPath === '') return;
+    appState.toggleFavorite({
+      kind: viewingFolder ? 'folder' : 'note',
+      vaultId,
+      path: documentPath,
+    });
+  }
+
+  function renameDocument(): void {
+    if (documentPath === '') return;
+    handleTreeAction(
+      viewingFolder
+        ? { kind: 'folder', action: 'rename', path: documentPath }
+        : { kind: 'file', action: 'rename', path: documentPath },
+    );
+  }
+
+  function moveDocument(): void {
+    if (documentPath === '') return;
+    handleTreeAction(
+      viewingFolder
+        ? { kind: 'folder', action: 'move', path: documentPath }
+        : { kind: 'file', action: 'move', path: documentPath },
+    );
+  }
+
+  function deleteDocument(): void {
+    if (documentPath === '') return;
+    handleTreeAction(
+      viewingFolder
+        ? { kind: 'folder', action: 'delete', path: documentPath }
+        : { kind: 'file', action: 'delete', path: documentPath },
+    );
+  }
 
   function handleSessionEvent(event: DocumentSessionEvent): void {
     if (event.kind === 'doc-moved') {
@@ -945,6 +1033,13 @@
   {daemonLabel}
   {daemonStatus}
   {documentPath}
+  {breadcrumbItems}
+  {statusLabel}
+  {documentFavorited}
+  onToggleDocumentFavorite={documentPath === '' ? undefined : toggleDocumentFavorite}
+  onRenameDocument={documentPath === '' ? undefined : renameDocument}
+  onMoveDocument={documentPath === '' ? undefined : moveDocument}
+  onDeleteDocument={documentPath === '' ? undefined : deleteDocument}
   colorModeChoice={colorModePref}
   {activeNav}
   {railCollapsed}
