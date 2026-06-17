@@ -1,23 +1,9 @@
 <script lang="ts" module>
-  export interface MenuSwatch {
-    label: string;
-    color: string;
-    selected?: boolean;
-    onSelect: () => void;
-  }
-
-  export type MenuItem =
-    | {
-    kind?: 'item';
+  export interface MenuItem {
     label: string;
     onSelect: () => void;
     destructive?: boolean;
-    }
-    | {
-      kind: 'swatches';
-      label: string;
-      swatches: MenuSwatch[];
-    };
+  }
 </script>
 
 <script lang="ts">
@@ -139,122 +125,25 @@
   bind:this={menu}
   role="menu"
   aria-label={ariaLabel}
-  class="context-menu"
+  class="fixed z-50 min-w-[10rem] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
   style:left="{left}px"
   style:top="{top}px"
 >
   {#each items as item, i (i)}
-    {#if item.kind === 'swatches'}
-      <div class="context-menu-swatches" role="group" aria-label={item.label}>
-        <span class="swatch-label">{item.label}</span>
-        <div class="swatch-row">
-          {#each item.swatches as swatch (swatch.label)}
-            <button
-              type="button"
-              class="swatch"
-              class:selected={swatch.selected}
-              aria-label={swatch.label}
-              aria-pressed={swatch.selected}
-              title={swatch.label}
-              style:--swatch-color={swatch.color}
-              onclick={(event) => {
-                event.stopPropagation();
-                onclose();
-                swatch.onSelect();
-              }}
-            ></button>
-          {/each}
-        </div>
-      </div>
-    {:else}
-      <button
-        role="menuitem"
-        type="button"
-        class={cn('context-menu-item', item.destructive && 'destructive')}
-        onclick={(event) => {
-          event.stopPropagation();
-          onclose();
-          item.onSelect();
-        }}
-      >
-        {item.label}
-      </button>
-    {/if}
+    <button
+      role="menuitem"
+      type="button"
+      class={cn(
+        'flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
+        item.destructive && 'text-destructive',
+      )}
+      onclick={(event) => {
+        event.stopPropagation();
+        onclose();
+        item.onSelect();
+      }}
+    >
+      {item.label}
+    </button>
   {/each}
 </div>
-
-<style>
-  .context-menu {
-    position: fixed;
-    z-index: 50;
-    min-width: 10rem;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--popover);
-    color: var(--popover-foreground);
-    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.16);
-    padding: 4px;
-  }
-
-  .context-menu-item {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: inherit;
-    padding: 7px 10px;
-    font-family: var(--rd-ui);
-    font-size: 14px;
-    text-align: left;
-    cursor: pointer;
-    transition:
-      background 120ms ease,
-      color 120ms ease;
-  }
-
-  .context-menu-item:hover {
-    background: var(--accent);
-    color: var(--accent-foreground);
-  }
-
-  .destructive {
-    color: var(--destructive);
-  }
-
-  .context-menu-swatches {
-    display: grid;
-    gap: 6px;
-    padding: 7px 8px 8px;
-  }
-
-  .swatch-label {
-    color: var(--rd-ink-3);
-    font-family: var(--rd-ui);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .swatch-row {
-    display: grid;
-    grid-template-columns: repeat(6, 18px);
-    gap: 5px;
-  }
-
-  .swatch {
-    width: 18px;
-    height: 18px;
-    border: 1px solid color-mix(in srgb, var(--swatch-color) 72%, black);
-    border-radius: 5px;
-    background: var(--swatch-color);
-    cursor: pointer;
-  }
-
-  .swatch:hover,
-  .swatch.selected {
-    outline: 2px solid var(--rd-ink-1);
-    outline-offset: 1px;
-  }
-</style>
