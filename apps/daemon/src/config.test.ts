@@ -58,7 +58,8 @@ describe('daemon config', () => {
       actorDefault: 'user',
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
-      vaultRoot: join(kb2Home, 'demo-vault'),
+      vaultsHome: join(kb2Home, 'vaults'),
+      vaultRoot: join(kb2Home, 'vaults', 'demo-vault'),
       statusFile: join(kb2Home, 'daemon', 'status.json'),
       startedAt: now.toISOString(),
       pid: 1234

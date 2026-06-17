@@ -14,6 +14,7 @@ Product and domain invariants — what the product is and how it treats data:
 - [Filesystem is durable truth](./product/filesystem-durable-truth.md)
 - [Content, not people (local product)](./product/content-not-people.md)
 - [Edits save or fail loudly](./product/edits-save-or-fail-loudly.md)
+- [Vault slugs are unique within a daemon](./product/vault-slug-uniqueness.md)
 
 Engineering invariants — how the codebase stays healthy:
 

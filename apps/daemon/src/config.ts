@@ -8,6 +8,10 @@ export const DEFAULT_ACTOR_DEFAULT = 'user';
 
 export type ActorDefault = 'user' | 'unknown';
 
+export const DEFAULT_VAULT_SLUG = 'demo-vault';
+export const LEGACY_VAULT_DIRNAME = 'demo-vault';
+export const VAULTS_DIRNAME = 'vaults';
+
 export interface DaemonConfig {
   serviceName: typeof SERVICE_NAME;
   host: string;
@@ -17,6 +21,12 @@ export interface DaemonConfig {
   actorDefault: ActorDefault;
   kb2Home: string;
   daemonHome: string;
+  /** Directory that holds every vault: `<home>/vaults/<slug>/`. */
+  vaultsHome: string;
+  /**
+   * Root of the default vault. Derived from the default slug under
+   * `vaultsHome` for backward compatibility with the single-vault surface.
+   */
   vaultRoot: string;
   statusFile: string;
   startedAt: string;
@@ -109,7 +119,8 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
   const homeDir = options.homeDir ?? homedir();
   const kb2Home = resolveKb2Home(env, homeDir);
   const daemonHome = join(kb2Home, 'daemon');
-  const vaultRoot = join(kb2Home, 'demo-vault');
+  const vaultsHome = join(kb2Home, VAULTS_DIRNAME);
+  const vaultRoot = join(vaultsHome, DEFAULT_VAULT_SLUG);
 
   return {
     serviceName: SERVICE_NAME,
@@ -120,6 +131,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     actorDefault: resolveActorDefault(env),
     kb2Home,
     daemonHome,
+    vaultsHome,
     vaultRoot,
     statusFile: join(daemonHome, 'status.json'),
     startedAt: (options.now ?? new Date()).toISOString(),
