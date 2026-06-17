@@ -52,6 +52,9 @@
     expandedFolderIds?: Set<string>;
     /** Set of expanded vault keys. Omit to render the vault open. */
     expandedVaultIds?: Set<string>;
+    /** When true (mobile), tree-row kebab buttons are always visible. When
+        false (desktop), they appear on hover / focus only. */
+    kebabAlwaysVisible?: boolean;
     onSelectNav?: (id: RailNavId) => void;
     onToggleColorMode?: () => void;
     /** Toggle the primary rail's collapsed state. App owns persistence. */
@@ -91,6 +94,7 @@
     secondaryRailWidth = 282,
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
+    kebabAlwaysVisible = false,
     onSelectNav,
     onToggleColorMode,
     onToggleRailCollapsed,
@@ -142,6 +146,7 @@
       {expandedVaultIds}
       {favoritedFolderPaths}
       {favoritedNotePaths}
+      {kebabAlwaysVisible}
       {onToggleFolder}
       {onToggleVault}
       {onOpenFile}

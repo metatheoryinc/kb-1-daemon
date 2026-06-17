@@ -40,3 +40,12 @@ export const FoldersClosed: Story = {
     expandedFolderIds: new Set<string>()
   }
 };
+
+// Forces every row's `…` kebab on (the mobile treatment) so the actions
+// button is visible on the vault header, folder rows (beside their note
+// counts), and file rows without hovering.
+export const KebabVisible: Story = {
+  args: {
+    kebabAlwaysVisible: true
+  }
+};

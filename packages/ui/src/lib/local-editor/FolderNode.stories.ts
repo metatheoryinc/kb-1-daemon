@@ -34,3 +34,12 @@ export const Collapsed: Story = {
     expandedFolderIds: new Set<string>()
   }
 };
+
+// Folder rows show a recursive note count at the trailing edge and a
+// hover-revealed `…` kebab. This story forces the kebab on (mobile
+// treatment) so both the count and the actions button are visible at rest.
+export const KebabVisible: Story = {
+  args: {
+    kebabAlwaysVisible: true
+  }
+};

@@ -28,3 +28,12 @@ export const Nested: Story = {
     activePath: 'somewhere/else.md'
   }
 };
+
+// Kebab is hover/focus-revealed on desktop; this story forces it on so the
+// `…` actions button is visible without hovering (the mobile treatment).
+export const KebabVisible: Story = {
+  args: {
+    activePath: 'somewhere/else.md',
+    kebabAlwaysVisible: true
+  }
+};

@@ -6,8 +6,19 @@
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
   import { folderKey } from './expansion';
-  import type { LocalFolderNode, LocalTreeAction } from './types';
+  import type { LocalFolderNode, LocalTreeAction, LocalTreeNode } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
+
+  // Recursively count notes under a set of tree nodes — descendants
+  // included, not just direct children.
+  function countNotes(children: LocalTreeNode[]): number {
+    let total = 0;
+    for (const child of children) {
+      if (child.kind === 'file') total += 1;
+      else total += countNotes(child.children);
+    }
+    return total;
+  }
 
   interface Props {
     node: LocalFolderNode;
@@ -23,6 +34,10 @@
     favoritedFolderPaths?: Set<string>;
     /** Set of starred note paths — threaded to descendant file rows. */
     favoritedNotePaths?: Set<string>;
+    /** When true, the kebab (`…`) button is always visible on this row and
+        all descendant rows (mobile). When false (desktop), it appears on
+        hover / focus only. */
+    kebabAlwaysVisible?: boolean;
     /** Toggle a folder row. Called with the row's opaque key. */
     onToggleFolder?: (key: string) => void;
     onOpen?: (path: string) => void;
@@ -37,16 +52,25 @@
     depth = 0,
     favoritedFolderPaths,
     favoritedNotePaths,
+    kebabAlwaysVisible = false,
     onToggleFolder,
     onOpen,
     onAction,
   }: Props = $props();
 
-  let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
+  // The kebab and right-click open the same menu; the kebab hangs from the
+  // button rect (anchor) while right-click pins to the cursor.
+  let menuPosition = $state<
+    { mode: 'cursor'; x: number; y: number } | { mode: 'anchor'; rect: DOMRect } | null
+  >(null);
   const key = $derived(folderKey(vaultId, node.path));
   const open = $derived(expandedFolderIds.has(key));
   const favorited = $derived(favoritedFolderPaths?.has(node.path) ?? false);
   const indent = $derived(12 + depth * 14);
+  // Recursive note count under this folder — every descendant note, not
+  // just direct children. Answers "how big is this folder?", matching the
+  // count shown on the folder row.
+  const count = $derived(countNotes(node.children));
   const folderColor = $derived(accentHex[node.metadata?.color ?? 'slate']);
   const folderIcon = $derived(node.metadata?.icon ?? null);
 
@@ -68,6 +92,12 @@
   function openMenu(event: MouseEvent): void {
     event.preventDefault();
     menuPosition = { mode: 'cursor', x: event.clientX, y: event.clientY };
+  }
+
+  function openKebabMenu(event: MouseEvent): void {
+    event.stopPropagation();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menuPosition = { mode: 'anchor', rect };
   }
 
   function toggle(): void {
@@ -105,6 +135,17 @@
       <FolderIcon color={folderColor} icon={folderIcon} size="sm" variant="filled" label={`${node.name} folder`} />
       <span class="name">{node.name}</span>
     </button>
+    <span class="count">{count}</span>
+    <button
+      type="button"
+      class="kebab"
+      class:always-visible={kebabAlwaysVisible}
+      aria-label={`Actions for ${node.name}`}
+      title={`Actions for ${node.name}`}
+      onclick={openKebabMenu}
+    >
+      <Icon name="dots" size={14} weight="bold" />
+    </button>
   </div>
 
   {#if open}
@@ -119,6 +160,7 @@
             depth={depth + 1}
             {favoritedFolderPaths}
             {favoritedNotePaths}
+            {kebabAlwaysVisible}
             {onToggleFolder}
             {onOpen}
             {onAction}
@@ -129,6 +171,7 @@
             depth={depth + 1}
             {activePath}
             {favoritedNotePaths}
+            {kebabAlwaysVisible}
             {onOpen}
             {onAction}
           />
@@ -214,6 +257,53 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Recursive note count, dimmed + monospaced, sitting at the row's
+     trailing edge. */
+  .count {
+    flex-shrink: 0;
+    color: var(--rd-ink-4);
+    font-family: var(--rd-mono);
+    font-size: 10px;
+  }
+
+  /* Kebab (`…`) trigger — same visibility model as FileNode. Hidden via
+     `display: none` so it claims no flex space until hover / focus; when
+     it appears the trailing count slides left to make room. */
+  .kebab {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-left: 2px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--rd-ink-3);
+    cursor: pointer;
+    transition: background 80ms ease;
+  }
+
+  .row:hover .kebab,
+  .kebab:focus-visible,
+  .kebab.always-visible {
+    display: inline-flex;
+  }
+
+  .kebab:hover {
+    background: var(--rd-panel-alt);
+    color: var(--rd-ink-1);
+  }
+
+  /* At/below the mobile breakpoint (760px, the desktop-shell breakpoint)
+     the kebab is always visible — touch users have no right-click. */
+  @media (max-width: 760px) {
+    .kebab {
+      display: inline-flex;
+    }
   }
 
   .children {

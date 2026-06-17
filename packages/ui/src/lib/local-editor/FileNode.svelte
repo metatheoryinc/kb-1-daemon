@@ -12,6 +12,10 @@
     activePath?: string;
     /** Set of starred note paths — drives the Favorite/Unfavorite item. */
     favoritedNotePaths?: Set<string>;
+    /** When true, the kebab (`…`) button is always visible (mobile, where
+        right-click isn't available). When false (desktop), it only appears
+        on row hover / keyboard focus. */
+    kebabAlwaysVisible?: boolean;
     onOpen?: (path: string) => void;
     onAction?: (action: LocalTreeAction) => void;
   }
@@ -21,10 +25,15 @@
     depth = 0,
     activePath = '',
     favoritedNotePaths,
+    kebabAlwaysVisible = false,
     onOpen,
     onAction,
   }: Props = $props();
-  let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
+  // The kebab and right-click open the same menu; the kebab hangs from the
+  // button rect (anchor) while right-click pins to the cursor.
+  let menuPosition = $state<
+    { mode: 'cursor'; x: number; y: number } | { mode: 'anchor'; rect: DOMRect } | null
+  >(null);
   const active = $derived(activePath === node.path);
   const favorited = $derived(favoritedNotePaths?.has(node.path) ?? false);
   // Mirror the folder indent (12 + depth * 14) plus a 4px nudge so the
@@ -48,6 +57,12 @@
     event.preventDefault();
     menuPosition = { mode: 'cursor', x: event.clientX, y: event.clientY };
   }
+
+  function openKebabMenu(event: MouseEvent): void {
+    event.stopPropagation();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menuPosition = { mode: 'anchor', rect };
+  }
 </script>
 
 <div class="file-node">
@@ -69,6 +84,16 @@
         <Icon name="file" size={13} />
       </span>
       <span class="label">{node.name}</span>
+    </button>
+    <button
+      type="button"
+      class="kebab"
+      class:always-visible={kebabAlwaysVisible}
+      aria-label={`Actions for ${node.name}`}
+      title={`Actions for ${node.name}`}
+      onclick={openKebabMenu}
+    >
+      <Icon name="dots" size={14} weight="bold" />
     </button>
   </div>
 
@@ -148,5 +173,45 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Kebab (`…`) trigger. Hidden via `display: none` so it claims no flex
+     space until row hover / keyboard focus reveals it. `.always-visible`
+     (mobile, where right-click isn't available) and the narrow-viewport
+     media query keep it shown unconditionally. */
+  .kebab {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-left: 2px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--rd-ink-3);
+    cursor: pointer;
+    transition: background 80ms ease;
+  }
+
+  .row:hover .kebab,
+  .kebab:focus-visible,
+  .kebab.always-visible {
+    display: inline-flex;
+  }
+
+  .kebab:hover {
+    background: var(--rd-panel-alt);
+    color: var(--rd-ink-1);
+  }
+
+  /* At/below the mobile breakpoint the kebab is always visible — touch
+     users have no right-click affordance. Matches the desktop-shell
+     breakpoint (760px). */
+  @media (max-width: 760px) {
+    .kebab {
+      display: inline-flex;
+    }
   }
 </style>

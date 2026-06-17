@@ -30,6 +30,10 @@
     favoritedFolderPaths?: Set<string>;
     /** Set of starred note paths — threaded to file rows' menus. */
     favoritedNotePaths?: Set<string>;
+    /** When true, the kebab (`…`) button is always visible on the vault
+        header and every descendant row (mobile). When false (desktop), it
+        appears on hover / focus only. */
+    kebabAlwaysVisible?: boolean;
     onToggleFolder?: (key: string) => void;
     /** Toggle this vault group's expansion. Called with the vault key. */
     onToggleVault?: (key: string) => void;
@@ -47,6 +51,7 @@
     expandedVaultIds,
     favoritedFolderPaths,
     favoritedNotePaths,
+    kebabAlwaysVisible = false,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
@@ -59,7 +64,11 @@
   // its collapsed deny-list).
   const open = $derived(expandedVaultIds === undefined || expandedVaultIds.has(key));
 
-  let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
+  // The kebab and right-click open the same menu; the kebab hangs from the
+  // button rect (anchor) while right-click pins to the cursor.
+  let menuPosition = $state<
+    { mode: 'cursor'; x: number; y: number } | { mode: 'anchor'; rect: DOMRect } | null
+  >(null);
 
   const items = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
@@ -80,6 +89,12 @@
     event.preventDefault();
     menuPosition = { mode: 'cursor', x: event.clientX, y: event.clientY };
   }
+
+  function openKebabMenu(event: MouseEvent): void {
+    event.stopPropagation();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menuPosition = { mode: 'anchor', rect };
+  }
 </script>
 
 <div class="vault-block">
@@ -91,6 +106,16 @@
       </span>
       <Avatar kind="folder" {accent} size={16} />
       <span class="name">{vaultName}</span>
+    </button>
+    <button
+      type="button"
+      class="kebab"
+      class:always-visible={kebabAlwaysVisible}
+      aria-label={`Actions for ${vaultName}`}
+      title={`Actions for ${vaultName}`}
+      onclick={openKebabMenu}
+    >
+      <Icon name="dots" size={16} weight="bold" />
     </button>
   </div>
 
@@ -105,6 +130,7 @@
             {expandedFolderIds}
             {favoritedFolderPaths}
             {favoritedNotePaths}
+            {kebabAlwaysVisible}
             {onToggleFolder}
             onOpen={onOpenFile}
             onAction={onTreeAction}
@@ -114,6 +140,7 @@
             {node}
             {activePath}
             {favoritedNotePaths}
+            {kebabAlwaysVisible}
             onOpen={onOpenFile}
             onAction={onTreeAction}
           />
@@ -190,6 +217,48 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Kebab (`…`) trigger. Toggled via opacity + pointer-events (the vault
+     header always reserves the slot, so the layout doesn't shift). Size 22
+     matches the vault row's slightly chunkier register. */
+  .kebab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    margin-left: 2px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--rd-ink-3);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 80ms ease, background 80ms ease;
+  }
+
+  .vault-header:hover .kebab,
+  .kebab:focus-visible,
+  .kebab.always-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .kebab:hover {
+    background: var(--rd-panel-alt);
+    color: var(--rd-ink-1);
+  }
+
+  /* At/below the mobile breakpoint (760px, the desktop-shell breakpoint)
+     the kebab is always visible — touch users have no right-click. */
+  @media (max-width: 760px) {
+    .kebab {
+      opacity: 1;
+      pointer-events: auto;
+    }
   }
 
   .children {

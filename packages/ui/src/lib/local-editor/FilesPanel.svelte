@@ -32,6 +32,9 @@
     favoritedFolderPaths?: Set<string>;
     /** Set of starred note paths — threaded to file rows' menus. */
     favoritedNotePaths?: Set<string>;
+    /** When true (mobile), tree-row kebab buttons are always visible. When
+        false (desktop), they appear on hover / focus only. */
+    kebabAlwaysVisible?: boolean;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
@@ -52,6 +55,7 @@
     expandedVaultIds,
     favoritedFolderPaths,
     favoritedNotePaths,
+    kebabAlwaysVisible = false,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
@@ -137,6 +141,7 @@
           {expandedVaultIds}
           {favoritedFolderPaths}
           {favoritedNotePaths}
+          {kebabAlwaysVisible}
           {onToggleFolder}
           {onToggleVault}
           {onOpenFile}
