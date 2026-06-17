@@ -144,7 +144,7 @@
   // pick Favorite vs Unfavorite. Recomputed when favorites or the tree
   // (availability + accents) change.
   const starredView = $derived(
-    buildStarredViewData({ favorites, vaultId, tree }),
+    buildStarredViewData({ favorites, vaultId, vaultName, tree }),
   );
   const favoritedNotePaths = $derived(
     new Set(favorites.filter((e) => e.kind === 'note' && e.vaultId === vaultId).map((e) => e.path)),
@@ -548,11 +548,6 @@
 
   function resizeRail(next: number): void {
     appState.setSecondaryRailWidth(next);
-  }
-
-  // Remove a starred row from favorites (from the starred panel).
-  function unstar(entry: { kind: 'note' | 'folder'; path: string }): void {
-    appState.removeFavorite({ kind: entry.kind, vaultId, path: entry.path });
   }
 
   async function refreshVaultInfo(): Promise<void> {
@@ -1059,7 +1054,6 @@
   }}
   onToggleVaultHidden={toggleVaultHidden}
   onResizeRail={resizeRail}
-  onUnstar={unstar}
   onToggleColorMode={toggleColorMode}
   onToggleRailCollapsed={toggleRailCollapsed}
   onToggleFolder={toggleFolder}

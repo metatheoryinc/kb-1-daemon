@@ -7,7 +7,9 @@
     meta?: string;
     kind?: 'note' | 'folder';
     accent?: AccentName;
-    path?: string;
+    colorHex?: string | null;
+    icon?: string | null;
+    href?: string;
     available?: boolean;
     active?: boolean;
     mode?: 'light' | 'dark';
@@ -15,10 +17,12 @@
 
   let {
     label = 'launch-notes.md',
-    meta = 'note',
+    meta = 'in Demo Vault',
     kind = 'note',
     accent = 'coral',
-    path = 'projects/active/launch-notes.md',
+    colorHex = '#ee8a91',
+    icon = null,
+    href = '/projects/active/launch-notes.md',
     available = true,
     active = false,
     mode = 'light',
@@ -27,7 +31,7 @@
 
 <div class:dark={mode === 'dark'} data-rd-mode={mode} class="preview">
   <div class="row-host">
-    <StarredRow {label} {meta} {kind} {accent} {path} {available} {active} />
+    <StarredRow {label} {meta} {kind} {accent} {colorHex} {icon} {href} {available} {active} />
   </div>
 </div>
 

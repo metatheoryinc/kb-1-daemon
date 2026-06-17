@@ -93,8 +93,6 @@
     onToggleVaultHidden?: (vaultId: string) => void;
     /** Forward a raw (unclamped) rail width; the app-state setter clamps. */
     onResizeRail?: (next: number) => void;
-    /** Remove a starred row from favorites (from the starred panel). */
-    onUnstar?: (entry: { kind: 'note' | 'folder'; path: string }) => void;
     children?: import('svelte').Snippet;
   }
 
@@ -141,7 +139,6 @@
     onTreeAction,
     onToggleVaultHidden,
     onResizeRail,
-    onUnstar,
     children,
   }: Props = $props();
 </script>
@@ -166,8 +163,6 @@
       folders={starredFolders}
       notes={starredNotes}
       activePath={documentPath}
-      onOpen={onOpenFile}
-      onUnstar={onUnstar}
     />
   {:else}
     <FilesPanel

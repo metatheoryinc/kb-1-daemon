@@ -15,7 +15,8 @@
  * available so its link works the moment the user clicks.
  */
 import type { FavoriteEntry } from '$lib/app-state';
-import type { AccentName, LocalTreeNode } from '@kb-2/ui';
+import { accentHex, type AccentName, type LocalTreeNode } from '@kb-2/ui';
+import { encodeVaultPath } from '$lib/yjs/demo-document-provider';
 
 export interface StarredRow {
   /** Stable id for keyed iteration + active-row matching. `kind:vaultId:path`. */
@@ -23,11 +24,20 @@ export interface StarredRow {
   kind: 'note' | 'folder';
   /** Human label — the path's basename. */
   label: string;
+  /** Vault context for the secondary line ("in <vault>"). */
+  vaultLabel: string;
   /** Resolved accent for the leading swatch: the folder's own color for
    *  folder rows, the parent folder's color for note rows. */
   accent: AccentName;
-  /** Vault-relative path; the click target. */
+  /** Resolved folder/note color (hex) for the leading FolderIcon swatch. */
+  colorHex: string | null;
+  /** Folder customize-icon glyph (folder rows only). */
+  icon: string | null;
+  /** Vault-relative path; used for active-row matching. */
   path: string;
+  /** Click target href. `undefined` when the target is gone — the row
+   *  renders as a non-link, dimmed element. */
+  href: string | undefined;
   /** When `false`, render dimmed and non-clickable (target is gone). */
   available: boolean;
   addedAt: number;
@@ -50,11 +60,12 @@ function parentOf(path: string): string {
   return idx === -1 ? '' : path.slice(0, idx);
 }
 
-/** Index every tree node by path, retaining folder accent metadata. */
+/** Index every tree node by path, retaining folder accent + icon metadata. */
 interface TreeIndex {
   notePaths: Set<string>;
   folderPaths: Set<string>;
   folderAccent: Map<string, AccentName>;
+  folderIcon: Map<string, string | null>;
 }
 
 function indexTree(nodes: LocalTreeNode[]): TreeIndex {
@@ -62,12 +73,14 @@ function indexTree(nodes: LocalTreeNode[]): TreeIndex {
     notePaths: new Set(),
     folderPaths: new Set(),
     folderAccent: new Map(),
+    folderIcon: new Map(),
   };
   const walk = (list: LocalTreeNode[]): void => {
     for (const node of list) {
       if (node.kind === 'folder') {
         index.folderPaths.add(node.path);
         index.folderAccent.set(node.path, node.metadata?.color ?? 'slate');
+        index.folderIcon.set(node.path, node.metadata?.icon ?? null);
         walk(node.children);
       } else {
         index.notePaths.add(node.path);
@@ -82,12 +95,14 @@ interface BuildArgs {
   favorites: readonly FavoriteEntry[];
   /** The single local vault's id, used to scope entries. */
   vaultId: string;
+  /** The vault's display name, for the secondary "in <vault>" line. */
+  vaultName: string;
   /** The live vault tree. Empty during initial load. */
   tree: LocalTreeNode[];
 }
 
 export function buildStarredViewData(args: BuildArgs): StarredViewData {
-  const { favorites, vaultId, tree } = args;
+  const { favorites, vaultId, vaultName, tree } = args;
   const index = indexTree(tree);
   const treeLoaded = tree.length > 0;
 
@@ -103,24 +118,34 @@ export function buildStarredViewData(args: BuildArgs): StarredViewData {
     const id = `${entry.kind}:${entry.vaultId}:${entry.path}`;
     if (entry.kind === 'folder') {
       const available = !treeLoaded || index.folderPaths.has(entry.path);
+      const accent = index.folderAccent.get(entry.path) ?? 'slate';
       folders.push({
         id,
         kind: 'folder',
         label: basename(entry.path),
-        accent: index.folderAccent.get(entry.path) ?? 'slate',
+        vaultLabel: vaultName,
+        accent,
+        colorHex: accentHex[accent],
+        icon: index.folderIcon.get(entry.path) ?? null,
         path: entry.path,
+        href: available ? `/${encodeVaultPath(entry.path)}` : undefined,
         available,
         addedAt: entry.addedAt,
       });
     } else {
       const available = !treeLoaded || index.notePaths.has(entry.path);
       const parent = parentOf(entry.path);
+      const accent = index.folderAccent.get(parent) ?? 'slate';
       notes.push({
         id,
         kind: 'note',
         label: basename(entry.path),
-        accent: index.folderAccent.get(parent) ?? 'slate',
+        vaultLabel: vaultName,
+        accent,
+        colorHex: accentHex[accent],
+        icon: null,
         path: entry.path,
+        href: available ? `/${encodeVaultPath(entry.path)}` : undefined,
         available,
         addedAt: entry.addedAt,
       });

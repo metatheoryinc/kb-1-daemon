@@ -1,13 +1,22 @@
 <script lang="ts">
   /**
-   * The starred (favorites) panel — the middle-column view the rail
-   * shows in "starred" mode. Renders the app's starred notes and folders
-   * grouped Folders-then-Notes, each row clickable to open in-canvas and
-   * unstar-able in place. Falls back to the empty-state when nothing is
-   * pinned. Prop-driven only: the app builds the rows + owns persistence.
+   * The starred panel — the middle-column view the rail shows in
+   * "starred" mode. Sits in the secondary-panel slot of the shell,
+   * alongside `FilesPanel` — same `--rd-mid-w` width, same border
+   * treatment.
+   *
+   * Sticky filter semantics: this panel stays mounted as long as the
+   * Starred rail mode is active. Clicking a row opens its target in the
+   * canvas without dismissing the panel — mode swap only happens when
+   * the user picks a different rail entry.
+   *
+   * Reuses `StarredRow` for rendering and the same Folders / Notes
+   * grouping. The local shell has a single vault, so there is no Vaults
+   * group; folders and notes are the groups that apply. Prop-driven
+   * only: the app builds the rows + owns persistence.
    */
-  import Icon from '../primitives/Icon.svelte';
   import StarredRow from './StarredRow.svelte';
+  import Icon from '../primitives/Icon.svelte';
   import type { StarredRowData } from './types';
 
   interface Props {
@@ -17,18 +26,17 @@
     notes?: StarredRowData[];
     /** Path of the open document — highlights the matching row. */
     activePath?: string;
-    /** Open a starred row's target in the canvas. */
-    onOpen?: (path: string) => void;
-    /** Remove a row from favorites by path + kind. */
-    onUnstar?: (entry: { kind: 'note' | 'folder'; path: string }) => void;
+    /** Fires when the user picks any starred row. The mobile shell can
+     *  pass a closure to close its flyout on terminal selection; the
+     *  desktop shell leaves this unset (sticky panel). */
+    onPick?: () => void;
   }
 
   let {
     folders = [],
     notes = [],
     activePath = '',
-    onOpen,
-    onUnstar,
+    onPick,
   }: Props = $props();
 
   const total = $derived(folders.length + notes.length);
@@ -61,14 +69,15 @@
             {#each folders as row (row.id)}
               <StarredRow
                 label={row.label}
-                meta="folder"
+                meta={`in ${row.vaultLabel}`}
                 kind={row.kind}
                 accent={row.accent}
-                path={row.path}
+                colorHex={row.colorHex}
+                icon={row.icon}
+                href={row.href}
                 available={row.available}
                 active={row.path === activePath}
-                onpick={(path) => onOpen?.(path)}
-                onunstar={(path) => onUnstar?.({ kind: 'folder', path })}
+                onpick={onPick}
               />
             {/each}
           </div>
@@ -84,14 +93,15 @@
             {#each notes as row (row.id)}
               <StarredRow
                 label={row.label}
-                meta="note"
+                meta={`in ${row.vaultLabel}`}
                 kind={row.kind}
                 accent={row.accent}
-                path={row.path}
+                colorHex={row.colorHex}
+                icon={row.icon}
+                href={row.href}
                 available={row.available}
                 active={row.path === activePath}
-                onpick={(path) => onOpen?.(path)}
-                onunstar={(path) => onUnstar?.({ kind: 'note', path })}
+                onpick={onPick}
               />
             {/each}
           </div>
@@ -102,11 +112,11 @@
 </aside>
 
 <style>
+  /* Width / chrome match `FilesPanel` so the Starred mode reads as the
+     same kind of object — a middle-column panel. */
   .starred-panel {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
-    /* Self-sizing secondary panel — mirrors FilesPanel so the two share
-       one width and neither collapses inside the flex-row shell. */
     flex-shrink: 0;
     width: var(--rd-mid-w, 282px);
     height: 100%;
@@ -144,6 +154,7 @@
     min-height: 0;
     overflow-y: auto;
     padding: 10px 10px 14px;
+    scrollbar-width: thin;
   }
 
   .group + .group {
@@ -194,6 +205,7 @@
   .empty-title {
     margin: 0 0 2px;
     color: var(--rd-ink-2);
+    font-family: var(--rd-serif);
     font-size: 14px;
     font-weight: 500;
     letter-spacing: -0.005em;

@@ -7,10 +7,12 @@ const meta = {
   parameters: { layout: 'fullscreen' },
   args: {
     label: 'launch-notes.md',
-    meta: 'note',
+    meta: 'in Demo Vault',
     kind: 'note',
     accent: 'coral',
-    path: 'projects/active/launch-notes.md',
+    colorHex: '#ee8a91',
+    icon: null,
+    href: '/projects/active/launch-notes.md',
     available: true,
     active: false,
     mode: 'light'
@@ -29,20 +31,22 @@ export const NoteDark: Story = {
 export const Folder: Story = {
   args: {
     label: 'research',
-    meta: 'folder',
+    meta: 'in Demo Vault',
     kind: 'folder',
     accent: 'sky',
-    path: 'research'
+    colorHex: '#7fb9e5',
+    href: '/research'
   }
 };
 
 export const FolderDark: Story = {
   args: {
     label: 'research',
-    meta: 'folder',
+    meta: 'in Demo Vault',
     kind: 'folder',
     accent: 'sky',
-    path: 'research',
+    colorHex: '#7fb9e5',
+    href: '/research',
     mode: 'dark'
   }
 };
@@ -55,7 +59,8 @@ export const Unavailable: Story = {
   args: {
     label: 'old-plan.md',
     accent: 'slate',
-    path: 'archive/old-plan.md',
+    colorHex: '#8fa3b1',
+    href: undefined,
     available: false
   }
 };

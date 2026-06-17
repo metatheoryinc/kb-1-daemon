@@ -65,10 +65,20 @@ export interface StarredRowData {
   kind: 'note' | 'folder';
   /** Human label — the path basename. */
   label: string;
+  /** Vault context for the secondary line ("in <vault>"). */
+  vaultLabel: string;
   /** Accent swatch color: a folder's own / a note's parent-folder color. */
   accent: AccentName;
-  /** Vault-relative path; passed back on pick / unstar. */
+  /** Resolved hex color for the leading folder swatch. When null, the row
+   *  falls back to the `accent` palette dot. */
+  colorHex: string | null;
+  /** Folder customize-icon glyph (folder rows only). */
+  icon: string | null;
+  /** Vault-relative path; used for active-row matching. */
   path: string;
+  /** Click target href. `undefined` when unavailable — the row renders as
+   *  a non-link static element. */
+  href: string | undefined;
   /** When `false`, the row renders dimmed and non-clickable. */
   available: boolean;
 }
