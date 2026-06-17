@@ -105,6 +105,11 @@
   .starred-panel {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
+    /* Self-sizing secondary panel — mirrors FilesPanel so the two share
+       one width and neither collapses inside the flex-row shell. */
+    flex-shrink: 0;
+    width: var(--rd-mid-w, 282px);
+    height: 100%;
     min-width: 0;
     min-height: 0;
     background: var(--rd-panel);

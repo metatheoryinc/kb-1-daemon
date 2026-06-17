@@ -905,25 +905,37 @@
     }}
   />
 
-  <section class="document-shell" aria-label="Markdown document">
-    {#if notFoundPath === documentPath}
-      <DocumentNotFoundState path={documentPath} />
-    {:else if provider && providerSynced}
-      {#key provider}
-        <PlaintextEditor
-          ydoc={provider.doc}
-          ytext={provider.text}
-          livePaths={livePaths}
-          orgPeople={orgPeople}
-          readOnly={docDeleted}
-          scroll="self"
-          onWikilinkClick={handleWikilinkClick}
-        />
-      {/key}
-    {:else if mounted}
-      <div class="loading">Opening document…</div>
-    {/if}
-  </section>
+  <!-- Document scroll structure ported from the reference DocumentCanvas:
+       `.doc-body` is the full-width scroll container so the whole pane
+       scrolls (header stays pinned in the shell above), and `.doc-column`
+       centers the content at a fixed prose measure with `margin: 0 auto`.
+       The editor mounts with `scroll="external"`, handing scroll ownership
+       to `.doc-body`. There are no side gutter columns, so no dark bands
+       beside the document. -->
+  <div class="doc-body-wrap">
+    <div class="doc-body">
+      {#if notFoundPath === documentPath}
+        <DocumentNotFoundState path={documentPath} />
+      {:else if provider && providerSynced}
+        <div class="doc-column">
+          {#key provider}
+            <PlaintextEditor
+              ydoc={provider.doc}
+              ytext={provider.text}
+              livePaths={livePaths}
+              orgPeople={orgPeople}
+              readOnly={docDeleted}
+              scroll="external"
+              class="vault-editor"
+              onWikilinkClick={handleWikilinkClick}
+            />
+          {/key}
+        </div>
+      {:else if mounted}
+        <div class="loading">Opening document…</div>
+      {/if}
+    </div>
+  </div>
 
   {#if error}
     <p class="error">{error}</p>
@@ -975,39 +987,59 @@
 {/if}
 
 <style>
-  .document-shell {
+  /* Scroll structure ported from the reference DocumentCanvas. */
+  .doc-body-wrap {
+    flex: 1;
     min-height: 0;
-    height: 100%;
-    display: grid;
-    grid-template-columns: minmax(24px, 1fr) minmax(0, 760px) minmax(24px, 1fr);
-    /* A single bounded row so the editor host in column 2 inherits a
-       definite height. Without this the implicit grid row is auto-sized
-       to the editor's intrinsic content height, so a long document
-       grows the editor past the viewport (only arrow keys scroll)
-       instead of scrolling inside the `scroll="self"` CM6 scroller. */
-    grid-template-rows: minmax(0, 1fr);
-    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
   }
 
-  .document-shell :global(.kb2-editor-shell),
-  .document-shell :global(.document-not-found),
-  .loading {
-    grid-column: 2;
-    min-width: 0;
-    border-left: 1px solid var(--rd-rule);
-    border-right: 1px solid var(--rd-rule);
+  .doc-body {
+    flex: 1;
+    min-height: 0;
+    /* The full-width pane is the scroll container — long docs scroll
+       here while the header stays pinned in the shell above. */
+    overflow-y: auto;
+    position: relative;
+    /* Horizontal gutter is symmetric padding on the scroll pane (NOT a
+       bordered side column), so the panel background runs edge to edge
+       with no dark bands beside the document. */
+    padding: 0 56px 96px;
     background: var(--rd-panel);
   }
 
-  .document-shell :global(.plaintext-editor .cm-content) {
+  @media (max-width: 880px) {
+    .doc-body {
+      padding: 0 44px 64px;
+    }
+  }
+
+  /* Single owning element for the document column geometry — the editor
+     is a width:100% child, centered at a fixed prose measure. */
+  .doc-column {
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  /* Editor surface only — transparent so the doc-body's panel color
+     shows through. Top breathing room sits on the column, not a header
+     band. */
+  .doc-body :global(.vault-editor) {
+    background: transparent;
+  }
+
+  .doc-body :global(.plaintext-editor .cm-content) {
     padding-top: 28px;
-    padding-left: 56px;
-    padding-right: 32px;
-    padding-bottom: 64px;
   }
 
   .loading {
-    padding: 24px;
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 24px 0;
     color: var(--rd-ink-4);
     font-size: 13px;
   }
@@ -1029,10 +1061,6 @@
   }
 
   @media (max-width: 720px) {
-    .document-shell {
-      grid-template-columns: 12px minmax(0, 1fr) 12px;
-    }
-
     .error {
       left: 16px;
       max-width: calc(100vw - 32px);

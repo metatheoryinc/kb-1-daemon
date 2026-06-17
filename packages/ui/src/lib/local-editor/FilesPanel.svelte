@@ -167,6 +167,11 @@
   .files-panel {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
+    /* Self-sizing secondary panel: holds the resize-handle width and
+       refuses to shrink, so the flex-row workspace absorbs the slack. */
+    flex-shrink: 0;
+    width: var(--rd-mid-w, 282px);
+    height: 100%;
     min-width: 0;
     min-height: 0;
     border-right: 1px solid var(--rd-rule);

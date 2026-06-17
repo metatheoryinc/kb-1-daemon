@@ -111,7 +111,6 @@
 
 <main
   class="local-editor-shell"
-  class:rail-collapsed={railCollapsed}
   style="--rd-mid-w: {secondaryRailWidth}px"
 >
   <PrimaryRail
@@ -155,10 +154,19 @@
     />
   {/if}
 
-  <RailResizeHandle
-    width={secondaryRailWidth}
-    onResize={(next) => onResizeRail?.(next)}
-  />
+  <!-- INTENTIONAL DEVIATION from the reference layout (user-requested):
+       the reference seats the resize handle as a full-width flex sibling
+       between the secondary panel and the workspace, which leaves a thin
+       visible gap beside the panel. We zero the handle's flow width and
+       overlay its 6px hit-area on the panel/workspace seam so the two
+       regions abut with no visible gap — the handle stays fully
+       functional (it still captures the drag at the seam). -->
+  <div class="resize-handle-slot">
+    <RailResizeHandle
+      width={secondaryRailWidth}
+      onResize={(next) => onResizeRail?.(next)}
+    />
+  </div>
 
   <section class="workspace" aria-label="Document workspace">
     <DocumentHeader {vaultName} path={documentPath} />
@@ -169,61 +177,57 @@
 </main>
 
 <style>
+  /* Region layout: primary rail | secondary panel | resize handle |
+     workspace, laid out as a flex row. The rail and the secondary panel
+     each size themselves (the rail via its own `width` transition; the
+     panel via `width: var(--rd-mid-w)` + `flex-shrink: 0`), the resize
+     handle keeps its intrinsic 6px, and the workspace absorbs the
+     remaining slack. No transition on the row itself — the rail animates
+     its OWN width, so resize is instant and there are no gutter bands. */
   .local-editor-shell {
-    display: grid;
-    /* The middle (files) rail is driven by `--rd-mid-w` so the resize
-       handle's app-state width applies directly; the handle column is
-       its intrinsic 6px, and the editor pane absorbs the remaining
-       slack. `--rd-mid-w` defaults to the design width when no app sets
-       it (e.g. Storybook fixtures). */
-    /* First column tracks the primary rail's own width so the rail never
-       overflows or leaves a gap. Defaults to the expanded width; the
-       `rail-collapsed` modifier swaps to the collapsed width, and the
-       transition matches the rail's internal width animation so the grid
-       and the rail move together. */
-    --rd-rail-col: var(--rd-rail-w);
-    grid-template-columns: var(--rd-rail-col) var(--rd-mid-w, 282px) auto minmax(0, 1fr);
-    transition: grid-template-columns 0.32s cubic-bezier(0.4, 0, 0.2, 1);
-    /* Single bounded row pinned to the viewport. Without an explicit
-       row track the implicit row is `auto`-sized and grows to the
-       editor's content height (a long note is 20k+ px tall), which
-       cascades down the workspace/editor-region chain and lets the
-       editor spill past the viewport instead of scrolling internally.
-       `minmax(0, 1fr)` over a definite `height: 100vh` keeps every
-       child bounded to the shell so the CM6 scroller owns the scroll. */
-    grid-template-rows: minmax(0, 1fr);
+    position: relative;
+    display: flex;
     width: 100%;
     height: 100vh;
+    overflow: hidden;
     background: var(--rd-bg);
     color: var(--rd-ink-2);
     font-family: var(--rd-ui);
-    overflow: hidden;
-  }
-
-  .local-editor-shell.rail-collapsed {
-    --rd-rail-col: var(--rd-rail-w-collapsed);
   }
 
   .workspace {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    display: flex;
+    flex: 1;
+    flex-direction: column;
     min-width: 0;
-    /* min-height:0 lets this grid item shrink below its content height
-       so the `1fr` editor row resolves against the bounded shell row
-       rather than the editor's intrinsic content height. */
-    min-height: 0;
+    background: var(--rd-panel);
+  }
+
+  /* INTENTIONAL DEVIATION (user-requested): the handle lives in a
+     zero-width flex slot and its 6px hit-area is overlaid on the seam,
+     so the secondary panel and the workspace abut with no visible gap.
+     The slot takes no flow width; the handle straddles the boundary,
+     centered on the seam, and stays draggable. */
+  .resize-handle-slot {
+    position: relative;
+    width: 0;
+    flex-shrink: 0;
+    z-index: 2;
+  }
+
+  .resize-handle-slot :global(.handle) {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
     height: 100%;
   }
 
   .editor-region {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
     min-width: 0;
     min-height: 0;
-    overflow: hidden;
-  }
-
-  @media (max-width: 760px) {
-    .local-editor-shell {
-      grid-template-columns: var(--rd-rail-col) minmax(176px, 42vw) auto minmax(0, 1fr);
-    }
   }
 </style>
