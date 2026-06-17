@@ -14,8 +14,12 @@
 
   // Color-mode resolver. Subscribes to the persisted `colorMode`, then
   // resolves `'system'` against `prefers-color-scheme` and writes:
-  //   - `<html class="dark">` — Tailwind `.dark` variant
-  //   - `<body data-rd-mode>`  — design tokens
+  //   - `<html class="dark">`   — Tailwind `.dark` variant
+  //   - `<html data-rd-mode>`   — design tokens, matched pre-hydration in
+  //     app.html so the editor shell's `--rd-bg` surface paints correctly
+  //     on the first frame; kept in sync here so live toggles don't leave
+  //     a stale value on `:root`
+  //   - `<body data-rd-mode>`   — design tokens on the shell host element
   // The pre-hydration script in `app.html` paints the initial mode to
   // avoid a flash; this effect keeps the DOM in sync as the user toggles
   // or the OS preference changes. The matchMedia listener is only
@@ -38,6 +42,7 @@
         mode === 'system' ? (mql?.matches ? 'dark' : 'light') : mode;
       const root = document.documentElement;
       root.classList.toggle('dark', resolved === 'dark');
+      root.dataset.rdMode = resolved;
       document.body.dataset.rdMode = resolved;
     }
     apply();

@@ -11,9 +11,12 @@
       // app-state store writes; defaults to `'system'` when missing or
       // malformed; resolves `'system'` against `prefers-color-scheme`.
       // Writes `<html class="dark">` so Tailwind's `.dark` variant is
-      // active before the first paint. The `body[data-rd-mode]` flag is
-      // mirrored from the root layout's reactive effect post-mount —
-      // `<body>` doesn't exist yet at this point in <head>. Inline and
+      // active before the first paint, and `<html data-rd-mode>` so the
+      // design-token dark block (`[data-rd-mode='dark']`, which fills the
+      // editor shell's `--rd-bg` viewport surface) resolves on the first
+      // frame too — `<html>` is `:root`, so the tokens cascade to the whole
+      // tree. The root layout's reactive effect re-mirrors `data-rd-mode`
+      // onto `<body>` post-mount to track live toggles. Inline and
       // synchronous by design: any flash is a regression.
       (function () {
         try {
@@ -33,6 +36,7 @@
                 : 'light';
           }
           document.documentElement.classList.toggle('dark', resolved === 'dark');
+          document.documentElement.dataset.rdMode = resolved;
         } catch (_) {
           // Storage / JSON / matchMedia failed — leave defaults (light).
         }
