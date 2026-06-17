@@ -112,9 +112,8 @@
   let activeNav = $state<RailNavId>('files');
 
   // The app-state store owns the persisted light / dark / system choice
-  // and the root layout applies it to the DOM. The FilesPanel toggle is
-  // prop-driven on a *resolved* mode, so mirror the store's choice and
-  // resolve `'system'` against `prefers-color-scheme` here for the icon.
+  // and the root layout applies it to the DOM. The rail toggle's icon is
+  // prop-driven on that raw choice, so mirror the store's value here.
   const appState = useAppState();
   let colorModePref = $state<ColorMode>(appState.getState().colorMode);
   // Tree expansion lives in the persisted app-state store. Mirror the
@@ -134,14 +133,6 @@
     if (!collapsedVaultIds.has(vaultId)) out.add(expansionKey('vault', vaultId));
     return out;
   });
-  let systemPrefersDark = $state(false);
-  const colorMode = $derived<'light' | 'dark'>(
-    colorModePref === 'system'
-      ? systemPrefersDark
-        ? 'dark'
-        : 'light'
-      : colorModePref,
-  );
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -763,20 +754,6 @@
     });
   });
 
-  // Track the OS preference so the toggle icon resolves `'system'`
-  // correctly. Only meaningful while the preference is `'system'`, but
-  // kept current unconditionally so the derived mode is always right.
-  $effect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
-    const mql = window.matchMedia('(prefers-color-scheme: dark)');
-    systemPrefersDark = mql.matches;
-    const listener = () => {
-      systemPrefersDark = mql.matches;
-    };
-    mql.addEventListener('change', listener);
-    return () => mql.removeEventListener('change', listener);
-  });
-
   afterNavigate((navigation) => {
     if (!mounted || !navigation.to?.url) return;
     const nextPath = documentPathFromUrl(navigation.to.url);
@@ -825,7 +802,6 @@
   {daemonLabel}
   {daemonStatus}
   {documentPath}
-  {colorMode}
   colorModeChoice={colorModePref}
   {activeNav}
   {tree}

@@ -31,7 +31,6 @@
   daemonLabel="Daemon · live"
   daemonStatus="open"
   documentPath={localEditorDocumentPath}
-  colorMode="light"
   {colorModeChoice}
   {activeNav}
   vaultId={VAULT_ID}

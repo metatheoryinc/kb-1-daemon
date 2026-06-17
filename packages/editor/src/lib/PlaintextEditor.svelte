@@ -285,7 +285,7 @@
 
     // --- Theme -----------------------------------------------------
     //
-    // Document-surface theme. Distinct from kb-1's app chrome (Inter
+    // Document-surface theme. Distinct from the app chrome (Inter
     // Tight UI, system mono) — `.txt` content uses the prose-body face
     // so the editor *feels* like a thoughtful reading surface, not
     // another panel of UI. Today that face is Geist (Vercel's OFL sans)
@@ -404,7 +404,7 @@
       // v1 — multi-line block indent is a deferred follow-up.
       plaintextListKeymap(),
       // Paste-a-URL-as-markdown-link: any URL over a selection wraps
-      // it as `[selection](url)`; a kb-1 note URL with no selection
+      // it as `[selection](url)`; a note URL with no selection
       // inserts `[note name](url)`. Non-URL pastes (and URL pastes
       // that match neither rule) fall through to default CM6 paste.
       // See `plaintext-link-paste.ts` for the decision rules.
@@ -1560,7 +1560,7 @@
     color: var(--rd-ink-4, rgba(0, 0, 0, 0.4));
   }
 
-  /* Documents may contain pending-upload:// sentinel URLs from KB-1 data or future upload support. */
+  /* Documents may contain pending-upload:// sentinel URLs from existing data or future upload support. */
   .plaintext-editor :global(.cm-md-image-widget[data-state='pending']) {
     display: inline-flex;
     align-items: center;

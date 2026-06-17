@@ -16,10 +16,8 @@
     daemonLabel: string;
     daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
     documentPath: string;
-    colorMode?: 'light' | 'dark';
     /** Persisted color-mode preference (light / dark / system). Drives the
-        rail toggle's icon; the resolved `colorMode` above drives surfaces
-        that need a concrete light-or-dark value. */
+        rail toggle's icon. */
     colorModeChoice?: 'light' | 'dark' | 'system';
     /** Which secondary panel is shown — the files tree or the starred view. */
     activeNav?: RailNavId;
@@ -55,7 +53,6 @@
     daemonLabel,
     daemonStatus = 'open',
     documentPath,
-    colorMode = 'light',
     colorModeChoice = 'system',
     activeNav = 'files',
     userLabel = 'Local user',

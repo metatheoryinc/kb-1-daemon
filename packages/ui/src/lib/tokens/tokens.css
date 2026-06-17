@@ -1,8 +1,9 @@
-/* Redesign tokens — KB1 visual system, namespaced as --rd-* to stay isolated
-   from the main app's shadcn vars. Three palette swaps follow the reference
-   mockup: porcelain (default, cool neutral), shell (soft warm-grey), linen
-   (warm greige). Components reference vars semantically, so a future dark
-   mode is one more [data-rd-palette="dark"] block away — no component edits.
+/* Design tokens for the editor's visual system, namespaced as --rd-* so they
+   stay isolated from any host application's own CSS variables. Three palette
+   swaps follow the reference mockup: porcelain (default, cool neutral), shell
+   (soft warm-grey), linen (warm greige). Components reference vars
+   semantically, so a future dark mode is one more [data-rd-palette="dark"]
+   block away, with no component edits.
 
    The font stacks name the preferred faces but do not load external font
    resources; local-first review surfaces should not require a CDN. */
