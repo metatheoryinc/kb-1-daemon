@@ -290,21 +290,27 @@
           : 'closed',
   );
 
-  // The document header's live save/connection chip. Re-homes the
-  // connection indicator into the document chrome (matching the
-  // reference). Persist failure takes precedence so a NOT-saving doc
-  // never reads as "saved"; otherwise the label tracks the provider's
-  // connection state. Folder views (no provider) hide the chip.
+  // The document header's status chip is deliberately ERROR-ONLY. This is
+  // a local-first editor: a successful save is the expected default, so
+  // success and the optimistic in-progress states ("Saved" / "Saving…" /
+  // "Connecting…") render nothing — silence means it's working. The chip
+  // only surfaces PROBLEM states where edits are not safely persisting:
+  // a persist/save failure, a connection error, or a disconnect. This
+  // matches the daemon's edits-save-or-fail-loudly invariant (loud on
+  // failure, quiet on success). Returning undefined hides the chip
+  // entirely (DocumentHeader renders it only when a label is present),
+  // so it also disappears on recovery. Folder views (no provider) have
+  // no label either.
   const statusLabel = $derived.by<string | undefined>(() => {
     if (viewingFolder) return undefined;
     if (persistFailureActive) return 'Not saving';
     switch (status) {
+      // Success + optimistic states stay silent — nothing rendered.
       case 'open':
-        return 'Saved';
       case 'syncing':
-        return 'Saving…';
       case 'connecting':
-        return 'Connecting…';
+        return undefined;
+      // Problem states stay loud and visible.
       case 'error':
         return 'Connection error';
       default:
