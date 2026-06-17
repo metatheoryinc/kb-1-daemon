@@ -123,9 +123,16 @@
   .local-editor-shell {
     display: grid;
     grid-template-columns: var(--rd-rail-w-collapsed) minmax(240px, 280px) minmax(0, 1fr);
+    /* Single bounded row pinned to the viewport. Without an explicit
+       row track the implicit row is `auto`-sized and grows to the
+       editor's content height (a long note is 20k+ px tall), which
+       cascades down the workspace/editor-region chain and lets the
+       editor spill past the viewport instead of scrolling internally.
+       `minmax(0, 1fr)` over a definite `height: 100vh` keeps every
+       child bounded to the shell so the CM6 scroller owns the scroll. */
+    grid-template-rows: minmax(0, 1fr);
     width: 100%;
-    min-height: 100vh;
-    max-height: 100vh;
+    height: 100vh;
     background: var(--rd-bg);
     color: var(--rd-ink-2);
     font-family: var(--rd-ui);
@@ -136,7 +143,11 @@
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     min-width: 0;
+    /* min-height:0 lets this grid item shrink below its content height
+       so the `1fr` editor row resolves against the bounded shell row
+       rather than the editor's intrinsic content height. */
     min-height: 0;
+    height: 100%;
   }
 
   .editor-region {

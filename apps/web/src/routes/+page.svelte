@@ -9,7 +9,13 @@
     DemoDocumentProvider,
     DemoDocumentProviderStatus,
   } from '$lib/yjs/demo-document-provider';
-  import { PlaintextEditor, type LivePath, type OrgPerson } from '@kb-2/editor';
+  import {
+    PlaintextEditor,
+    parseWikilinkInner,
+    resolveLinkTarget,
+    type LivePath,
+    type OrgPerson,
+  } from '@kb-2/editor';
   import {
     DocumentNotFoundState,
     EditorSaveNotifications,
@@ -108,9 +114,32 @@
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const livePaths = $derived<LivePath[]>([
-    { path: documentPath, noteId: documentPath },
-  ]);
+  // Flatten the vault tree's file nodes into the editor's wikilink
+  // resolution snapshot. Every file path is a candidate target so
+  // `[[note]]` links resolve across the whole vault (not just the open
+  // doc). The single local vault has no durable note id, so the path
+  // stands in as the id. Falls back to the open document while the tree
+  // is still loading.
+  const livePaths = $derived<LivePath[]>(
+    tree.length > 0
+      ? collectFilePaths(tree)
+      : [{ path: documentPath, noteId: documentPath }],
+  );
+
+  function collectFilePaths(nodes: LocalTreeNode[]): LivePath[] {
+    const out: LivePath[] = [];
+    const walk = (list: LocalTreeNode[]): void => {
+      for (const node of list) {
+        if (node.kind === 'folder') {
+          walk(node.children);
+        } else {
+          out.push({ path: node.path, noteId: node.path });
+        }
+      }
+    };
+    walk(nodes);
+    return out;
+  }
 
   const orgPeople: OrgPerson[] = [];
 
@@ -257,6 +286,30 @@
     if (path === documentPath && notFoundPath !== path) return;
     rebindDocument(path, { resetSearch: true });
     await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
+  }
+
+  // Wikilink navigation. The editor fires with the URL-encoded target;
+  // decode, parse the `[[target#heading|alias]]` inner, resolve against
+  // the live tree, and open the note. Unresolved targets fall back to
+  // the raw target (adding `.md` when it has no extension) so a click
+  // can still create-then-open a not-yet-existing note.
+  function handleWikilinkClick(encodedTarget: string): void {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(encodedTarget);
+    } catch {
+      return;
+    }
+    const parts = parseWikilinkInner(decoded);
+    if (parts === null) return;
+    const rawTarget = parts.target;
+    const resolved = resolveLinkTarget({ raw: rawTarget, livePaths });
+    const targetPath = resolved
+      ? resolved.path
+      : /\.[^/]+$/.test(rawTarget)
+        ? rawTarget
+        : `${rawTarget}.md`;
+    void openDocument(targetPath);
   }
 
   function rebindDocument(path: string, options: { resetSearch?: boolean } = {}): void {
@@ -668,6 +721,7 @@
           orgPeople={orgPeople}
           readOnly={docDeleted}
           scroll="self"
+          onWikilinkClick={handleWikilinkClick}
         />
       {/key}
     {:else if mounted}
@@ -686,6 +740,12 @@
     height: 100%;
     display: grid;
     grid-template-columns: minmax(24px, 1fr) minmax(0, 760px) minmax(24px, 1fr);
+    /* A single bounded row so the editor host in column 2 inherits a
+       definite height. Without this the implicit grid row is auto-sized
+       to the editor's intrinsic content height, so a long document
+       grows the editor past the viewport (only arrow keys scroll)
+       instead of scrolling inside the `scroll="self"` CM6 scroller. */
+    grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
   }
 
