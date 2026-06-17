@@ -44,14 +44,33 @@ export interface LocalSearchResult {
 
 export interface LocalFileAction {
   kind: 'file';
-  action: 'rename' | 'move' | 'delete';
+  action: 'rename' | 'move' | 'delete' | 'favorite' | 'unfavorite';
   path: string;
 }
 
 export interface LocalFolderAction {
   kind: 'folder';
-  action: 'new-note' | 'new-folder' | 'rename' | 'move' | 'delete';
+  action: 'new-note' | 'new-folder' | 'rename' | 'move' | 'delete' | 'favorite' | 'unfavorite';
   path: string;
+}
+
+/**
+ * One render-ready starred row. The app builds these from its persisted
+ * favorites plus the live tree (see apps/web favorites-data); the panel
+ * and row stay prop-driven and never touch state or storage.
+ */
+export interface StarredRowData {
+  /** Stable id (`kind:vaultId:path`) — keyed iteration + active match. */
+  id: string;
+  kind: 'note' | 'folder';
+  /** Human label — the path basename. */
+  label: string;
+  /** Accent swatch color: a folder's own / a note's parent-folder color. */
+  accent: AccentName;
+  /** Vault-relative path; passed back on pick / unstar. */
+  path: string;
+  /** When `false`, the row renders dimmed and non-clickable. */
+  available: boolean;
 }
 
 export interface LocalVaultAction {

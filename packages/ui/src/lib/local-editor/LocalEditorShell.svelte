@@ -5,7 +5,12 @@
   import RailResizeHandle from './RailResizeHandle.svelte';
   import PrimaryRail, { type RailNavId } from './primary-rail/PrimaryRail.svelte';
   import type { AccentName } from '../primitives/accent';
-  import type { LocalTreeAction, LocalTreeNode, VaultFilterEntry } from './types';
+  import type {
+    LocalTreeAction,
+    LocalTreeNode,
+    StarredRowData,
+    VaultFilterEntry,
+  } from './types';
 
   interface Props {
     vaultName: string;
@@ -21,6 +26,14 @@
     colorModeChoice?: 'light' | 'dark' | 'system';
     /** Which secondary panel is shown — the files tree or the starred view. */
     activeNav?: RailNavId;
+    /** Starred folder rows for the starred view. App-built, prop-driven. */
+    starredFolders?: StarredRowData[];
+    /** Starred note rows for the starred view. App-built, prop-driven. */
+    starredNotes?: StarredRowData[];
+    /** Set of starred folder paths — drives the tree menus' Favorite item. */
+    favoritedFolderPaths?: Set<string>;
+    /** Set of starred note paths — drives the tree menus' Favorite item. */
+    favoritedNotePaths?: Set<string>;
     userLabel?: string;
     tree: LocalTreeNode[];
     /** Full set of vaults the filter lists. Omit for the single-vault default. */
@@ -43,6 +56,8 @@
     onToggleVaultHidden?: (vaultId: string) => void;
     /** Forward a raw (unclamped) rail width; the app-state setter clamps. */
     onResizeRail?: (next: number) => void;
+    /** Remove a starred row from favorites (from the starred panel). */
+    onUnstar?: (entry: { kind: 'note' | 'folder'; path: string }) => void;
     children?: import('svelte').Snippet;
   }
 
@@ -55,6 +70,10 @@
     documentPath,
     colorModeChoice = 'system',
     activeNav = 'files',
+    starredFolders = [],
+    starredNotes = [],
+    favoritedFolderPaths,
+    favoritedNotePaths,
     userLabel = 'Local user',
     tree,
     vaults,
@@ -70,6 +89,7 @@
     onTreeAction,
     onToggleVaultHidden,
     onResizeRail,
+    onUnstar,
     children,
   }: Props = $props();
 </script>
@@ -84,7 +104,13 @@
   />
 
   {#if activeNav === 'starred'}
-    <StarredPanel />
+    <StarredPanel
+      folders={starredFolders}
+      notes={starredNotes}
+      activePath={documentPath}
+      onOpen={onOpenFile}
+      onUnstar={onUnstar}
+    />
   {:else}
     <FilesPanel
       {vaultName}
@@ -96,6 +122,8 @@
       activePath={documentPath}
       {expandedFolderIds}
       {expandedVaultIds}
+      {favoritedFolderPaths}
+      {favoritedNotePaths}
       {onToggleFolder}
       {onToggleVault}
       {onOpenFile}

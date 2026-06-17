@@ -1,4 +1,4 @@
-import type { LocalSearchResult, LocalTreeNode } from './types';
+import type { LocalSearchResult, LocalTreeNode, StarredRowData } from './types';
 
 export const localEditorTreeFixture: LocalTreeNode[] = [
   {
@@ -51,3 +51,53 @@ export const localEditorSearchFixture: LocalSearchResult[] = [
 ];
 
 export const localEditorDocumentPath = 'projects/active/editor-shell.md';
+
+// A handful of starred rows, matching the tree fixture's paths + accents,
+// for the starred panel stories. Folders first, then notes — the grouping
+// the panel renders.
+export const localEditorStarredFoldersFixture: StarredRowData[] = [
+  {
+    id: 'folder:demo-vault:projects/active',
+    kind: 'folder',
+    label: 'active',
+    accent: 'coral',
+    path: 'projects/active',
+    available: true
+  },
+  {
+    id: 'folder:demo-vault:research',
+    kind: 'folder',
+    label: 'research',
+    accent: 'sky',
+    path: 'research',
+    available: true
+  }
+];
+
+export const localEditorStarredNotesFixture: StarredRowData[] = [
+  {
+    id: 'note:demo-vault:projects/active/launch-notes.md',
+    kind: 'note',
+    label: 'launch-notes.md',
+    accent: 'coral',
+    path: 'projects/active/launch-notes.md',
+    available: true
+  },
+  {
+    id: 'note:demo-vault:research/local-first.md',
+    kind: 'note',
+    label: 'local-first.md',
+    accent: 'sky',
+    path: 'research/local-first.md',
+    available: true
+  },
+  {
+    // A pin whose target no longer exists — renders dimmed + unavailable.
+    id: 'note:demo-vault:archive/old-plan.md',
+    kind: 'note',
+    label: 'old-plan.md',
+    accent: 'slate',
+    path: 'archive/old-plan.md',
+    available: false
+  }
+];

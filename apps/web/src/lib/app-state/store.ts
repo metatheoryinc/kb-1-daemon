@@ -23,6 +23,24 @@ export type ColorMode = 'light' | 'dark' | 'system';
 
 export const colorModes: readonly ColorMode[] = ['light', 'dark', 'system'];
 
+/**
+ * A pinned note or folder. `path` is the vault-relative path; `addedAt`
+ * captures the toggle moment so the starred panel can sort
+ * most-recently-starred first. `vaultId` is carried for shape fidelity
+ * and future multi-vault work even though the local shell has one vault.
+ */
+export interface FavoriteEntry {
+  kind: 'note' | 'folder';
+  vaultId: string;
+  path: string;
+  addedAt: number;
+}
+
+/** Identity of a favorite, independent of `addedAt`. */
+function favoriteKey(e: Pick<FavoriteEntry, 'kind' | 'vaultId' | 'path'>): string {
+  return `${e.kind}:${e.vaultId}:${e.path}`;
+}
+
 /** Default persistence slot. Stable across releases — renaming wipes state. */
 export const DEFAULT_PERSIST_KEY = 'kb2:app-state';
 
@@ -57,6 +75,8 @@ interface PersistedState {
   hiddenVaultIds: string[];
   /** Secondary (files) rail width in px. */
   secondaryRailWidth: number;
+  /** Pinned notes/folders. Persisted verbatim — see {@link FavoriteEntry}. */
+  favorites: FavoriteEntry[];
 }
 
 /** The live, in-memory app state. Mirrors the persisted slice plus actions. */
@@ -85,6 +105,11 @@ export interface AppState {
    * [{@link SECONDARY_RAIL_WIDTH_MIN}, {@link SECONDARY_RAIL_WIDTH_MAX}].
    */
   secondaryRailWidth: number;
+  /**
+   * Pinned notes/folders, persisted to localStorage. Ordered as
+   * inserted; the starred panel sorts by `addedAt` for display.
+   */
+  favorites: FavoriteEntry[];
 }
 
 export interface AppStateStore {
@@ -108,6 +133,24 @@ export interface AppStateStore {
   toggleVaultHidden: (vaultId: string) => void;
   /** Set the secondary rail width. Clamps to the sane range. */
   setSecondaryRailWidth: (width: number) => void;
+  /**
+   * Star/unstar a note or folder. Adds the entry (stamped with
+   * `addedAt`) when absent, removes it when present.
+   */
+  toggleFavorite: (entry: Pick<FavoriteEntry, 'kind' | 'vaultId' | 'path'>) => void;
+  /** Remove a favorite by identity. No-op when absent. */
+  removeFavorite: (entry: Pick<FavoriteEntry, 'kind' | 'vaultId' | 'path'>) => void;
+  /** Note deleted — exact-match removal of that note's favorite. */
+  favoritesOnNoteDeleted: (vaultId: string, path: string) => void;
+  /** Note renamed/moved — exact-match rewrite of that note's path. */
+  favoritesOnNoteRenamed: (vaultId: string, oldPath: string, newPath: string) => void;
+  /** Folder deleted — drop the folder favorite and every descendant. */
+  favoritesOnFolderDeleted: (vaultId: string, path: string) => void;
+  /**
+   * Folder renamed/moved — rewrite the folder favorite itself plus any
+   * descendant note/folder entries so pinned paths survive the move.
+   */
+  favoritesOnFolderRenamed: (vaultId: string, oldPath: string, newPath: string) => void;
 }
 
 export interface CreateAppStateOptions {
@@ -127,6 +170,7 @@ const DEFAULT_STATE: AppState = {
   collapsedVaultIds: new Set<string>(),
   hiddenVaultIds: [],
   secondaryRailWidth: SECONDARY_RAIL_WIDTH_DEFAULT,
+  favorites: [],
 };
 
 function sortedIds(ids: readonly string[]): string[] {
@@ -145,12 +189,32 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
+/** Parse a persisted favorites array, dropping any malformed entries. */
+function favoriteArray(value: unknown): FavoriteEntry[] {
+  if (!Array.isArray(value)) return [];
+  const out: FavoriteEntry[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const e = raw as Record<string, unknown>;
+    if (e.kind !== 'note' && e.kind !== 'folder') continue;
+    if (typeof e.vaultId !== 'string' || typeof e.path !== 'string') continue;
+    out.push({
+      kind: e.kind,
+      vaultId: e.vaultId,
+      path: e.path,
+      addedAt: typeof e.addedAt === 'number' ? e.addedAt : 0,
+    });
+  }
+  return out;
+}
+
 interface PersistedSlice {
   colorMode: ColorMode;
   expandedFolderIds: string[];
   collapsedVaultIds: string[];
   hiddenVaultIds: string[];
   secondaryRailWidth: number;
+  favorites: FavoriteEntry[];
 }
 
 function readPersisted(
@@ -173,6 +237,7 @@ function readPersisted(
       // Defensively re-clamp any out-of-range persisted width.
       out.secondaryRailWidth = clampSecondaryRailWidth(blob.secondaryRailWidth);
     }
+    if ('favorites' in blob) out.favorites = favoriteArray(blob.favorites);
     return out;
   } catch {
     // Corrupt blob — fall back to defaults rather than throwing.
@@ -197,6 +262,7 @@ export function createAppState(
     collapsedVaultIds: new Set(persisted.collapsedVaultIds ?? []),
     hiddenVaultIds: sortedIds(persisted.hiddenVaultIds ?? []),
     secondaryRailWidth: persisted.secondaryRailWidth ?? DEFAULT_STATE.secondaryRailWidth,
+    favorites: persisted.favorites ?? [],
   };
 
   const listeners = new Set<(state: AppState) => void>();
@@ -209,6 +275,7 @@ export function createAppState(
       collapsedVaultIds: [...state.collapsedVaultIds],
       hiddenVaultIds: state.hiddenVaultIds,
       secondaryRailWidth: state.secondaryRailWidth,
+      favorites: state.favorites,
     };
     try {
       storage.setItem(persistKey, JSON.stringify(blob));
@@ -271,6 +338,79 @@ export function createAppState(
       const clamped = clampSecondaryRailWidth(width);
       if (clamped === state.secondaryRailWidth) return;
       commit({ ...state, secondaryRailWidth: clamped });
+    },
+    toggleFavorite: (entry) => {
+      const target = favoriteKey(entry);
+      const idx = state.favorites.findIndex((e) => favoriteKey(e) === target);
+      if (idx >= 0) {
+        const next = state.favorites.slice();
+        next.splice(idx, 1);
+        commit({ ...state, favorites: next });
+        return;
+      }
+      commit({
+        ...state,
+        favorites: [
+          ...state.favorites,
+          { kind: entry.kind, vaultId: entry.vaultId, path: entry.path, addedAt: Date.now() },
+        ],
+      });
+    },
+    removeFavorite: (entry) => {
+      const target = favoriteKey(entry);
+      if (!state.favorites.some((e) => favoriteKey(e) === target)) return;
+      commit({ ...state, favorites: state.favorites.filter((e) => favoriteKey(e) !== target) });
+    },
+    favoritesOnNoteDeleted: (vaultId, path) => {
+      const next = state.favorites.filter(
+        (e) => !(e.kind === 'note' && e.vaultId === vaultId && e.path === path),
+      );
+      if (next.length === state.favorites.length) return;
+      commit({ ...state, favorites: next });
+    },
+    favoritesOnNoteRenamed: (vaultId, oldPath, newPath) => {
+      if (oldPath === newPath) return;
+      let changed = false;
+      const next = state.favorites.map((e) => {
+        if (e.kind === 'note' && e.vaultId === vaultId && e.path === oldPath) {
+          changed = true;
+          return { ...e, path: newPath };
+        }
+        return e;
+      });
+      if (!changed) return;
+      commit({ ...state, favorites: next });
+    },
+    favoritesOnFolderDeleted: (vaultId, path) => {
+      const prefix = `${path}/`;
+      const next = state.favorites.filter((e) => {
+        if (e.vaultId !== vaultId) return true;
+        if (e.path === path && e.kind === 'folder') return false;
+        if (e.path.startsWith(prefix)) return false;
+        return true;
+      });
+      if (next.length === state.favorites.length) return;
+      commit({ ...state, favorites: next });
+    },
+    favoritesOnFolderRenamed: (vaultId, oldPath, newPath) => {
+      if (oldPath === newPath) return;
+      const oldPrefix = `${oldPath}/`;
+      const newPrefix = `${newPath}/`;
+      let changed = false;
+      const next = state.favorites.map((e) => {
+        if (e.vaultId !== vaultId) return e;
+        if (e.kind === 'folder' && e.path === oldPath) {
+          changed = true;
+          return { ...e, path: newPath };
+        }
+        if (e.path.startsWith(oldPrefix)) {
+          changed = true;
+          return { ...e, path: newPrefix + e.path.slice(oldPrefix.length) };
+        }
+        return e;
+      });
+      if (!changed) return;
+      commit({ ...state, favorites: next });
     },
   };
 }

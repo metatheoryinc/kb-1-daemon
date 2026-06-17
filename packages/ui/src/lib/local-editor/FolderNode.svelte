@@ -19,6 +19,10 @@
         for whether a row is open — the shell owns this set. */
     expandedFolderIds?: Set<string>;
     depth?: number;
+    /** Set of starred folder paths — drives this row's menu item. */
+    favoritedFolderPaths?: Set<string>;
+    /** Set of starred note paths — threaded to descendant file rows. */
+    favoritedNotePaths?: Set<string>;
     /** Toggle a folder row. Called with the row's opaque key. */
     onToggleFolder?: (key: string) => void;
     onOpen?: (path: string) => void;
@@ -31,6 +35,8 @@
     activePath = '',
     expandedFolderIds = new Set<string>(),
     depth = 0,
+    favoritedFolderPaths,
+    favoritedNotePaths,
     onToggleFolder,
     onOpen,
     onAction,
@@ -39,6 +45,7 @@
   let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
   const key = $derived(folderKey(vaultId, node.path));
   const open = $derived(expandedFolderIds.has(key));
+  const favorited = $derived(favoritedFolderPaths?.has(node.path) ?? false);
   const indent = $derived(12 + depth * 14);
   const folderColor = $derived(accentHex[node.metadata?.color ?? 'slate']);
   const folderIcon = $derived(node.metadata?.icon ?? null);
@@ -46,6 +53,9 @@
   const items = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onAction?.({ kind: 'folder', action: 'new-note', path: node.path }) },
     { label: 'New Folder', onSelect: () => onAction?.({ kind: 'folder', action: 'new-folder', path: node.path }) },
+    favorited
+      ? { label: 'Unfavorite', onSelect: () => onAction?.({ kind: 'folder', action: 'unfavorite', path: node.path }) }
+      : { label: 'Favorite', onSelect: () => onAction?.({ kind: 'folder', action: 'favorite', path: node.path }) },
     { label: 'Rename', onSelect: () => onAction?.({ kind: 'folder', action: 'rename', path: node.path }) },
     { label: 'Move', onSelect: () => onAction?.({ kind: 'folder', action: 'move', path: node.path }) },
     {
@@ -107,12 +117,21 @@
             {activePath}
             {expandedFolderIds}
             depth={depth + 1}
+            {favoritedFolderPaths}
+            {favoritedNotePaths}
             {onToggleFolder}
             {onOpen}
             {onAction}
           />
         {:else}
-          <FileNode node={child} depth={depth + 1} {activePath} {onOpen} {onAction} />
+          <FileNode
+            node={child}
+            depth={depth + 1}
+            {activePath}
+            {favoritedNotePaths}
+            {onOpen}
+            {onAction}
+          />
         {/if}
       {/each}
     </div>

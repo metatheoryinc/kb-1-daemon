@@ -10,6 +10,7 @@ export {
   type AppStateStore,
   type ColorMode,
   type CreateAppStateOptions,
+  type FavoriteEntry,
 } from './store';
 export { setAppStateContext, useAppState } from './context';
 export { expansionKey, expandToPath, ancestorKeysForPath } from './expansion';

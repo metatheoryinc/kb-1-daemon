@@ -26,6 +26,10 @@
         vault renders open by default. When omitted (Storybook without
         wiring) the group renders open. */
     expandedVaultIds?: Set<string>;
+    /** Set of starred folder paths — threaded to folder rows' menus. */
+    favoritedFolderPaths?: Set<string>;
+    /** Set of starred note paths — threaded to file rows' menus. */
+    favoritedNotePaths?: Set<string>;
     onToggleFolder?: (key: string) => void;
     /** Toggle this vault group's expansion. Called with the vault key. */
     onToggleVault?: (key: string) => void;
@@ -41,6 +45,8 @@
     activePath = '',
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
+    favoritedFolderPaths,
+    favoritedNotePaths,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
@@ -97,12 +103,20 @@
             {vaultId}
             {activePath}
             {expandedFolderIds}
+            {favoritedFolderPaths}
+            {favoritedNotePaths}
             {onToggleFolder}
             onOpen={onOpenFile}
             onAction={onTreeAction}
           />
         {:else}
-          <FileNode {node} {activePath} onOpen={onOpenFile} onAction={onTreeAction} />
+          <FileNode
+            {node}
+            {activePath}
+            {favoritedNotePaths}
+            onOpen={onOpenFile}
+            onAction={onTreeAction}
+          />
         {/if}
       {/each}
     </div>

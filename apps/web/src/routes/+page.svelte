@@ -37,7 +37,9 @@
     ancestorKeysForPath,
     expansionKey,
     type ColorMode,
+    type FavoriteEntry,
   } from '$lib/app-state';
+  import { buildStarredViewData } from '$lib/favorites-data';
   import { onMount, untrack } from 'svelte';
 
   interface TreeEntry {
@@ -126,6 +128,23 @@
   // template re-renders on change; the store owns mutation + storage.
   let hiddenVaultIds = $state<string[]>(appState.getState().hiddenVaultIds);
   let secondaryRailWidth = $state<number>(appState.getState().secondaryRailWidth);
+  // Starred notes/folders, mirrored from the persisted store. The store
+  // owns mutation + localStorage; the template builds its view model from
+  // this list plus the live tree.
+  let favorites = $state<FavoriteEntry[]>(appState.getState().favorites);
+
+  // Render-ready starred rows + the path sets the tree menus read to
+  // pick Favorite vs Unfavorite. Recomputed when favorites or the tree
+  // (availability + accents) change.
+  const starredView = $derived(
+    buildStarredViewData({ favorites, vaultId, tree }),
+  );
+  const favoritedNotePaths = $derived(
+    new Set(favorites.filter((e) => e.kind === 'note' && e.vaultId === vaultId).map((e) => e.path)),
+  );
+  const favoritedFolderPaths = $derived(
+    new Set(favorites.filter((e) => e.kind === 'folder' && e.vaultId === vaultId).map((e) => e.path)),
+  );
   // Vaults default open: the persisted shape is a collapse deny-list, so
   // the expanded set is its complement over the one local vault.
   const expandedVaultIds = $derived.by<Set<string>>(() => {
@@ -361,6 +380,11 @@
     appState.setSecondaryRailWidth(next);
   }
 
+  // Remove a starred row from favorites (from the starred panel).
+  function unstar(entry: { kind: 'note' | 'folder'; path: string }): void {
+    appState.removeFavorite({ kind: entry.kind, vaultId, path: entry.path });
+  }
+
   async function refreshVaultInfo(): Promise<void> {
     try {
       const info = await kbService.vaultInfo();
@@ -457,6 +481,11 @@
     const parent = parentOf(action.path);
     const name = leafName(action.path);
 
+    if (action.action === 'favorite' || action.action === 'unfavorite') {
+      appState.toggleFavorite({ kind: 'note', vaultId, path: action.path });
+      return;
+    }
+
     if (action.action === 'delete') {
       dialog = {
         kind: 'confirm',
@@ -466,7 +495,10 @@
         destructive: true,
         busy: false,
         error: null,
-        run: () => kbService.deleteNote(action.path),
+        run: async () => {
+          await kbService.deleteNote(action.path);
+          appState.favoritesOnNoteDeleted(vaultId, action.path);
+        },
       };
       return;
     }
@@ -483,6 +515,7 @@
           const target = joinPath(parent, withMarkdownExtension(nextName));
           if (target === action.path) return;
           await kbService.moveNote(action.path, target);
+          appState.favoritesOnNoteRenamed(vaultId, action.path, target);
         },
       };
       return;
@@ -501,6 +534,7 @@
         const target = joinPath(destination, name);
         if (target === action.path) return;
         await kbService.moveNote(action.path, target);
+        appState.favoritesOnNoteRenamed(vaultId, action.path, target);
       },
     };
   }
@@ -508,6 +542,11 @@
   function openFolderDialog(action: Extract<LocalTreeAction, { kind: 'folder' }>): void {
     const parent = parentOf(action.path);
     const name = leafName(action.path);
+
+    if (action.action === 'favorite' || action.action === 'unfavorite') {
+      appState.toggleFavorite({ kind: 'folder', vaultId, path: action.path });
+      return;
+    }
 
     if (action.action === 'new-note') {
       openNewNoteDialog(action.path);
@@ -528,7 +567,10 @@
         destructive: true,
         busy: false,
         error: null,
-        run: () => kbService.deleteFolder(action.path),
+        run: async () => {
+          await kbService.deleteFolder(action.path);
+          appState.favoritesOnFolderDeleted(vaultId, action.path);
+        },
       };
       return;
     }
@@ -545,6 +587,7 @@
           const target = joinPath(parent, nextName);
           if (target === action.path) return;
           await kbService.moveFolder(action.path, target);
+          appState.favoritesOnFolderRenamed(vaultId, action.path, target);
         },
       };
       return;
@@ -566,6 +609,7 @@
         const target = joinPath(destination, name);
         if (target === action.path) return;
         await kbService.moveFolder(action.path, target);
+        appState.favoritesOnFolderRenamed(vaultId, action.path, target);
       },
     };
   }
@@ -732,11 +776,13 @@
     collapsedVaultIds = snapshot.collapsedVaultIds;
     hiddenVaultIds = snapshot.hiddenVaultIds;
     secondaryRailWidth = snapshot.secondaryRailWidth;
+    favorites = snapshot.favorites;
     return appState.subscribe((s) => {
       expandedFolderIds = s.expandedFolderIds;
       collapsedVaultIds = s.collapsedVaultIds;
       hiddenVaultIds = s.hiddenVaultIds;
       secondaryRailWidth = s.secondaryRailWidth;
+      favorites = s.favorites;
     });
   });
 
@@ -810,11 +856,16 @@
   {secondaryRailWidth}
   {expandedFolderIds}
   {expandedVaultIds}
+  {favoritedFolderPaths}
+  {favoritedNotePaths}
+  starredFolders={starredView.folders}
+  starredNotes={starredView.notes}
   onSelectNav={(id) => {
     activeNav = id;
   }}
   onToggleVaultHidden={toggleVaultHidden}
   onResizeRail={resizeRail}
+  onUnstar={unstar}
   onToggleColorMode={toggleColorMode}
   onToggleFolder={toggleFolder}
   onToggleVault={toggleVault}

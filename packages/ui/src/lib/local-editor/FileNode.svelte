@@ -10,18 +10,31 @@
         folder's label rather than its caret. */
     depth?: number;
     activePath?: string;
+    /** Set of starred note paths — drives the Favorite/Unfavorite item. */
+    favoritedNotePaths?: Set<string>;
     onOpen?: (path: string) => void;
     onAction?: (action: LocalTreeAction) => void;
   }
 
-  let { node, depth = 0, activePath = '', onOpen, onAction }: Props = $props();
+  let {
+    node,
+    depth = 0,
+    activePath = '',
+    favoritedNotePaths,
+    onOpen,
+    onAction,
+  }: Props = $props();
   let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
   const active = $derived(activePath === node.path);
+  const favorited = $derived(favoritedNotePaths?.has(node.path) ?? false);
   // Mirror the folder indent (12 + depth * 14) plus a 4px nudge so the
   // file icon lands under the folder label, not under the caret.
   const indent = $derived(12 + depth * 14 + 4);
 
   const items = $derived<MenuItem[]>([
+    favorited
+      ? { label: 'Unfavorite', onSelect: () => onAction?.({ kind: 'file', action: 'unfavorite', path: node.path }) }
+      : { label: 'Favorite', onSelect: () => onAction?.({ kind: 'file', action: 'favorite', path: node.path }) },
     { label: 'Rename', onSelect: () => onAction?.({ kind: 'file', action: 'rename', path: node.path }) },
     { label: 'Move', onSelect: () => onAction?.({ kind: 'file', action: 'move', path: node.path }) },
     {

@@ -28,6 +28,10 @@
     expandedFolderIds?: Set<string>;
     /** Set of expanded vault keys (`vault:<id>`). Omit to render open. */
     expandedVaultIds?: Set<string>;
+    /** Set of starred folder paths — threaded to folder rows' menus. */
+    favoritedFolderPaths?: Set<string>;
+    /** Set of starred note paths — threaded to file rows' menus. */
+    favoritedNotePaths?: Set<string>;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
@@ -46,6 +50,8 @@
     activePath = '',
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
+    favoritedFolderPaths,
+    favoritedNotePaths,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
@@ -129,6 +135,8 @@
           {activePath}
           {expandedFolderIds}
           {expandedVaultIds}
+          {favoritedFolderPaths}
+          {favoritedNotePaths}
           {onToggleFolder}
           {onToggleVault}
           {onOpenFile}

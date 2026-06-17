@@ -1,5 +1,37 @@
 <script lang="ts">
+  /**
+   * The starred (favorites) panel — the middle-column view the rail
+   * shows in "starred" mode. Renders the app's starred notes and folders
+   * grouped Folders-then-Notes, each row clickable to open in-canvas and
+   * unstar-able in place. Falls back to the empty-state when nothing is
+   * pinned. Prop-driven only: the app builds the rows + owns persistence.
+   */
   import Icon from '../primitives/Icon.svelte';
+  import StarredRow from './StarredRow.svelte';
+  import type { StarredRowData } from './types';
+
+  interface Props {
+    /** Starred folder rows, most-recently-starred first. */
+    folders?: StarredRowData[];
+    /** Starred note rows, most-recently-starred first. */
+    notes?: StarredRowData[];
+    /** Path of the open document — highlights the matching row. */
+    activePath?: string;
+    /** Open a starred row's target in the canvas. */
+    onOpen?: (path: string) => void;
+    /** Remove a row from favorites by path + kind. */
+    onUnstar?: (entry: { kind: 'note' | 'folder'; path: string }) => void;
+  }
+
+  let {
+    folders = [],
+    notes = [],
+    activePath = '',
+    onOpen,
+    onUnstar,
+  }: Props = $props();
+
+  const total = $derived(folders.length + notes.length);
 </script>
 
 <aside class="starred-panel" aria-label="Starred">
@@ -9,15 +41,63 @@
   </header>
 
   <div class="body">
-    <div class="empty">
-      <span class="empty-icon" aria-hidden="true">
-        <Icon name="star" size={22} weight="regular" />
-      </span>
-      <p class="empty-title">No starred items yet</p>
-      <p class="empty-hint">
-        Star a note or folder to see it here.
-      </p>
-    </div>
+    {#if total === 0}
+      <div class="empty">
+        <span class="empty-icon" aria-hidden="true">
+          <Icon name="star" size={22} weight="regular" />
+        </span>
+        <p class="empty-title">No starred items yet</p>
+        <p class="empty-hint">
+          Star a note or folder to see it here.
+        </p>
+      </div>
+    {:else}
+      {#if folders.length > 0}
+        <section class="group">
+          <header class="group-head">
+            <h3 class="group-label">Folders · {folders.length}</h3>
+          </header>
+          <div class="rows">
+            {#each folders as row (row.id)}
+              <StarredRow
+                label={row.label}
+                meta="folder"
+                kind={row.kind}
+                accent={row.accent}
+                path={row.path}
+                available={row.available}
+                active={row.path === activePath}
+                onpick={(path) => onOpen?.(path)}
+                onunstar={(path) => onUnstar?.({ kind: 'folder', path })}
+              />
+            {/each}
+          </div>
+        </section>
+      {/if}
+
+      {#if notes.length > 0}
+        <section class="group">
+          <header class="group-head">
+            <h3 class="group-label">Notes · {notes.length}</h3>
+          </header>
+          <div class="rows">
+            {#each notes as row (row.id)}
+              <StarredRow
+                label={row.label}
+                meta="note"
+                kind={row.kind}
+                accent={row.accent}
+                path={row.path}
+                available={row.available}
+                active={row.path === activePath}
+                onpick={(path) => onOpen?.(path)}
+                onunstar={(path) => onUnstar?.({ kind: 'note', path })}
+              />
+            {/each}
+          </div>
+        </section>
+      {/if}
+    {/if}
   </div>
 </aside>
 
@@ -59,6 +139,30 @@
     min-height: 0;
     overflow-y: auto;
     padding: 10px 10px 14px;
+  }
+
+  .group + .group {
+    margin-top: 12px;
+  }
+
+  .group-head {
+    margin: 0 0 4px 8px;
+  }
+
+  .group-label {
+    margin: 0;
+    color: var(--rd-ink-4);
+    font-family: var(--rd-ui);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
 
   .empty {
