@@ -6,6 +6,7 @@ export const iconNames = [
   'activity',
   'people',
   'star',
+  'user',
   'stop',
   'history',
   'refresh',

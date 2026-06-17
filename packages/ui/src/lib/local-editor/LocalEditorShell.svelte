@@ -35,6 +35,12 @@
     /** Set of starred note paths — drives the tree menus' Favorite item. */
     favoritedNotePaths?: Set<string>;
     userLabel?: string;
+    /** Wordmark beside the rail's brand mark. App-supplied so the package
+        stays product-agnostic. */
+    brandLabel?: string;
+    /** Whether the primary icon rail is collapsed to icon-only width.
+        App-owned + persisted. */
+    railCollapsed?: boolean;
     tree: LocalTreeNode[];
     /** Full set of vaults the filter lists. Omit for the single-vault default. */
     vaults?: VaultFilterEntry[];
@@ -48,6 +54,8 @@
     expandedVaultIds?: Set<string>;
     onSelectNav?: (id: RailNavId) => void;
     onToggleColorMode?: () => void;
+    /** Toggle the primary rail's collapsed state. App owns persistence. */
+    onToggleRailCollapsed?: () => void;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
@@ -75,6 +83,8 @@
     favoritedFolderPaths,
     favoritedNotePaths,
     userLabel = 'Local user',
+    brandLabel = 'Notes',
+    railCollapsed = false,
     tree,
     vaults,
     hiddenVaultIds = [],
@@ -83,6 +93,7 @@
     expandedVaultIds,
     onSelectNav,
     onToggleColorMode,
+    onToggleRailCollapsed,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
@@ -94,13 +105,20 @@
   }: Props = $props();
 </script>
 
-<main class="local-editor-shell" style="--rd-mid-w: {secondaryRailWidth}px">
+<main
+  class="local-editor-shell"
+  class:rail-collapsed={railCollapsed}
+  style="--rd-mid-w: {secondaryRailWidth}px"
+>
   <PrimaryRail
     {activeNav}
     colorMode={colorModeChoice}
     {userLabel}
+    {brandLabel}
+    collapsed={railCollapsed}
     {onSelectNav}
     {onToggleColorMode}
+    onToggleCollapsed={onToggleRailCollapsed}
   />
 
   {#if activeNav === 'starred'}
@@ -153,7 +171,14 @@
        its intrinsic 6px, and the editor pane absorbs the remaining
        slack. `--rd-mid-w` defaults to the design width when no app sets
        it (e.g. Storybook fixtures). */
-    grid-template-columns: var(--rd-rail-w-collapsed) var(--rd-mid-w, 282px) auto minmax(0, 1fr);
+    /* First column tracks the primary rail's own width so the rail never
+       overflows or leaves a gap. Defaults to the expanded width; the
+       `rail-collapsed` modifier swaps to the collapsed width, and the
+       transition matches the rail's internal width animation so the grid
+       and the rail move together. */
+    --rd-rail-col: var(--rd-rail-w);
+    grid-template-columns: var(--rd-rail-col) var(--rd-mid-w, 282px) auto minmax(0, 1fr);
+    transition: grid-template-columns 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     /* Single bounded row pinned to the viewport. Without an explicit
        row track the implicit row is `auto`-sized and grows to the
        editor's content height (a long note is 20k+ px tall), which
@@ -168,6 +193,10 @@
     color: var(--rd-ink-2);
     font-family: var(--rd-ui);
     overflow: hidden;
+  }
+
+  .local-editor-shell.rail-collapsed {
+    --rd-rail-col: var(--rd-rail-w-collapsed);
   }
 
   .workspace {
@@ -189,7 +218,7 @@
 
   @media (max-width: 760px) {
     .local-editor-shell {
-      grid-template-columns: var(--rd-rail-w-collapsed) minmax(176px, 42vw) auto minmax(0, 1fr);
+      grid-template-columns: var(--rd-rail-col) minmax(176px, 42vw) auto minmax(0, 1fr);
     }
   }
 </style>

@@ -128,6 +128,10 @@
   // template re-renders on change; the store owns mutation + storage.
   let hiddenVaultIds = $state<string[]>(appState.getState().hiddenVaultIds);
   let secondaryRailWidth = $state<number>(appState.getState().secondaryRailWidth);
+  // Primary-rail collapsed state — persisted in the app-state store. The
+  // brand mark at the top of the rail toggles it; mirror into `$state` so
+  // the template re-renders on change.
+  let railCollapsed = $state<boolean>(appState.getState().railCollapsed);
   // Starred notes/folders, mirrored from the persisted store. The store
   // owns mutation + localStorage; the template builds its view model from
   // this list plus the live tree.
@@ -370,6 +374,10 @@
 
   function toggleColorMode(): void {
     appState.cycleColorMode();
+  }
+
+  function toggleRailCollapsed(): void {
+    appState.toggleRailCollapsed();
   }
 
   function toggleVaultHidden(id: string): void {
@@ -776,12 +784,14 @@
     collapsedVaultIds = snapshot.collapsedVaultIds;
     hiddenVaultIds = snapshot.hiddenVaultIds;
     secondaryRailWidth = snapshot.secondaryRailWidth;
+    railCollapsed = snapshot.railCollapsed;
     favorites = snapshot.favorites;
     return appState.subscribe((s) => {
       expandedFolderIds = s.expandedFolderIds;
       collapsedVaultIds = s.collapsedVaultIds;
       hiddenVaultIds = s.hiddenVaultIds;
       secondaryRailWidth = s.secondaryRailWidth;
+      railCollapsed = s.railCollapsed;
       favorites = s.favorites;
     });
   });
@@ -850,6 +860,7 @@
   {documentPath}
   colorModeChoice={colorModePref}
   {activeNav}
+  {railCollapsed}
   {tree}
   {vaults}
   {hiddenVaultIds}
@@ -867,6 +878,7 @@
   onResizeRail={resizeRail}
   onUnstar={unstar}
   onToggleColorMode={toggleColorMode}
+  onToggleRailCollapsed={toggleRailCollapsed}
   onToggleFolder={toggleFolder}
   onToggleVault={toggleVault}
   onOpenFile={(path) => {

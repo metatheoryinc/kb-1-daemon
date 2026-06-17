@@ -75,6 +75,8 @@ interface PersistedState {
   hiddenVaultIds: string[];
   /** Secondary (files) rail width in px. */
   secondaryRailWidth: number;
+  /** Whether the primary icon rail is collapsed to icon-only width. */
+  railCollapsed: boolean;
   /** Pinned notes/folders. Persisted verbatim — see {@link FavoriteEntry}. */
   favorites: FavoriteEntry[];
 }
@@ -106,6 +108,12 @@ export interface AppState {
    */
   secondaryRailWidth: number;
   /**
+   * Whether the primary icon rail is collapsed to icon-only width.
+   * Persisted so the rail's width survives reload. The brand mark at
+   * the top of the rail toggles it.
+   */
+  railCollapsed: boolean;
+  /**
    * Pinned notes/folders, persisted to localStorage. Ordered as
    * inserted; the starred panel sorts by `addedAt` for display.
    */
@@ -133,6 +141,10 @@ export interface AppStateStore {
   toggleVaultHidden: (vaultId: string) => void;
   /** Set the secondary rail width. Clamps to the sane range. */
   setSecondaryRailWidth: (width: number) => void;
+  /** Toggle the primary rail between collapsed (icon-only) and expanded. */
+  toggleRailCollapsed: () => void;
+  /** Set the primary rail's collapsed state directly. */
+  setRailCollapsed: (collapsed: boolean) => void;
   /**
    * Star/unstar a note or folder. Adds the entry (stamped with
    * `addedAt`) when absent, removes it when present.
@@ -170,6 +182,7 @@ const DEFAULT_STATE: AppState = {
   collapsedVaultIds: new Set<string>(),
   hiddenVaultIds: [],
   secondaryRailWidth: SECONDARY_RAIL_WIDTH_DEFAULT,
+  railCollapsed: false,
   favorites: [],
 };
 
@@ -214,6 +227,7 @@ interface PersistedSlice {
   collapsedVaultIds: string[];
   hiddenVaultIds: string[];
   secondaryRailWidth: number;
+  railCollapsed: boolean;
   favorites: FavoriteEntry[];
 }
 
@@ -237,6 +251,7 @@ function readPersisted(
       // Defensively re-clamp any out-of-range persisted width.
       out.secondaryRailWidth = clampSecondaryRailWidth(blob.secondaryRailWidth);
     }
+    if (typeof blob.railCollapsed === 'boolean') out.railCollapsed = blob.railCollapsed;
     if ('favorites' in blob) out.favorites = favoriteArray(blob.favorites);
     return out;
   } catch {
@@ -262,6 +277,7 @@ export function createAppState(
     collapsedVaultIds: new Set(persisted.collapsedVaultIds ?? []),
     hiddenVaultIds: sortedIds(persisted.hiddenVaultIds ?? []),
     secondaryRailWidth: persisted.secondaryRailWidth ?? DEFAULT_STATE.secondaryRailWidth,
+    railCollapsed: persisted.railCollapsed ?? DEFAULT_STATE.railCollapsed,
     favorites: persisted.favorites ?? [],
   };
 
@@ -275,6 +291,7 @@ export function createAppState(
       collapsedVaultIds: [...state.collapsedVaultIds],
       hiddenVaultIds: state.hiddenVaultIds,
       secondaryRailWidth: state.secondaryRailWidth,
+      railCollapsed: state.railCollapsed,
       favorites: state.favorites,
     };
     try {
@@ -338,6 +355,11 @@ export function createAppState(
       const clamped = clampSecondaryRailWidth(width);
       if (clamped === state.secondaryRailWidth) return;
       commit({ ...state, secondaryRailWidth: clamped });
+    },
+    toggleRailCollapsed: () => commit({ ...state, railCollapsed: !state.railCollapsed }),
+    setRailCollapsed: (collapsed) => {
+      if (collapsed === state.railCollapsed) return;
+      commit({ ...state, railCollapsed: collapsed });
     },
     toggleFavorite: (entry) => {
       const target = favoriteKey(entry);

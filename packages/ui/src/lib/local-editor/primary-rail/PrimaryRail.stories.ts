@@ -8,18 +8,32 @@ const meta = {
   args: {
     mode: 'light',
     colorMode: 'system',
-    activeNav: 'files'
+    activeNav: 'files',
+    collapsed: false
   }
 } satisfies Meta<typeof PrimaryRailDemo>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Light: Story = {};
+export const Expanded: Story = {};
 
-export const Dark: Story = {
+export const ExpandedDark: Story = {
   args: {
     mode: 'dark'
+  }
+};
+
+export const Collapsed: Story = {
+  args: {
+    collapsed: true
+  }
+};
+
+export const CollapsedDark: Story = {
+  args: {
+    mode: 'dark',
+    collapsed: true
   }
 };
 
