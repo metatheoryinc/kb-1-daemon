@@ -1,6 +1,4 @@
 <script lang="ts">
-  import IconButton from '../primitives/IconButton.svelte';
-  import Icon from '../primitives/Icon.svelte';
   import LiveDot from '../primitives/LiveDot.svelte';
   import SearchInput from '../primitives/SearchInput.svelte';
   import FileNode from './FileNode.svelte';
@@ -12,7 +10,6 @@
     vaultName: string;
     daemonLabel: string;
     daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
-    colorMode?: 'light' | 'dark';
     searchValue?: string;
     tree: LocalTreeNode[];
     activePath?: string;
@@ -23,7 +20,6 @@
     searchLoading?: boolean;
     onSearchInput?: (value: string) => void;
     onSearchClear?: () => void;
-    onToggleColorMode?: () => void;
     onToggleFolder?: (path: string) => void;
     onOpenFile?: (path: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
@@ -33,7 +29,6 @@
     vaultName,
     daemonLabel,
     daemonStatus = 'open',
-    colorMode = 'light',
     searchValue = '',
     tree,
     activePath = '',
@@ -44,7 +39,6 @@
     searchLoading = false,
     onSearchInput,
     onSearchClear,
-    onToggleColorMode,
     onToggleFolder,
     onOpenFile,
     onTreeAction,
@@ -71,14 +65,6 @@
           <LiveDot size={8} color={dotColor} pulse={dotPulse} title={daemonLabel} />
         </div>
       </div>
-      <IconButton
-        title={colorMode === 'dark' ? 'Use light mode' : 'Use dark mode'}
-        size="sm"
-        variant="quiet"
-        onclick={onToggleColorMode}
-      >
-        <Icon name={colorMode === 'dark' ? 'sun' : 'moon'} size={14} />
-      </IconButton>
     </div>
     <SearchInput
       value={searchValue}

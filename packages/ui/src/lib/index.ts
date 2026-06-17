@@ -31,6 +31,10 @@ export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
 export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
 export { default as FolderNode } from './local-editor/FolderNode.svelte';
 export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
+export { default as StarredPanel } from './local-editor/StarredPanel.svelte';
+export { default as PrimaryRail, type RailNavId } from './local-editor/primary-rail/PrimaryRail.svelte';
+export { default as PrimaryRailItem } from './local-editor/primary-rail/PrimaryRailItem.svelte';
+export { default as PrimaryRailUserChip } from './local-editor/primary-rail/PrimaryRailUserChip.svelte';
 export type {
   LocalFileAction,
   LocalFileNode,

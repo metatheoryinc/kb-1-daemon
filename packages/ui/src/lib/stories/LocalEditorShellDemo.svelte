@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { LocalEditorShell } from '../index';
+  import { LocalEditorShell, type RailNavId } from '../index';
   import {
     localEditorDocumentPath,
     localEditorSearchFixture,
@@ -7,6 +7,11 @@
   } from '../local-editor/fixtures';
 
   let expandedPaths = $state(new Set(['projects', 'projects/active', 'research']));
+  let activeNav = $state<RailNavId>('files');
+  let colorModeChoice = $state<'light' | 'dark' | 'system'>('system');
+
+  const cycle = (m: 'light' | 'dark' | 'system'): 'light' | 'dark' | 'system' =>
+    m === 'light' ? 'dark' : m === 'dark' ? 'system' : 'light';
 </script>
 
 <LocalEditorShell
@@ -15,11 +20,19 @@
   daemonStatus="open"
   documentPath={localEditorDocumentPath}
   colorMode="light"
+  {colorModeChoice}
+  {activeNav}
   tree={localEditorTreeFixture}
   {expandedPaths}
   searchValue=""
   searchResults={localEditorSearchFixture}
   searchTotal={localEditorSearchFixture.length}
+  onSelectNav={(id) => {
+    activeNav = id;
+  }}
+  onToggleColorMode={() => {
+    colorModeChoice = cycle(colorModeChoice);
+  }}
   onToggleFolder={(path) => {
     const next = new Set(expandedPaths);
     if (next.has(path)) {

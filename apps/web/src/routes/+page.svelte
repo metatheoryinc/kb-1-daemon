@@ -18,6 +18,7 @@
     type LocalSearchResult,
     type LocalTreeAction,
     type LocalTreeNode,
+    type RailNavId,
   } from '@kb-2/ui';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import { useAppState, type ColorMode } from '$lib/app-state';
@@ -66,6 +67,9 @@
   let searchTruncated = $state(false);
   let searchLoading = $state(false);
   let mounted = $state(false);
+  // Which secondary panel the rail has selected. 'files' shows the tree;
+  // 'starred' shows the (currently empty) starred view.
+  let activeNav = $state<RailNavId>('files');
 
   // The app-state store owns the persisted light / dark / system choice
   // and the root layout applies it to the DOM. The FilesPanel toggle is
@@ -558,6 +562,8 @@
   {daemonStatus}
   {documentPath}
   {colorMode}
+  colorModeChoice={colorModePref}
+  {activeNav}
   {tree}
   {expandedPaths}
   {searchValue}
@@ -565,6 +571,9 @@
   {searchTotal}
   {searchTruncated}
   {searchLoading}
+  onSelectNav={(id) => {
+    activeNav = id;
+  }}
   onSearchInput={updateSearch}
   onSearchClear={clearSearch}
   onToggleColorMode={toggleColorMode}
@@ -653,11 +662,11 @@
 
   .error {
     position: fixed;
-    left: 296px;
+    left: 360px;
     bottom: 16px;
     z-index: 30;
     margin: 0;
-    max-width: min(520px, calc(100vw - 328px));
+    max-width: min(520px, calc(100vw - 392px));
     border: 1px solid color-mix(in srgb, var(--destructive) 40%, transparent);
     border-radius: 6px;
     background: var(--rd-panel);

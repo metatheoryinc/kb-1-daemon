@@ -8,7 +8,6 @@ const meta = {
   args: {
     vaultName: 'demo-vault',
     daemonLabel: 'Daemon · live',
-    colorMode: 'light',
     tree: localEditorTreeFixture,
     activePath: 'projects/active/editor-shell.md',
     expandedPaths: new Set(['projects', 'projects/active', 'research']),
