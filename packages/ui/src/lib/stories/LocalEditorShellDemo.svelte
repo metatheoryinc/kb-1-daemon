@@ -1,12 +1,45 @@
 <script lang="ts">
-  import { LocalEditorShell } from '../index';
+  import { LocalEditorShell, type BreadcrumbItem, type RailNavId } from '../index';
+  import { folderKey } from '../local-editor/expansion';
   import {
     localEditorDocumentPath,
-    localEditorSearchFixture,
     localEditorTreeFixture
   } from '../local-editor/fixtures';
 
-  let expandedPaths = $state(new Set(['projects', 'projects/active', 'research']));
+  const VAULT_ID = 'demo-vault';
+
+  // Breadcrumb trail built from the fixture path, matching how the app
+  // derives it: vault name first, then each path segment with the leaf
+  // marked current.
+  const breadcrumbItems: BreadcrumbItem[] = [
+    { label: 'demo-vault' },
+    ...localEditorDocumentPath
+      .split('/')
+      .filter(Boolean)
+      .map((segment, index, parts) => ({
+        label: segment,
+        current: index === parts.length - 1
+      }))
+  ];
+
+  let documentFavorited = $state(false);
+
+  let expandedFolderIds = $state(
+    new Set([
+      folderKey(VAULT_ID, 'projects'),
+      folderKey(VAULT_ID, 'projects/active'),
+      folderKey(VAULT_ID, 'research')
+    ])
+  );
+  let activeNav = $state<RailNavId>('files');
+  let colorModeChoice = $state<'light' | 'dark' | 'system'>('system');
+  let hiddenVaultIds = $state<string[]>([]);
+  let secondaryRailWidth = $state(282);
+
+  const clampWidth = (w: number) => Math.round(Math.min(564, Math.max(240, w)));
+
+  const cycle = (m: 'light' | 'dark' | 'system'): 'light' | 'dark' | 'system' =>
+    m === 'light' ? 'dark' : m === 'dark' ? 'system' : 'light';
 </script>
 
 <LocalEditorShell
@@ -14,20 +47,44 @@
   daemonLabel="Daemon · live"
   daemonStatus="open"
   documentPath={localEditorDocumentPath}
-  colorMode="light"
+  {breadcrumbItems}
+  statusLabel="Saved"
+  {documentFavorited}
+  onToggleDocumentFavorite={() => {
+    documentFavorited = !documentFavorited;
+  }}
+  onRenameDocument={() => {}}
+  onMoveDocument={() => {}}
+  onDeleteDocument={() => {}}
+  {colorModeChoice}
+  {activeNav}
+  vaultId={VAULT_ID}
   tree={localEditorTreeFixture}
-  {expandedPaths}
-  searchValue=""
-  searchResults={localEditorSearchFixture}
-  searchTotal={localEditorSearchFixture.length}
-  onToggleFolder={(path) => {
-    const next = new Set(expandedPaths);
-    if (next.has(path)) {
-      next.delete(path);
+  {expandedFolderIds}
+  {hiddenVaultIds}
+  {secondaryRailWidth}
+  onSelectNav={(id) => {
+    activeNav = id;
+  }}
+  onToggleVaultHidden={(id) => {
+    hiddenVaultIds = hiddenVaultIds.includes(id)
+      ? hiddenVaultIds.filter((x) => x !== id)
+      : [...hiddenVaultIds, id];
+  }}
+  onResizeRail={(next) => {
+    secondaryRailWidth = clampWidth(next);
+  }}
+  onToggleColorMode={() => {
+    colorModeChoice = cycle(colorModeChoice);
+  }}
+  onToggleFolder={(key) => {
+    const next = new Set(expandedFolderIds);
+    if (next.has(key)) {
+      next.delete(key);
     } else {
-      next.add(path);
+      next.add(key);
     }
-    expandedPaths = next;
+    expandedFolderIds = next;
   }}
 >
   <div class="fake-editor">

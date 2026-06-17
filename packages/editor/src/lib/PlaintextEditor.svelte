@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Doc } from 'yjs';
-  import type { Awareness } from 'y-protocols/awareness';
   import * as Y from 'yjs';
   import {
     EditorState,
@@ -33,20 +32,12 @@
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
-  import {
-    plaintextCursorConsumer,
-    plaintextCursorProducer,
-  } from './plaintext-awareness';
 
   interface Props {
     /** Shared Y.Doc supplied by the host app/provider. */
     ydoc: Doc;
     /** Bound Y.Text supplied by the host app/provider. */
     ytext: Y.Text;
-    /** Stable document identity for host-supplied collaborative awareness. */
-    noteId?: string;
-    /** Host-supplied Yjs awareness. The editor package never creates transport. */
-    awareness?: Awareness;
     /** Disables typing. Mirror of MarkdownEditor's prop. */
     readOnly?: boolean;
     /** Accessibility label for the editor host. */
@@ -104,8 +95,6 @@
   let {
     ydoc,
     ytext,
-    noteId = '',
-    awareness,
     readOnly = false,
     ariaLabel = 'Markdown editor',
     class: className,
@@ -170,8 +159,6 @@
       handler(encoded, event);
     };
     const stableText = ytext;
-    const stableNoteId = noteId;
-    const stableAwareness = awareness;
 
     // --- Sync plugin (replaces y-codemirror.next's `ySync`) ---------
     //
@@ -298,7 +285,7 @@
 
     // --- Theme -----------------------------------------------------
     //
-    // Document-surface theme. Distinct from kb-1's app chrome (Inter
+    // Document-surface theme. Distinct from the app chrome (Inter
     // Tight UI, system mono) — `.txt` content uses the prose-body face
     // so the editor *feels* like a thoughtful reading surface, not
     // another panel of UI. Today that face is Geist (Vercel's OFL sans)
@@ -381,12 +368,6 @@
       editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
-      ...(stableAwareness
-        ? [
-            plaintextCursorProducer(stableAwareness, stableText, stableNoteId),
-            plaintextCursorConsumer(stableAwareness, stableText, stableNoteId),
-          ]
-        : []),
       // Live-preview-style markdown decorations. They are document +
       // selection driven and compose through EditorView.decorations:
       // line decos wrap the line element, mark decos wrap their range,
@@ -423,7 +404,7 @@
       // v1 — multi-line block indent is a deferred follow-up.
       plaintextListKeymap(),
       // Paste-a-URL-as-markdown-link: any URL over a selection wraps
-      // it as `[selection](url)`; a kb-1 note URL with no selection
+      // it as `[selection](url)`; a note URL with no selection
       // inserts `[note name](url)`. Non-URL pastes (and URL pastes
       // that match neither rule) fall through to default CM6 paste.
       // See `plaintext-link-paste.ts` for the decision rules.
@@ -1579,7 +1560,7 @@
     color: var(--rd-ink-4, rgba(0, 0, 0, 0.4));
   }
 
-  /* Documents may contain pending-upload:// sentinel URLs from KB-1 data or future upload support. */
+  /* Documents may contain pending-upload:// sentinel URLs from existing data or future upload support. */
   .plaintext-editor :global(.cm-md-image-widget[data-state='pending']) {
     display: inline-flex;
     align-items: center;

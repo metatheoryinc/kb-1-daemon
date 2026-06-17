@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import Page from '../routes/+page.svelte';
+import AppStateHarness from './AppStateHarness.svelte';
 
 const mocks = vi.hoisted(() => ({
   goto: vi.fn(),
@@ -64,6 +64,11 @@ describe('local editor route', () => {
     mocks.afterNavigateCallbacks = [];
     mocks.destroyProvider.mockReset();
     mocks.providers = [];
+    // The harness builds the app-state store against `localStorage`, which
+    // persists tree expansion and vault filters. Clear it so each test
+    // starts from the clean first-load defaults rather than inheriting a
+    // prior test's expanded folders or hidden vaults.
+    window.localStorage.clear();
     window.history.pushState(null, '', '/hello-world.md');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -81,27 +86,12 @@ describe('local editor route', () => {
           ],
         });
       }
-      if (url.startsWith('/api/search?')) {
-        return json({
-          ok: true,
-          results: [
-            {
-              path: 'research/search-hit.md',
-              line: 1,
-              lineText: 'Search target content',
-              context: {},
-            },
-          ],
-          total: 1,
-          truncated: false,
-        });
-      }
       return json({ ok: false, error: 'not_found', message: `Unhandled ${url}` }, 404);
     }));
   });
 
   it('fetches the vault tree, renders it, and rebinds the editor when a file is opened', async () => {
-    render(Page);
+    render(AppStateHarness);
 
     expect((await screen.findAllByText('demo-vault')).length).toBeGreaterThan(0);
     expect(await screen.findByText('projects')).toBeTruthy();
@@ -131,38 +121,29 @@ describe('local editor route', () => {
     expect(mocks.providers[0]?.text.toString()).toBe('content:hello-world.md');
   });
 
-  it('rebinds the editor when a search result is opened', async () => {
-    render(Page);
+  it('hides the vault tree when the vault is toggled off in the filter', async () => {
+    render(AppStateHarness);
 
-    const initialEditor = await screen.findByLabelText('Markdown editor') as HTMLTextAreaElement;
-    expect(initialEditor.value).toBe('content:hello-world.md');
+    const filesPanel = within(screen.getByRole('complementary', { name: 'Vault files' }));
+    // The tree renders the vault's folders while the vault is visible.
+    expect(await filesPanel.findByText('projects')).toBeTruthy();
 
-    const search = screen.getByPlaceholderText('Search files');
-    await fireEvent.input(search, { target: { value: 'target' } });
+    // Open the filter popover and toggle the lone vault off. The vault
+    // row also matches /vault/i, so target the filter button by its
+    // "All vaults" label.
+    await fireEvent.click(filesPanel.getByRole('button', { name: 'All vaults' }));
+    const popover = within(await screen.findByRole('dialog', { name: 'Filter visible vaults' }));
+    await fireEvent.click(popover.getByRole('checkbox', { name: 'Toggle demo-vault' }));
+
     await waitFor(() => {
-      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith('/api/search?'))).toBe(true);
+      expect(filesPanel.queryByText('projects')).toBeNull();
     });
-
-    await fireEvent.click(await screen.findByText('research/search-hit.md'));
-
-    await waitFor(() => {
-      expect(mocks.goto).toHaveBeenCalledWith('/research/search-hit.md', {
-        noScroll: true,
-        keepFocus: true,
-      });
-    });
-    const searchEditor = await waitForBoundEditor('content:research/search-hit.md');
-
-    await fireEvent.input(searchEditor, { target: { value: 'typed into search-opened file' } });
-    const searchProvider = mocks.providers.at(-1);
-    expect(searchProvider?.path).toBe('research/search-hit.md');
-    expect(searchProvider?.text.toString()).toBe('typed into search-opened file');
   });
 
   it('renders an in-shell not-found state for missing document navigation without creating it', async () => {
     window.history.pushState(null, '', '/projects/missing.md');
 
-    render(Page);
+    render(AppStateHarness);
 
     expect(await screen.findByText('Document not found')).toBeTruthy();
     expect((await screen.findAllByText('projects/missing.md')).length).toBeGreaterThan(0);
@@ -170,7 +151,9 @@ describe('local editor route', () => {
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
 
     const filesPanel = within(screen.getByRole('complementary', { name: 'Vault files' }));
-    await fireEvent.click(await filesPanel.findByText('projects'));
+    // Deep-linking to `projects/missing.md` auto-expands its `projects`
+    // ancestor, so the `active` folder is already reachable — open it and
+    // pick the file without re-toggling `projects` (which would collapse).
     await fireEvent.click(await filesPanel.findByText('active'));
     await fireEvent.click(filesPanel.getByText('editor-shell.md'));
 
@@ -179,7 +162,7 @@ describe('local editor route', () => {
   });
 
   it('rebinds the editor on history navigation and can land on a deleted document path', async () => {
-    render(Page);
+    render(AppStateHarness);
 
     const initialEditor = await screen.findByLabelText('Markdown editor') as HTMLTextAreaElement;
     expect(initialEditor.value).toBe('content:hello-world.md');

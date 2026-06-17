@@ -33,6 +33,7 @@
     Star,
     Stop,
     Sun,
+    User,
     UsersThree,
     X,
   } from 'phosphor-svelte';
@@ -281,6 +282,8 @@
   <UsersThree {...phosphorProps} />
 {:else if name === 'star'}
   <Star {...phosphorProps} />
+{:else if name === 'user'}
+  <User {...phosphorProps} />
 {:else if name === 'stop'}
   <Stop {...phosphorProps} />
 {:else if name === 'history'}

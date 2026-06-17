@@ -7,6 +7,7 @@ export { default as Breadcrumb } from './primitives/Breadcrumb.svelte';
 export type { BreadcrumbAvatar, BreadcrumbItem } from './primitives/Breadcrumb.svelte';
 export { default as Checkbox } from './primitives/Checkbox.svelte';
 export { default as FolderIcon } from './primitives/FolderIcon.svelte';
+export { default as FavoriteButton } from './primitives/FavoriteButton.svelte';
 export { default as Icon } from './primitives/Icon.svelte';
 export { default as IconButton } from './primitives/IconButton.svelte';
 export { default as LiveDot } from './primitives/LiveDot.svelte';
@@ -19,18 +20,34 @@ export { default as ContextMenu } from './menus/ContextMenu.svelte';
 export type { MenuItem } from './menus/ContextMenu.svelte';
 export { default as Popover } from './menus/Popover.svelte';
 export { default as DialogShell } from './dialogs/DialogShell.svelte';
+export { default as TextInputDialog } from './dialogs/TextInputDialog.svelte';
+export type { DialogField, SelectField, TextInputField, TextInputFieldOption } from './dialogs/TextInputDialog.svelte';
+export { default as ConfirmDialog } from './dialogs/ConfirmDialog.svelte';
+export { default as MovePickerDialog } from './dialogs/MovePickerDialog.svelte';
 export { default as Panel } from './layout/Panel.svelte';
 export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
 export { default as DocumentSaveBanner } from './notifications/DocumentSaveBanner.svelte';
 export { default as DocumentHeader } from './local-editor/DocumentHeader.svelte';
+export { default as DocumentHeaderMenu } from './local-editor/DocumentHeaderMenu.svelte';
+export { default as FolderCanvas } from './local-editor/FolderCanvas.svelte';
 export { default as EditorSaveNotifications } from './local-editor/EditorSaveNotifications.svelte';
 export { default as DocumentNotFoundState } from './local-editor/DocumentNotFoundState.svelte';
 export { default as FileNode } from './local-editor/FileNode.svelte';
 export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
 export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
+export { default as VaultFilterButton } from './local-editor/VaultFilterButton.svelte';
+export { default as VaultFilterPopover } from './local-editor/VaultFilterPopover.svelte';
+export { default as RailResizeHandle } from './local-editor/RailResizeHandle.svelte';
 export { default as FolderNode } from './local-editor/FolderNode.svelte';
+export { default as VaultGroup } from './local-editor/VaultGroup.svelte';
 export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
+export { default as LocalEditorMobileShell } from './local-editor/LocalEditorMobileShell.svelte';
+export { default as StarredPanel } from './local-editor/StarredPanel.svelte';
+export { default as StarredRow } from './local-editor/StarredRow.svelte';
+export { default as PrimaryRail, type RailNavId } from './local-editor/primary-rail/PrimaryRail.svelte';
+export { default as PrimaryRailItem } from './local-editor/primary-rail/PrimaryRailItem.svelte';
+export { default as PrimaryRailUserChip } from './local-editor/primary-rail/PrimaryRailUserChip.svelte';
 export type {
   LocalFileAction,
   LocalFileNode,
@@ -40,6 +57,9 @@ export type {
   LocalSearchResult,
   LocalTreeAction,
   LocalTreeNode,
+  LocalVaultAction,
+  StarredRowData,
+  VaultFilterEntry,
 } from './local-editor/types';
 export type {
   DocumentSaveBannerProps,

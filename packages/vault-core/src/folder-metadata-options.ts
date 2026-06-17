@@ -21,6 +21,7 @@ export const folderMetadataIconNames = [
   'activity',
   'people',
   'star',
+  'user',
   'stop',
   'history',
   'refresh',

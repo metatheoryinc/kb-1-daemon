@@ -1,123 +1,150 @@
 <script lang="ts">
-  import IconButton from '../primitives/IconButton.svelte';
-  import Icon from '../primitives/Icon.svelte';
-  import LiveDot from '../primitives/LiveDot.svelte';
-  import SearchInput from '../primitives/SearchInput.svelte';
-  import FileNode from './FileNode.svelte';
-  import FolderNode from './FolderNode.svelte';
-  import FilesSearchResults from './FilesSearchResults.svelte';
-  import type { LocalSearchResult, LocalTreeAction, LocalTreeNode } from './types';
+  import VaultGroup from './VaultGroup.svelte';
+  import VaultFilterButton from './VaultFilterButton.svelte';
+  import VaultFilterPopover from './VaultFilterPopover.svelte';
+  import type { AccentName } from '../primitives/accent';
+  import type { LocalTreeAction, LocalTreeNode, VaultFilterEntry } from './types';
 
   interface Props {
     vaultName: string;
-    daemonLabel: string;
-    daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
-    colorMode?: 'light' | 'dark';
-    searchValue?: string;
+    /** Stable vault id — seeds the tree's expansion keys. Defaults to
+        the display name when the shell has nothing more durable. */
+    vaultId?: string;
+    /** Accent for the vault group's folder token. */
+    vaultAccent?: AccentName;
+    /** Full set of vaults the filter lists. Defaults to a single entry
+        built from this panel's own vault so a caller that only wires the
+        tree still gets a working filter. */
+    vaults?: VaultFilterEntry[];
+    /** Deny-list of vault ids the user has hidden. Owned by the app. */
+    hiddenVaultIds?: string[];
     tree: LocalTreeNode[];
     activePath?: string;
-    expandedPaths?: Set<string>;
-    searchResults?: LocalSearchResult[];
-    searchTotal?: number;
-    searchTruncated?: boolean;
-    searchLoading?: boolean;
-    onSearchInput?: (value: string) => void;
-    onSearchClear?: () => void;
-    onToggleColorMode?: () => void;
-    onToggleFolder?: (path: string) => void;
+    /** Active folder row key when a folder is the active canvas. */
+    activeFolderId?: string;
+    /** Active vault key when the vault root is the active canvas. */
+    activeVaultId?: string;
+    /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
+    expandedFolderIds?: Set<string>;
+    /** Set of expanded vault keys (`vault:<id>`). Omit to render open. */
+    expandedVaultIds?: Set<string>;
+    /** Set of starred folder paths — threaded to folder rows' menus. */
+    favoritedFolderPaths?: Set<string>;
+    /** Set of starred note paths — threaded to file rows' menus. */
+    favoritedNotePaths?: Set<string>;
+    /** When true (mobile), tree-row kebab buttons are always visible. When
+        false (desktop), they appear on hover / focus only. */
+    kebabAlwaysVisible?: boolean;
+    onToggleFolder?: (key: string) => void;
+    onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
+    /** Navigate to a folder (the three-state row click's open branch). */
+    onOpenFolder?: (key: string) => void;
+    /** Navigate to the vault root. */
+    onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    /** Add/remove a vault id from the hide-list. */
+    onToggleVaultHidden?: (vaultId: string) => void;
   }
 
   let {
     vaultName,
-    daemonLabel,
-    daemonStatus = 'open',
-    colorMode = 'light',
-    searchValue = '',
+    vaultId = vaultName,
+    vaultAccent = 'slate',
+    vaults,
+    hiddenVaultIds = [],
     tree,
     activePath = '',
-    expandedPaths = new Set<string>(),
-    searchResults = [],
-    searchTotal = searchResults.length,
-    searchTruncated = false,
-    searchLoading = false,
-    onSearchInput,
-    onSearchClear,
-    onToggleColorMode,
+    activeFolderId,
+    activeVaultId,
+    expandedFolderIds = new Set<string>(),
+    expandedVaultIds,
+    favoritedFolderPaths,
+    favoritedNotePaths,
+    kebabAlwaysVisible = false,
     onToggleFolder,
+    onToggleVault,
     onOpenFile,
+    onOpenFolder,
+    onOpenVault,
     onTreeAction,
+    onToggleVaultHidden,
   }: Props = $props();
 
-  const searching = $derived(searchValue.trim().length > 0);
-  const dotColor = $derived(
-    daemonStatus === 'open'
-      ? '#1f8a4d'
-      : daemonStatus === 'connecting'
-        ? '#c27a14'
-        : '#c74436',
+  let filterOpen = $state(false);
+
+  // The filter lists the panel's own vault when no explicit set is given.
+  const allVaults = $derived<VaultFilterEntry[]>(
+    vaults ?? [{ id: vaultId, name: vaultName, accent: vaultAccent }],
   );
-  const dotPulse = $derived(daemonStatus === 'connecting');
+  const totalVaults = $derived(allVaults.length);
+  const hidden = $derived(new Set(hiddenVaultIds));
+  // Visible = everything not in the hide-list. Drives the popover's
+  // checked state and the "showing N of M" count.
+  const selectedIds = $derived(allVaults.map((v) => v.id).filter((id) => !hidden.has(id)));
+  const visibleCount = $derived(selectedIds.length);
+  const filterLabel = $derived(
+    hidden.size === 0
+      ? 'All vaults'
+      : `${visibleCount} vault${visibleCount === 1 ? '' : 's'}`,
+  );
+
+  // The tree only renders vaults the user hasn't hidden. The local shell
+  // has one vault, so hiding it empties the tree; the filter stays
+  // available to bring it back.
+  const vaultHidden = $derived(hidden.has(vaultId));
 </script>
 
 <aside class="files-panel" aria-label="Vault files">
   <header class="panel-header">
     <div class="title-row">
-      <div class="vault-title">
-        <span>Vault</span>
-        <div class="vault-name">
-          <strong>{vaultName}</strong>
-          <LiveDot size={8} color={dotColor} pulse={dotPulse} title={daemonLabel} />
-        </div>
-      </div>
-      <IconButton
-        title={colorMode === 'dark' ? 'Use light mode' : 'Use dark mode'}
-        size="sm"
-        variant="quiet"
-        onclick={onToggleColorMode}
-      >
-        <Icon name={colorMode === 'dark' ? 'sun' : 'moon'} size={14} />
-      </IconButton>
+      <h2>Files &amp; Vaults</h2>
     </div>
-    <SearchInput
-      value={searchValue}
-      placeholder="Search files"
-      onInput={onSearchInput}
-      onClear={onSearchClear}
-    />
+
+    <div class="filter-row">
+      <VaultFilterButton
+        open={filterOpen}
+        label={filterLabel}
+        onclick={() => (filterOpen = !filterOpen)}
+      />
+      <span class="counts">showing {visibleCount} of {totalVaults}</span>
+    </div>
+
+    {#if filterOpen}
+      <VaultFilterPopover
+        vaults={allVaults}
+        {selectedIds}
+        onToggle={(id) => onToggleVaultHidden?.(id)}
+        onClose={() => (filterOpen = false)}
+      />
+    {/if}
   </header>
 
   <div class="panel-body">
-    {#if searching}
-      {#if searchLoading}
-        <p class="loading">Searching…</p>
-      {/if}
-      <FilesSearchResults
-        query={searchValue}
-        results={searchResults}
-        total={searchTotal}
-        truncated={searchTruncated}
-        onOpen={onOpenFile}
-      />
-    {:else if tree.length === 0}
+    {#if vaultHidden || tree.length === 0}
       <p class="loading">No notes yet.</p>
     {:else}
       <nav class="tree" aria-label="Files">
-        {#each tree as node (node.path)}
-          {#if node.kind === 'folder'}
-            <FolderNode
-              {node}
-              {activePath}
-              {expandedPaths}
-              onToggle={onToggleFolder}
-              onOpen={onOpenFile}
-              onAction={onTreeAction}
-            />
-          {:else}
-            <FileNode node={node} {activePath} onOpen={onOpenFile} onAction={onTreeAction} />
-          {/if}
-        {/each}
+        <VaultGroup
+          {vaultId}
+          {vaultName}
+          accent={vaultAccent}
+          {tree}
+          {activePath}
+          {activeFolderId}
+          {activeVaultId}
+          {expandedFolderIds}
+          {expandedVaultIds}
+          {favoritedFolderPaths}
+          {favoritedNotePaths}
+          {kebabAlwaysVisible}
+          {onToggleFolder}
+          {onToggleVault}
+          {onOpenFile}
+          {onOpenFolder}
+          {onOpenVault}
+          {onTreeAction}
+        />
       </nav>
     {/if}
   </div>
@@ -127,16 +154,24 @@
   .files-panel {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
+    /* Self-sizing secondary panel: holds the resize-handle width and
+       refuses to shrink, so the flex-row workspace absorbs the slack. */
+    flex-shrink: 0;
+    width: var(--rd-mid-w, 282px);
+    height: 100%;
     min-width: 0;
     min-height: 0;
-    border-right: 1px solid var(--rd-rule);
+    /* Intentional deviation from the reference: no border between the files
+       rail and the content canvas — they sit flush, no seam. The resize
+       handle still reveals its hairline on hover. */
     background: var(--rd-panel);
   }
 
   .panel-header {
+    position: relative;
     display: grid;
     gap: 10px;
-    padding: 14px 12px 12px;
+    padding: 14px 14px 12px;
     border-bottom: 1px solid var(--rd-rule);
   }
 
@@ -147,34 +182,28 @@
     gap: 8px;
   }
 
-  .vault-title {
-    display: grid;
-    min-width: 0;
-    gap: 2px;
-    font-family: var(--rd-ui);
-  }
-
-  .vault-title span {
-    color: var(--rd-ink-4);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-  }
-
-  .vault-title strong {
+  h2 {
+    margin: 0;
     overflow: hidden;
     color: var(--rd-ink-1);
-    font-size: 14px;
-    font-weight: 650;
+    font-family: var(--rd-ui);
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .vault-name {
+  .filter-row {
     display: flex;
     align-items: center;
-    min-width: 0;
-    gap: 7px;
+    gap: 8px;
+  }
+
+  .counts {
+    color: var(--rd-ink-4);
+    font-family: var(--rd-ui);
+    font-size: 11px;
   }
 
   .panel-body {

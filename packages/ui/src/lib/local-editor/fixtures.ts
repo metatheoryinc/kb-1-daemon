@@ -1,4 +1,4 @@
-import type { LocalSearchResult, LocalTreeNode } from './types';
+import type { LocalSearchResult, LocalTreeNode, StarredRowData } from './types';
 
 export const localEditorTreeFixture: LocalTreeNode[] = [
   {
@@ -51,3 +51,73 @@ export const localEditorSearchFixture: LocalSearchResult[] = [
 ];
 
 export const localEditorDocumentPath = 'projects/active/editor-shell.md';
+
+// A handful of starred rows, matching the tree fixture's paths + accents,
+// for the starred panel stories. Folders first, then notes — the grouping
+// the panel renders.
+export const localEditorStarredFoldersFixture: StarredRowData[] = [
+  {
+    id: 'folder:demo-vault:projects/active',
+    kind: 'folder',
+    label: 'active',
+    vaultLabel: 'Demo Vault',
+    accent: 'coral',
+    colorHex: '#ee8a91',
+    icon: null,
+    path: 'projects/active',
+    href: '/projects/active',
+    available: true
+  },
+  {
+    id: 'folder:demo-vault:research',
+    kind: 'folder',
+    label: 'research',
+    vaultLabel: 'Demo Vault',
+    accent: 'sky',
+    colorHex: '#7fb9e5',
+    icon: null,
+    path: 'research',
+    href: '/research',
+    available: true
+  }
+];
+
+export const localEditorStarredNotesFixture: StarredRowData[] = [
+  {
+    id: 'note:demo-vault:projects/active/launch-notes.md',
+    kind: 'note',
+    label: 'launch-notes.md',
+    vaultLabel: 'Demo Vault',
+    accent: 'coral',
+    colorHex: '#ee8a91',
+    icon: null,
+    path: 'projects/active/launch-notes.md',
+    href: '/projects/active/launch-notes.md',
+    available: true
+  },
+  {
+    id: 'note:demo-vault:research/local-first.md',
+    kind: 'note',
+    label: 'local-first.md',
+    vaultLabel: 'Demo Vault',
+    accent: 'sky',
+    colorHex: '#7fb9e5',
+    icon: null,
+    path: 'research/local-first.md',
+    href: '/research/local-first.md',
+    available: true
+  },
+  {
+    // A pin whose target no longer exists — renders dimmed + unavailable.
+    id: 'note:demo-vault:archive/old-plan.md',
+    kind: 'note',
+    label: 'old-plan.md',
+    vaultLabel: 'Demo Vault',
+    accent: 'slate',
+    colorHex: '#8fa3b1',
+    icon: null,
+    path: 'archive/old-plan.md',
+    href: undefined,
+    available: false
+  }
+];

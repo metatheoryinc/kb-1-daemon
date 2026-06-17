@@ -10,7 +10,7 @@
 </script>
 
 <span
-  class="kb1-mark"
+  class="brand-mark"
   style="width: {size}px; height: {size}px; border-radius: {radius}px;"
   aria-hidden="true"
 >
@@ -26,7 +26,7 @@
 </span>
 
 <style>
-  .kb1-mark {
+  .brand-mark {
     display: inline-grid;
     place-items: center;
     flex: 0 0 auto;
