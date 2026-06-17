@@ -22,6 +22,7 @@
     EditorSaveNotifications,
     FolderCanvas,
     LocalEditorShell,
+    LocalEditorMobileShell,
     MovePickerDialog,
     TextInputDialog,
     type AccentName,
@@ -43,6 +44,7 @@
     type FavoriteEntry,
   } from '$lib/app-state';
   import { buildStarredViewData } from '$lib/favorites-data';
+  import { createViewportStore } from '$lib/viewport.svelte';
   import { onMount, untrack } from 'svelte';
 
   interface TreeEntry {
@@ -115,6 +117,15 @@
   // Which secondary panel the rail has selected. 'files' shows the tree;
   // 'starred' shows the (currently empty) starred view.
   let activeNav = $state<RailNavId>('files');
+
+  // Reactive viewport mode — selects the mobile vs. desktop shell at the
+  // breakpoint (mirrors the reference AppLayout's Desktop/Mobile switch).
+  // One matchMedia listener owned at the shell root.
+  const viewport = createViewportStore();
+  // Open/closed state of the mobile shell's left-nav flyout. Hoisted
+  // here so canvas-side navigation (a wikilink, a folder-canvas child
+  // click) closes the flyout the same way a terminal tree pick does.
+  let navOpen = $state(false);
 
   // The app-state store owns the persisted light / dark / system choice
   // and the root layout applies it to the DOM. The rail toggle's icon is
@@ -1022,48 +1033,11 @@
   <title>KB-2 Editor</title>
 </svelte:head>
 
-<LocalEditorShell
-  {vaultName}
-  {vaultId}
-  {daemonLabel}
-  {daemonStatus}
-  {documentPath}
-  {breadcrumbItems}
-  {statusLabel}
-  {documentFavorited}
-  onToggleDocumentFavorite={documentPath === '' ? undefined : toggleDocumentFavorite}
-  onRenameDocument={documentPath === '' ? undefined : renameDocument}
-  onMoveDocument={documentPath === '' ? undefined : moveDocument}
-  onDeleteDocument={documentPath === '' ? undefined : deleteDocument}
-  colorModeChoice={colorModePref}
-  {activeNav}
-  {railCollapsed}
-  {tree}
-  {vaults}
-  {hiddenVaultIds}
-  {secondaryRailWidth}
-  {expandedFolderIds}
-  {expandedVaultIds}
-  {activeFolderId}
-  {favoritedFolderPaths}
-  {favoritedNotePaths}
-  starredFolders={starredView.folders}
-  starredNotes={starredView.notes}
-  onSelectNav={(id) => {
-    activeNav = id;
-  }}
-  onToggleVaultHidden={toggleVaultHidden}
-  onResizeRail={resizeRail}
-  onToggleColorMode={toggleColorMode}
-  onToggleRailCollapsed={toggleRailCollapsed}
-  onToggleFolder={toggleFolder}
-  onToggleVault={toggleVault}
-  onOpenFile={(path) => {
-    void openDocument(path);
-  }}
-  onOpenFolder={openFolder}
-  onTreeAction={handleTreeAction}
->
+<!-- Shared canvas body. Both shells render identical content — the
+     mobile shell just frames it in mobile chrome. Folder-canvas child
+     clicks and wikilink jumps close the mobile flyout (terminal nav)
+     via `navOpen`; on desktop `navOpen` is inert. -->
+{#snippet canvasBody()}
   <EditorSaveNotifications
     externalMergeVisible={externalMergeVisible}
     externalChangeVisible={externalChangeVisible}
@@ -1095,9 +1069,11 @@
       metadata={activeFolderNode?.metadata}
       children={activeFolderNode?.children ?? tree}
       onOpenFile={(path) => {
+        navOpen = false;
         void openDocument(path);
       }}
       onOpenFolder={(path) => {
+        navOpen = false;
         void openDocument(path);
       }}
     />
@@ -1138,7 +1114,94 @@
   {#if error}
     <p class="error">{error}</p>
   {/if}
-</LocalEditorShell>
+{/snippet}
+
+{#if viewport.mode === 'mobile'}
+  <LocalEditorMobileShell
+    bind:navOpen
+    {vaultName}
+    {vaultId}
+    {documentPath}
+    {breadcrumbItems}
+    {statusLabel}
+    {documentFavorited}
+    onToggleDocumentFavorite={documentPath === '' ? undefined : toggleDocumentFavorite}
+    onRenameDocument={documentPath === '' ? undefined : renameDocument}
+    onMoveDocument={documentPath === '' ? undefined : moveDocument}
+    onDeleteDocument={documentPath === '' ? undefined : deleteDocument}
+    colorModeChoice={colorModePref}
+    {activeNav}
+    {tree}
+    {vaults}
+    {hiddenVaultIds}
+    {expandedFolderIds}
+    {expandedVaultIds}
+    {activeFolderId}
+    {favoritedFolderPaths}
+    {favoritedNotePaths}
+    starredFolders={starredView.folders}
+    starredNotes={starredView.notes}
+    onSelectNav={(id) => {
+      activeNav = id;
+    }}
+    onToggleVaultHidden={toggleVaultHidden}
+    onToggleColorMode={toggleColorMode}
+    onToggleFolder={toggleFolder}
+    onToggleVault={toggleVault}
+    onOpenFile={(path) => {
+      void openDocument(path);
+    }}
+    onOpenFolder={openFolder}
+    onTreeAction={handleTreeAction}
+  >
+    {@render canvasBody()}
+  </LocalEditorMobileShell>
+{:else}
+  <LocalEditorShell
+    {vaultName}
+    {vaultId}
+    {daemonLabel}
+    {daemonStatus}
+    {documentPath}
+    {breadcrumbItems}
+    {statusLabel}
+    {documentFavorited}
+    onToggleDocumentFavorite={documentPath === '' ? undefined : toggleDocumentFavorite}
+    onRenameDocument={documentPath === '' ? undefined : renameDocument}
+    onMoveDocument={documentPath === '' ? undefined : moveDocument}
+    onDeleteDocument={documentPath === '' ? undefined : deleteDocument}
+    colorModeChoice={colorModePref}
+    {activeNav}
+    {railCollapsed}
+    {tree}
+    {vaults}
+    {hiddenVaultIds}
+    {secondaryRailWidth}
+    {expandedFolderIds}
+    {expandedVaultIds}
+    {activeFolderId}
+    {favoritedFolderPaths}
+    {favoritedNotePaths}
+    starredFolders={starredView.folders}
+    starredNotes={starredView.notes}
+    onSelectNav={(id) => {
+      activeNav = id;
+    }}
+    onToggleVaultHidden={toggleVaultHidden}
+    onResizeRail={resizeRail}
+    onToggleColorMode={toggleColorMode}
+    onToggleRailCollapsed={toggleRailCollapsed}
+    onToggleFolder={toggleFolder}
+    onToggleVault={toggleVault}
+    onOpenFile={(path) => {
+      void openDocument(path);
+    }}
+    onOpenFolder={openFolder}
+    onTreeAction={handleTreeAction}
+  >
+    {@render canvasBody()}
+  </LocalEditorShell>
+{/if}
 
 {#if dialog.kind === 'text'}
   <TextInputDialog
