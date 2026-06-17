@@ -2,7 +2,7 @@
   import ContextMenu from '../menus/ContextMenu.svelte';
   import FolderIcon from '../primitives/FolderIcon.svelte';
   import Icon from '../primitives/Icon.svelte';
-  import { accentHex, accentNames, type AccentName } from '../primitives/accent';
+  import { accentHex } from '../primitives/accent';
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
   import { folderKey } from './expansion';
@@ -48,16 +48,6 @@
     { label: 'New Folder', onSelect: () => onAction?.({ kind: 'folder', action: 'new-folder', path: node.path }) },
     { label: 'Rename', onSelect: () => onAction?.({ kind: 'folder', action: 'rename', path: node.path }) },
     { label: 'Move', onSelect: () => onAction?.({ kind: 'folder', action: 'move', path: node.path }) },
-    {
-      kind: 'swatches',
-      label: 'Color',
-      swatches: accentNames.map((accent) => ({
-        label: accent,
-        color: accentHex[accent],
-        selected: node.metadata?.color === accent,
-        onSelect: () => onAction?.({ kind: 'folder', action: 'color', path: node.path, color: accent as AccentName })
-      }))
-    },
     {
       label: 'Delete',
       destructive: true,

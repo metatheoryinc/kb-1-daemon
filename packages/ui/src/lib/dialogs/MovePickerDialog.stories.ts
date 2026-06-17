@@ -1,14 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/svelte';
-import ContextMenuDemo from '../stories/ContextMenuDemo.svelte';
+import MovePickerDialogDemo from '../stories/MovePickerDialogDemo.svelte';
 
 const meta = {
-  title: 'App/Overlays/ContextMenu',
-  component: ContextMenuDemo,
+  title: 'App/Dialogs/MovePickerDialog',
+  component: MovePickerDialogDemo,
   parameters: { layout: 'fullscreen' },
   args: {
     mode: 'light'
   }
-} satisfies Meta<typeof ContextMenuDemo>;
+} satisfies Meta<typeof MovePickerDialogDemo>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;

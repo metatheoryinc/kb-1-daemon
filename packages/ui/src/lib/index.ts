@@ -19,6 +19,10 @@ export { default as ContextMenu } from './menus/ContextMenu.svelte';
 export type { MenuItem } from './menus/ContextMenu.svelte';
 export { default as Popover } from './menus/Popover.svelte';
 export { default as DialogShell } from './dialogs/DialogShell.svelte';
+export { default as TextInputDialog } from './dialogs/TextInputDialog.svelte';
+export type { DialogField, SelectField, TextInputField, TextInputFieldOption } from './dialogs/TextInputDialog.svelte';
+export { default as ConfirmDialog } from './dialogs/ConfirmDialog.svelte';
+export { default as MovePickerDialog } from './dialogs/MovePickerDialog.svelte';
 export { default as Panel } from './layout/Panel.svelte';
 export { default as LocalStatusShell } from './layout/LocalStatusShell.svelte';
 export type { DaemonStatus, HealthResponse } from './layout/LocalStatusShell.svelte';
@@ -45,6 +49,7 @@ export type {
   LocalSearchResult,
   LocalTreeAction,
   LocalTreeNode,
+  LocalVaultAction,
 } from './local-editor/types';
 export type {
   DocumentSaveBannerProps,

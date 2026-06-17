@@ -17,15 +17,20 @@
     type OrgPerson,
   } from '@kb-2/editor';
   import {
+    ConfirmDialog,
     DocumentNotFoundState,
     EditorSaveNotifications,
     LocalEditorShell,
+    MovePickerDialog,
+    TextInputDialog,
     type AccentName,
+    type DialogField,
     type LocalSearchResult,
     type LocalTreeAction,
     type LocalTreeNode,
     type RailNavId,
   } from '@kb-2/ui';
+  import { kbService } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import {
     useAppState,
@@ -35,27 +40,49 @@
   } from '$lib/app-state';
   import { onMount, untrack } from 'svelte';
 
-  interface ApiFailure {
-    ok: false;
-    error?: string;
-    message?: string;
-  }
-
   interface TreeEntry {
     path: string;
     kind: 'file' | 'folder';
     metadata?: { color?: AccentName; icon?: string | null };
   }
 
-  interface SearchHit {
-    path: string;
-    line: number;
-    lineText: string;
-    context?: {
-      before?: string[];
-      after?: string[];
-    };
-  }
+  // The dialog the orchestration layer currently has open. Each variant
+  // carries the operation it will perform on submit; `busy`/`error`
+  // surface in-flight and failure state to the dialog.
+  type DialogState =
+    | { kind: 'none' }
+    | {
+        kind: 'text';
+        title: string;
+        description?: string;
+        fields: DialogField[];
+        submitLabel: string;
+        run: (values: string[]) => Promise<void>;
+        busy: boolean;
+        error: string | null;
+      }
+    | {
+        kind: 'confirm';
+        title: string;
+        description?: string;
+        confirmLabel: string;
+        destructive: boolean;
+        run: () => Promise<void>;
+        busy: boolean;
+        error: string | null;
+      }
+    | {
+        kind: 'move';
+        title: string;
+        description?: string;
+        folderPaths: string[];
+        currentParent: string;
+        run: (folderPath: string) => Promise<void>;
+        busy: boolean;
+        error: string | null;
+      };
+
+  let dialog = $state<DialogState>({ kind: 'none' });
 
   let provider = $state<DemoDocumentProvider | null>(null);
   let providerGeneration = 0;
@@ -360,9 +387,7 @@
     }
     searchLoading = true;
     try {
-      const response = await fetchJson<{ ok: true; results: SearchHit[]; total: number; truncated: boolean }>(
-        `/api/search?q=${encodeURIComponent(query)}&limit=50`,
-      );
+      const response = await kbService.search(query, 50);
       if (query !== searchValue.trim()) return;
       searchResults = response.results.map((hit) => ({
         path: hit.path,
@@ -382,7 +407,7 @@
 
   async function refreshVaultInfo(): Promise<void> {
     try {
-      const info = await fetchJson<{ ok: true; rootName: string }>('/api/vault');
+      const info = await kbService.vaultInfo();
       vaultName = info.rootName;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
@@ -391,106 +416,280 @@
 
   async function refreshTree(): Promise<void> {
     try {
-      const result = await fetchJson<{ ok: true; entries: TreeEntry[] }>('/api/tree');
-      tree = buildTree(result.entries);
+      const entries = await kbService.tree();
+      tree = buildTree(entries as TreeEntry[]);
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
   }
 
-  async function handleTreeAction(action: LocalTreeAction): Promise<void> {
-    try {
-      if (action.kind === 'file') {
-        await handleFileAction(action);
-      } else {
-        await handleFolderAction(action);
+  // ---- Path helpers for the file-management operations ----------------
+
+  // Join a parent folder path with a leaf name. The vault root is the
+  // empty string, so a root-level child is just its name.
+  function joinPath(parent: string, name: string): string {
+    return parent ? `${parent}/${name}` : name;
+  }
+
+  // The leaf name (with extension, for files) of a full path.
+  function leafName(path: string): string {
+    return path.split('/').filter(Boolean).at(-1) ?? path;
+  }
+
+  // Ensure a note name carries a `.md` extension so the daemon writes a
+  // markdown file regardless of what the user typed.
+  function withMarkdownExtension(name: string): string {
+    return /\.[^/]+$/.test(name) ? name : `${name}.md`;
+  }
+
+  // Every folder path in the live tree — the move picker's destination
+  // list, plus the rename collision base.
+  function collectFolderPaths(nodes: LocalTreeNode[]): string[] {
+    const out: string[] = [];
+    const walk = (list: LocalTreeNode[]): void => {
+      for (const node of list) {
+        if (node.kind === 'folder') {
+          out.push(node.path);
+          walk(node.children);
+        }
       }
+    };
+    walk(nodes);
+    return out;
+  }
+
+  // ---- Dialog orchestration -------------------------------------------
+
+  function closeDialog(): void {
+    dialog = { kind: 'none' };
+  }
+
+  // Apply a busy/error patch to whichever dialog is currently open. The
+  // open dialog's variant is preserved; a closed dialog is left alone.
+  function patchDialog(patch: { busy: boolean; error: string | null }): void {
+    const current = dialog;
+    if (current.kind === 'none') return;
+    dialog = { ...current, ...patch };
+  }
+
+  // Run a dialog's operation, keeping the dialog open with a busy/error
+  // state so a failure surfaces in-place rather than being swallowed.
+  async function runDialogOperation(operation: () => Promise<void>): Promise<void> {
+    if (dialog.kind === 'none') return;
+    patchDialog({ busy: true, error: null });
+    try {
+      await operation();
       await refreshTree();
+      closeDialog();
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
+      const message = caught instanceof Error ? caught.message : String(caught);
+      patchDialog({ busy: false, error: message });
     }
   }
 
-  async function handleFileAction(action: Extract<LocalTreeAction, { kind: 'file' }>): Promise<void> {
-    if (action.action === 'delete') {
-      if (!window.confirm(`Delete ${action.path}?`)) return;
-      await fetchJson(`/api/files/${encodeVaultPath(action.path)}`, { method: 'DELETE' });
-      return;
+  function handleTreeAction(action: LocalTreeAction): void {
+    if (action.kind === 'file') {
+      openFileDialog(action);
+    } else if (action.kind === 'folder') {
+      openFolderDialog(action);
+    } else {
+      openVaultDialog(action);
     }
-
-    const nextPath = window.prompt(`${titleCase(action.action)} file`, action.path);
-    if (!nextPath || nextPath === action.path) return;
-    await fetchJson(`/api/files/${encodeVaultPath(action.path)}/move`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: nextPath }),
-    });
   }
 
-  async function handleFolderAction(action: Extract<LocalTreeAction, { kind: 'folder' }>): Promise<void> {
-    if (action.action === 'color') {
-      await fetchJson(`/api/folders/${encodeVaultPath(action.path)}/metadata`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ color: action.color ?? null }),
-      });
+  function openFileDialog(action: Extract<LocalTreeAction, { kind: 'file' }>): void {
+    const parent = parentOf(action.path);
+    const name = leafName(action.path);
+
+    if (action.action === 'delete') {
+      dialog = {
+        kind: 'confirm',
+        title: 'Delete note',
+        description: `Delete “${name}”? This moves it to the trash.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+        busy: false,
+        error: null,
+        run: () => kbService.deleteNote(action.path),
+      };
       return;
     }
 
-    if (action.action === 'delete') {
-      if (!window.confirm(`Delete ${action.path} and its contents?`)) return;
-      await fetchJson(`/api/folders/${encodeVaultPath(action.path)}?recursive=true`, { method: 'DELETE' });
+    if (action.action === 'rename') {
+      dialog = {
+        kind: 'text',
+        title: 'Rename note',
+        fields: [{ type: 'text', label: 'Name', initialValue: name, required: true }],
+        submitLabel: 'Rename',
+        busy: false,
+        error: null,
+        run: async ([nextName]) => {
+          const target = joinPath(parent, withMarkdownExtension(nextName));
+          if (target === action.path) return;
+          await kbService.moveNote(action.path, target);
+        },
+      };
       return;
     }
+
+    // move
+    dialog = {
+      kind: 'move',
+      title: 'Move note',
+      description: `Choose a destination folder for “${name}”.`,
+      folderPaths: collectFolderPaths(tree),
+      currentParent: parent,
+      busy: false,
+      error: null,
+      run: async (destination) => {
+        const target = joinPath(destination, name);
+        if (target === action.path) return;
+        await kbService.moveNote(action.path, target);
+      },
+    };
+  }
+
+  function openFolderDialog(action: Extract<LocalTreeAction, { kind: 'folder' }>): void {
+    const parent = parentOf(action.path);
+    const name = leafName(action.path);
 
     if (action.action === 'new-note') {
-      const nextPath = window.prompt('New note path', `${action.path}/untitled.md`);
-      if (!nextPath) return;
-      await fetchJson(`/api/files/${encodeVaultPath(nextPath)}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'text/markdown' },
-        body: '',
-      });
-      await openDocument(nextPath);
+      openNewNoteDialog(action.path);
       return;
     }
 
     if (action.action === 'new-folder') {
-      const nextPath = window.prompt('New folder path', `${action.path}/untitled`);
-      if (!nextPath) return;
-      await fetchJson('/api/folders', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: nextPath }),
-      });
-      // Unfurl the parent and the new folder so the addition is visible.
-      appState.expandFolders([
-        expansionKey('folder', vaultId, action.path),
-        expansionKey('folder', vaultId, nextPath),
-      ]);
+      openNewFolderDialog(action.path);
       return;
     }
 
-    const nextPath = window.prompt(`${titleCase(action.action)} folder`, action.path);
-    if (!nextPath || nextPath === action.path) return;
-    await fetchJson(`/api/folders/${encodeVaultPath(action.path)}/move`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: nextPath }),
-    });
+    if (action.action === 'delete') {
+      dialog = {
+        kind: 'confirm',
+        title: 'Delete folder',
+        description: `Delete “${name}” and everything inside it?`,
+        confirmLabel: 'Delete',
+        destructive: true,
+        busy: false,
+        error: null,
+        run: () => kbService.deleteFolder(action.path),
+      };
+      return;
+    }
+
+    if (action.action === 'rename') {
+      dialog = {
+        kind: 'text',
+        title: 'Rename folder',
+        fields: [{ type: 'text', label: 'Name', initialValue: name, required: true }],
+        submitLabel: 'Rename',
+        busy: false,
+        error: null,
+        run: async ([nextName]) => {
+          const target = joinPath(parent, nextName);
+          if (target === action.path) return;
+          await kbService.moveFolder(action.path, target);
+        },
+      };
+      return;
+    }
+
+    // move
+    dialog = {
+      kind: 'move',
+      title: 'Move folder',
+      description: `Choose a destination folder for “${name}”.`,
+      // A folder cannot move into itself or a descendant; exclude them.
+      folderPaths: collectFolderPaths(tree).filter(
+        (path) => path !== action.path && !path.startsWith(`${action.path}/`),
+      ),
+      currentParent: parent,
+      busy: false,
+      error: null,
+      run: async (destination) => {
+        const target = joinPath(destination, name);
+        if (target === action.path) return;
+        await kbService.moveFolder(action.path, target);
+      },
+    };
   }
 
-  async function fetchJson<T extends { ok: true } = { ok: true }>(
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<T> {
-    const response = await fetch(input, init);
-    const body = await response.json().catch(() => null) as (T | ApiFailure | null);
-    if (!response.ok || !body || body.ok === false) {
-      const failure = body && body.ok === false ? body : null;
-      throw new Error(failure?.message ?? failure?.error ?? `Request failed (${response.status})`);
+  function openVaultDialog(action: Extract<LocalTreeAction, { kind: 'vault' }>): void {
+    if (action.action === 'new-note') {
+      openNewNoteDialog('');
+      return;
     }
-    return body as T;
+    if (action.action === 'new-folder') {
+      openNewFolderDialog('');
+      return;
+    }
+    if (action.action === 'rename') {
+      // The local vault has no rename endpoint — its display name is the
+      // on-disk root folder's basename, which the daemon does not expose
+      // for mutation. Surface that clearly rather than silently failing.
+      dialog = {
+        kind: 'confirm',
+        title: 'Rename vault',
+        description:
+          'Renaming the vault is not supported from the web UI yet. Rename the vault folder on disk instead.',
+        confirmLabel: 'OK',
+        destructive: false,
+        busy: false,
+        error: null,
+        run: async () => undefined,
+      };
+      return;
+    }
+    // delete
+    dialog = {
+      kind: 'confirm',
+      title: 'Delete vault',
+      description:
+        'Deleting the whole vault is not supported from the web UI. Remove the vault folder on disk instead.',
+      confirmLabel: 'OK',
+      destructive: false,
+      busy: false,
+      error: null,
+      run: async () => undefined,
+    };
+  }
+
+  function openNewNoteDialog(parent: string): void {
+    dialog = {
+      kind: 'text',
+      title: 'New note',
+      description: parent ? `Create a note in “${leafName(parent)}”.` : 'Create a note at the vault root.',
+      fields: [{ type: 'text', label: 'Name', placeholder: 'untitled', required: true }],
+      submitLabel: 'Create',
+      busy: false,
+      error: null,
+      run: async ([nextName]) => {
+        const target = joinPath(parent, withMarkdownExtension(nextName));
+        await kbService.createNote(target);
+        if (parent) appState.expandFolders([expansionKey('folder', vaultId, parent)]);
+        await openDocument(target);
+      },
+    };
+  }
+
+  function openNewFolderDialog(parent: string): void {
+    dialog = {
+      kind: 'text',
+      title: 'New folder',
+      description: parent ? `Create a folder in “${leafName(parent)}”.` : 'Create a folder at the vault root.',
+      fields: [{ type: 'text', label: 'Name', placeholder: 'untitled', required: true }],
+      submitLabel: 'Create',
+      busy: false,
+      error: null,
+      run: async ([nextName]) => {
+        const target = joinPath(parent, nextName);
+        await kbService.createFolder(target);
+        // Unfurl the parent and the new folder so the addition is visible.
+        const keys = [expansionKey('folder', vaultId, target)];
+        if (parent) keys.push(expansionKey('folder', vaultId, parent));
+        appState.expandFolders(keys);
+      },
+    };
   }
 
   function buildTree(entries: TreeEntry[]): LocalTreeNode[] {
@@ -552,9 +751,6 @@
     return path.split('/').filter(Boolean).at(-1) ?? path;
   }
 
-  function titleCase(value: string): string {
-    return value.slice(0, 1).toUpperCase() + value.slice(1);
-  }
 
   function documentPathFromUrl(url: URL): string {
     if (url.pathname === '/') {
@@ -686,9 +882,7 @@
   onOpenFile={(path) => {
     void openDocument(path);
   }}
-  onTreeAction={(action) => {
-    void handleTreeAction(action);
-  }}
+  onTreeAction={handleTreeAction}
 >
   <EditorSaveNotifications
     externalMergeVisible={externalMergeVisible}
@@ -733,6 +927,50 @@
     <p class="error">{error}</p>
   {/if}
 </LocalEditorShell>
+
+{#if dialog.kind === 'text'}
+  <TextInputDialog
+    open
+    title={dialog.title}
+    description={dialog.description}
+    fields={dialog.fields}
+    submitLabel={dialog.submitLabel}
+    busy={dialog.busy}
+    error={dialog.error}
+    onsubmit={(values) => {
+      void runDialogOperation(() => dialog.kind === 'text' ? dialog.run(values) : Promise.resolve());
+    }}
+    oncancel={closeDialog}
+  />
+{:else if dialog.kind === 'confirm'}
+  <ConfirmDialog
+    open
+    title={dialog.title}
+    description={dialog.description}
+    confirmLabel={dialog.confirmLabel}
+    destructive={dialog.destructive}
+    busy={dialog.busy}
+    error={dialog.error}
+    onconfirm={() => {
+      void runDialogOperation(() => dialog.kind === 'confirm' ? dialog.run() : Promise.resolve());
+    }}
+    oncancel={closeDialog}
+  />
+{:else if dialog.kind === 'move'}
+  <MovePickerDialog
+    open
+    title={dialog.title}
+    description={dialog.description}
+    folderPaths={dialog.folderPaths}
+    currentParent={dialog.currentParent}
+    busy={dialog.busy}
+    error={dialog.error}
+    onsubmit={(destination) => {
+      void runDialogOperation(() => dialog.kind === 'move' ? dialog.run(destination) : Promise.resolve());
+    }}
+    oncancel={closeDialog}
+  />
+{/if}
 
 <style>
   .document-shell {

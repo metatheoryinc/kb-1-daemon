@@ -1,7 +1,9 @@
 <script lang="ts">
   import Avatar from '../primitives/Avatar.svelte';
   import Icon from '../primitives/Icon.svelte';
+  import ContextMenu from '../menus/ContextMenu.svelte';
   import type { AccentName } from '../primitives/accent';
+  import type { MenuItem } from '../menus/ContextMenu.svelte';
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
   import { vaultKey } from './expansion';
@@ -51,13 +53,32 @@
   // its collapsed deny-list).
   const open = $derived(expandedVaultIds === undefined || expandedVaultIds.has(key));
 
+  let menuPosition = $state<{ mode: 'cursor'; x: number; y: number } | null>(null);
+
+  const items = $derived<MenuItem[]>([
+    { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
+    { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder' }) },
+    { label: 'Rename', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'rename' }) },
+    {
+      label: 'Delete',
+      destructive: true,
+      onSelect: () => onTreeAction?.({ kind: 'vault', action: 'delete' })
+    }
+  ]);
+
   function toggle(): void {
     onToggleVault?.(key);
+  }
+
+  function openMenu(event: MouseEvent): void {
+    event.preventDefault();
+    menuPosition = { mode: 'cursor', x: event.clientX, y: event.clientY };
   }
 </script>
 
 <div class="vault-block">
-  <div class="vault-header" data-testid="vault-row">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="vault-header" data-testid="vault-row" oncontextmenu={openMenu}>
     <button type="button" class="activate" onclick={toggle} aria-expanded={open}>
       <span class="chev" class:collapsed={!open} aria-hidden="true">
         <Icon name="chevron-down" size={12} weight="bold" />
@@ -85,6 +106,17 @@
         {/if}
       {/each}
     </div>
+  {/if}
+
+  {#if menuPosition}
+    <ContextMenu
+      {items}
+      position={menuPosition}
+      ariaLabel={`Vault actions for ${vaultName}`}
+      onclose={() => {
+        menuPosition = null;
+      }}
+    />
   {/if}
 </div>
 

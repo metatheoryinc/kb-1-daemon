@@ -37,9 +37,13 @@ export interface LocalFileAction {
 
 export interface LocalFolderAction {
   kind: 'folder';
-  action: 'new-note' | 'new-folder' | 'rename' | 'move' | 'delete' | 'color';
+  action: 'new-note' | 'new-folder' | 'rename' | 'move' | 'delete';
   path: string;
-  color?: AccentName | null;
 }
 
-export type LocalTreeAction = LocalFileAction | LocalFolderAction;
+export interface LocalVaultAction {
+  kind: 'vault';
+  action: 'new-note' | 'new-folder' | 'rename' | 'delete';
+}
+
+export type LocalTreeAction = LocalFileAction | LocalFolderAction | LocalVaultAction;

@@ -1,9 +1,13 @@
 <script lang="ts">
   import LiveDot from '../primitives/LiveDot.svelte';
   import SearchInput from '../primitives/SearchInput.svelte';
+  import IconButton from '../primitives/IconButton.svelte';
+  import Icon from '../primitives/Icon.svelte';
+  import ContextMenu from '../menus/ContextMenu.svelte';
   import VaultGroup from './VaultGroup.svelte';
   import FilesSearchResults from './FilesSearchResults.svelte';
   import type { AccentName } from '../primitives/accent';
+  import type { MenuItem } from '../menus/ContextMenu.svelte';
   import type { LocalSearchResult, LocalTreeAction, LocalTreeNode } from './types';
 
   interface Props {
@@ -57,6 +61,18 @@
     onTreeAction,
   }: Props = $props();
 
+  let newMenuRect = $state<DOMRect | null>(null);
+
+  const newMenuItems = $derived<MenuItem[]>([
+    { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
+    { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder' }) }
+  ]);
+
+  function openNewMenu(event: MouseEvent): void {
+    const trigger = event.currentTarget as HTMLElement;
+    newMenuRect = trigger.getBoundingClientRect();
+  }
+
   const searching = $derived(searchValue.trim().length > 0);
   const dotColor = $derived(
     daemonStatus === 'open'
@@ -78,6 +94,9 @@
           <LiveDot size={8} color={dotColor} pulse={dotPulse} title={daemonLabel} />
         </div>
       </div>
+      <IconButton size="sm" title="New" ariaLabel="New note or folder" onclick={openNewMenu}>
+        <Icon name="plus" size={15} />
+      </IconButton>
     </div>
     <SearchInput
       value={searchValue}
@@ -119,6 +138,17 @@
       </nav>
     {/if}
   </div>
+
+  {#if newMenuRect}
+    <ContextMenu
+      items={newMenuItems}
+      position={{ mode: 'anchor', rect: newMenuRect }}
+      ariaLabel="New note or folder"
+      onclose={() => {
+        newMenuRect = null;
+      }}
+    />
+  {/if}
 </aside>
 
 <style>
