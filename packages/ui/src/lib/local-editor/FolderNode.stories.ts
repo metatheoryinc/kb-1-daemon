@@ -35,6 +35,15 @@ export const Collapsed: Story = {
   }
 };
 
+// An open folder that is also the active canvas. Gets the `--rd-active`
+// treatment (stronger ink + weight); a body click on this row collapses
+// it (the third state of the row click), while the caret still toggles.
+export const Active: Story = {
+  args: {
+    activeFolderId: folderKey(VAULT_ID, 'projects')
+  }
+};
+
 // Folder rows show a recursive note count at the trailing edge and a
 // hover-revealed `…` kebab. This story forces the kebab on (mobile
 // treatment) so both the count and the actions button are visible at rest.

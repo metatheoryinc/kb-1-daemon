@@ -19,6 +19,13 @@
     accent?: AccentName;
     tree: LocalTreeNode[];
     activePath?: string;
+    /** Currently-selected folder row key (when a folder is the active
+        canvas). Threaded to folder rows for active highlighting. */
+    activeFolderId?: string;
+    /** Active vault key (`vault:<id>`) when the vault root itself is the
+        active canvas. Highlights the header with the same active
+        treatment as a selected folder row. */
+    activeVaultId?: string;
     /** Allow-list of expanded folder keys, owned by the shell. */
     expandedFolderIds?: Set<string>;
     /** Set of vault keys (`vault:<id>`) currently expanded. The shell
@@ -38,6 +45,13 @@
     /** Toggle this vault group's expansion. Called with the vault key. */
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
+    /** Navigate to the vault root. Called with the vault key on a header
+        click, alongside the expansion toggle. When unset, the header
+        click only toggles. */
+    onOpenVault?: (key: string) => void;
+    /** Navigate to a folder. Threaded to folder rows for the three-state
+        row click. */
+    onOpenFolder?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
   }
 
@@ -47,6 +61,8 @@
     accent = 'slate',
     tree,
     activePath = '',
+    activeFolderId,
+    activeVaultId,
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
     favoritedFolderPaths,
@@ -55,6 +71,8 @@
     onToggleFolder,
     onToggleVault,
     onOpenFile,
+    onOpenVault,
+    onOpenFolder,
     onTreeAction,
   }: Props = $props();
 
@@ -63,6 +81,7 @@
   // a wired set means "open iff present" (the shell already complemented
   // its collapsed deny-list).
   const open = $derived(expandedVaultIds === undefined || expandedVaultIds.has(key));
+  const active = $derived(activeVaultId === key);
 
   // The kebab and right-click open the same menu; the kebab hangs from the
   // button rect (anchor) while right-click pins to the cursor.
@@ -81,8 +100,11 @@
     }
   ]);
 
-  function toggle(): void {
+  // Header click toggles expansion and navigates to the vault root — the
+  // expansion always flips, the navigate is a no-op when unwired.
+  function handleClick(): void {
     onToggleVault?.(key);
+    onOpenVault?.(key);
   }
 
   function openMenu(event: MouseEvent): void {
@@ -99,8 +121,8 @@
 
 <div class="vault-block">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="vault-header" data-testid="vault-row" oncontextmenu={openMenu}>
-    <button type="button" class="activate" onclick={toggle} aria-expanded={open}>
+  <div class="vault-header" class:active data-testid="vault-row" oncontextmenu={openMenu}>
+    <button type="button" class="activate" onclick={handleClick} aria-expanded={open}>
       <span class="chev" class:collapsed={!open} aria-hidden="true">
         <Icon name="chevron-down" size={12} weight="bold" />
       </span>
@@ -127,12 +149,14 @@
             {node}
             {vaultId}
             {activePath}
+            {activeFolderId}
             {expandedFolderIds}
             {favoritedFolderPaths}
             {favoritedNotePaths}
             {kebabAlwaysVisible}
             {onToggleFolder}
             onOpen={onOpenFile}
+            {onOpenFolder}
             onAction={onTreeAction}
           />
         {:else}
@@ -180,8 +204,13 @@
     font-weight: 500;
   }
 
-  .vault-header:hover {
+  .vault-header:hover:not(.active) {
     background: var(--rd-hover);
+  }
+
+  .vault-header.active {
+    background: var(--rd-active);
+    color: var(--rd-ink-1);
   }
 
   .activate {

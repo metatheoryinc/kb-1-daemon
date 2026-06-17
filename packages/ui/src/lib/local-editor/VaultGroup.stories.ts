@@ -41,6 +41,22 @@ export const FoldersClosed: Story = {
   }
 };
 
+// The vault root as the active canvas — header gets the `--rd-active`
+// treatment, matching a selected folder row.
+export const ActiveVault: Story = {
+  args: {
+    activeVaultId: vaultKey(VAULT_ID)
+  }
+};
+
+// An open folder selected as the active canvas — that row gets the
+// active highlight.
+export const ActiveFolder: Story = {
+  args: {
+    activeFolderId: folderKey(VAULT_ID, 'projects')
+  }
+};
+
 // Forces every row's `…` kebab on (the mobile treatment) so the actions
 // button is visible on the vault header, folder rows (beside their note
 // counts), and file rows without hovering.

@@ -26,6 +26,11 @@
         key (`folder:<vaultId>:<path>`) the shell's store reads. */
     vaultId: string;
     activePath?: string;
+    /** Currently-selected folder row key (when the canvas is a folder
+        view). Highlights the matching row, same active treatment as a
+        file row. Keyed by the opaque folder key (`folder:<vaultId>:<path>`),
+        the same identity the expansion set uses. */
+    activeFolderId?: string;
     /** Allow-list of expanded folder keys. The single source of truth
         for whether a row is open — the shell owns this set. */
     expandedFolderIds?: Set<string>;
@@ -41,6 +46,11 @@
     /** Toggle a folder row. Called with the row's opaque key. */
     onToggleFolder?: (key: string) => void;
     onOpen?: (path: string) => void;
+    /** Navigate to the folder itself (the open-folder destination).
+        Called with the row's opaque key. Part of the three-state row
+        click: an already-open, not-active folder activates instead of
+        collapsing. When unset, that branch is a no-op. */
+    onOpenFolder?: (key: string) => void;
     onAction?: (action: LocalTreeAction) => void;
   }
 
@@ -48,6 +58,7 @@
     node,
     vaultId,
     activePath = '',
+    activeFolderId,
     expandedFolderIds = new Set<string>(),
     depth = 0,
     favoritedFolderPaths,
@@ -55,6 +66,7 @@
     kebabAlwaysVisible = false,
     onToggleFolder,
     onOpen,
+    onOpenFolder,
     onAction,
   }: Props = $props();
 
@@ -65,6 +77,7 @@
   >(null);
   const key = $derived(folderKey(vaultId, node.path));
   const open = $derived(expandedFolderIds.has(key));
+  const active = $derived(activeFolderId === key);
   const favorited = $derived(favoritedFolderPaths?.has(node.path) ?? false);
   const indent = $derived(12 + depth * 14);
   // Recursive note count under this folder — every descendant note, not
@@ -100,16 +113,28 @@
     menuPosition = { mode: 'anchor', rect };
   }
 
-  function toggle(): void {
-    onToggleFolder?.(key);
+  // Three-state folder-row click:
+  //   closed              → expand only (no nav)
+  //   open + not active   → activate (route to the folder)
+  //   open + active       → collapse
+  // The caret is a separate path that ONLY toggles, never navigates — so
+  // a user who just wants to expand or collapse a folder doesn't trip the
+  // navigate branch.
+  function handleClick(): void {
+    if (!open) {
+      onToggleFolder?.(key);
+      return;
+    }
+    if (active) {
+      onToggleFolder?.(key);
+      return;
+    }
+    onOpenFolder?.(key);
   }
 
-  // Caret click toggles without opening the canvas; the row body click
-  // toggles too — a single-vault tree has no separate folder canvas, so
-  // both affordances collapse to the same toggle.
   function handleCaretClick(event: MouseEvent): void {
     event.stopPropagation();
-    toggle();
+    onToggleFolder?.(key);
   }
 </script>
 
@@ -117,6 +142,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="row"
+    class:active
     style="padding-left: {indent}px;"
     oncontextmenu={openMenu}
   >
@@ -131,7 +157,7 @@
         <Icon name="chevron-down" size={12} weight="bold" />
       </span>
     </button>
-    <button type="button" class="activate" onclick={toggle}>
+    <button type="button" class="activate" onclick={handleClick}>
       <FolderIcon color={folderColor} icon={folderIcon} size="sm" variant="filled" label={`${node.name} folder`} />
       <span class="name">{node.name}</span>
     </button>
@@ -156,6 +182,7 @@
             node={child}
             {vaultId}
             {activePath}
+            {activeFolderId}
             {expandedFolderIds}
             depth={depth + 1}
             {favoritedFolderPaths}
@@ -163,6 +190,7 @@
             {kebabAlwaysVisible}
             {onToggleFolder}
             {onOpen}
+            {onOpenFolder}
             {onAction}
           />
         {:else}
@@ -207,9 +235,14 @@
     font-size: 12px;
   }
 
-  .row:hover {
+  .row:hover:not(.active) {
     background: var(--rd-hover);
+  }
+
+  .row.active {
+    background: var(--rd-active);
     color: var(--rd-ink-1);
+    font-weight: 500;
   }
 
   .caret {

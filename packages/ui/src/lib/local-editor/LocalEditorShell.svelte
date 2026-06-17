@@ -48,6 +48,10 @@
     hiddenVaultIds?: string[];
     /** Secondary (files) rail width in px. Applied as `--rd-mid-w`. */
     secondaryRailWidth?: number;
+    /** Active folder row key when a folder is the active canvas. */
+    activeFolderId?: string;
+    /** Active vault key when the vault root is the active canvas. */
+    activeVaultId?: string;
     /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
     expandedFolderIds?: Set<string>;
     /** Set of expanded vault keys. Omit to render the vault open. */
@@ -62,6 +66,10 @@
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
+    /** Navigate to a folder (three-state row click's open branch). */
+    onOpenFolder?: (key: string) => void;
+    /** Navigate to the vault root. */
+    onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
@@ -92,6 +100,8 @@
     vaults,
     hiddenVaultIds = [],
     secondaryRailWidth = 282,
+    activeFolderId,
+    activeVaultId,
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
     kebabAlwaysVisible = false,
@@ -101,6 +111,8 @@
     onToggleFolder,
     onToggleVault,
     onOpenFile,
+    onOpenFolder,
+    onOpenVault,
     onTreeAction,
     onToggleVaultHidden,
     onResizeRail,
@@ -141,6 +153,8 @@
       {hiddenVaultIds}
       {tree}
       activePath={documentPath}
+      {activeFolderId}
+      {activeVaultId}
       {expandedFolderIds}
       {expandedVaultIds}
       {favoritedFolderPaths}
@@ -149,6 +163,8 @@
       {onToggleFolder}
       {onToggleVault}
       {onOpenFile}
+      {onOpenFolder}
+      {onOpenVault}
       {onTreeAction}
       {onToggleVaultHidden}
     />

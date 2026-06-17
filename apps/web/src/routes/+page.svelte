@@ -366,6 +366,16 @@
     appState.toggleFolderExpanded(key);
   }
 
+  // The tree row's three-state click reaches its "open + not active"
+  // branch via onOpenFolder, which a folder canvas would consume to
+  // navigate. This shell has no folder page, so the closest sensible
+  // behavior is to collapse the row — fall back to the expansion toggle.
+  // (Follow-up: a folder canvas/route would wire this to a real
+  // navigation and supply activeFolderId for the active row.)
+  function openFolder(key: string): void {
+    toggleFolder(key);
+  }
+
   function toggleVault(key: string): void {
     // The vault key encodes the id (`vault:<id>`); the deny-list is
     // keyed by raw id, so collapse iff the vault is currently expanded.
@@ -884,6 +894,7 @@
   onOpenFile={(path) => {
     void openDocument(path);
   }}
+  onOpenFolder={openFolder}
   onTreeAction={handleTreeAction}
 >
   <EditorSaveNotifications

@@ -24,6 +24,10 @@
     hiddenVaultIds?: string[];
     tree: LocalTreeNode[];
     activePath?: string;
+    /** Active folder row key when a folder is the active canvas. */
+    activeFolderId?: string;
+    /** Active vault key when the vault root is the active canvas. */
+    activeVaultId?: string;
     /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
     expandedFolderIds?: Set<string>;
     /** Set of expanded vault keys (`vault:<id>`). Omit to render open. */
@@ -38,6 +42,10 @@
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
+    /** Navigate to a folder (the three-state row click's open branch). */
+    onOpenFolder?: (key: string) => void;
+    /** Navigate to the vault root. */
+    onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
@@ -51,6 +59,8 @@
     hiddenVaultIds = [],
     tree,
     activePath = '',
+    activeFolderId,
+    activeVaultId,
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
     favoritedFolderPaths,
@@ -59,6 +69,8 @@
     onToggleFolder,
     onToggleVault,
     onOpenFile,
+    onOpenFolder,
+    onOpenVault,
     onTreeAction,
     onToggleVaultHidden,
   }: Props = $props();
@@ -137,6 +149,8 @@
           accent={vaultAccent}
           {tree}
           {activePath}
+          {activeFolderId}
+          {activeVaultId}
           {expandedFolderIds}
           {expandedVaultIds}
           {favoritedFolderPaths}
@@ -145,6 +159,8 @@
           {onToggleFolder}
           {onToggleVault}
           {onOpenFile}
+          {onOpenFolder}
+          {onOpenVault}
           {onTreeAction}
         />
       </nav>
