@@ -81,21 +81,6 @@ describe('local editor route', () => {
           ],
         });
       }
-      if (url.startsWith('/api/search?')) {
-        return json({
-          ok: true,
-          results: [
-            {
-              path: 'research/search-hit.md',
-              line: 1,
-              lineText: 'Search target content',
-              context: {},
-            },
-          ],
-          total: 1,
-          truncated: false,
-        });
-      }
       return json({ ok: false, error: 'not_found', message: `Unhandled ${url}` }, 404);
     }));
   });
@@ -131,32 +116,21 @@ describe('local editor route', () => {
     expect(mocks.providers[0]?.text.toString()).toBe('content:hello-world.md');
   });
 
-  it('rebinds the editor when a search result is opened', async () => {
+  it('hides the vault tree when the vault is toggled off in the filter', async () => {
     render(Page);
 
-    const initialEditor = await screen.findByLabelText('Markdown editor') as HTMLTextAreaElement;
-    expect(initialEditor.value).toBe('content:hello-world.md');
+    const filesPanel = within(screen.getByRole('complementary', { name: 'Vault files' }));
+    // The tree renders the vault's folders while the vault is visible.
+    expect(await filesPanel.findByText('projects')).toBeTruthy();
 
-    const search = screen.getByPlaceholderText('Search files');
-    await fireEvent.input(search, { target: { value: 'target' } });
-    await waitFor(() => {
-      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith('/api/search?'))).toBe(true);
-    });
-
-    await fireEvent.click(await screen.findByText('research/search-hit.md'));
+    // Open the filter popover and toggle the lone vault off.
+    await fireEvent.click(filesPanel.getByRole('button', { name: /vault/i }));
+    const popover = within(await screen.findByRole('dialog', { name: 'Filter visible vaults' }));
+    await fireEvent.click(popover.getByRole('checkbox', { name: 'Toggle demo-vault' }));
 
     await waitFor(() => {
-      expect(mocks.goto).toHaveBeenCalledWith('/research/search-hit.md', {
-        noScroll: true,
-        keepFocus: true,
-      });
+      expect(filesPanel.queryByText('projects')).toBeNull();
     });
-    const searchEditor = await waitForBoundEditor('content:research/search-hit.md');
-
-    await fireEvent.input(searchEditor, { target: { value: 'typed into search-opened file' } });
-    const searchProvider = mocks.providers.at(-1);
-    expect(searchProvider?.path).toBe('research/search-hit.md');
-    expect(searchProvider?.text.toString()).toBe('typed into search-opened file');
   });
 
   it('renders an in-shell not-found state for missing document navigation without creating it', async () => {

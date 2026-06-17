@@ -1,14 +1,13 @@
 <script lang="ts">
-  import LiveDot from '../primitives/LiveDot.svelte';
-  import SearchInput from '../primitives/SearchInput.svelte';
   import IconButton from '../primitives/IconButton.svelte';
   import Icon from '../primitives/Icon.svelte';
   import ContextMenu from '../menus/ContextMenu.svelte';
   import VaultGroup from './VaultGroup.svelte';
-  import FilesSearchResults from './FilesSearchResults.svelte';
+  import VaultFilterButton from './VaultFilterButton.svelte';
+  import VaultFilterPopover from './VaultFilterPopover.svelte';
   import type { AccentName } from '../primitives/accent';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
-  import type { LocalSearchResult, LocalTreeAction, LocalTreeNode } from './types';
+  import type { LocalTreeAction, LocalTreeNode, VaultFilterEntry } from './types';
 
   interface Props {
     vaultName: string;
@@ -17,51 +16,45 @@
     vaultId?: string;
     /** Accent for the vault group's folder token. */
     vaultAccent?: AccentName;
-    daemonLabel: string;
-    daemonStatus?: 'open' | 'connecting' | 'closed' | 'error';
-    searchValue?: string;
+    /** Full set of vaults the filter lists. Defaults to a single entry
+        built from this panel's own vault so a caller that only wires the
+        tree still gets a working filter. */
+    vaults?: VaultFilterEntry[];
+    /** Deny-list of vault ids the user has hidden. Owned by the app. */
+    hiddenVaultIds?: string[];
     tree: LocalTreeNode[];
     activePath?: string;
     /** Allow-list of expanded folder keys (`folder:<vaultId>:<path>`). */
     expandedFolderIds?: Set<string>;
     /** Set of expanded vault keys (`vault:<id>`). Omit to render open. */
     expandedVaultIds?: Set<string>;
-    searchResults?: LocalSearchResult[];
-    searchTotal?: number;
-    searchTruncated?: boolean;
-    searchLoading?: boolean;
-    onSearchInput?: (value: string) => void;
-    onSearchClear?: () => void;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
     onOpenFile?: (path: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    /** Add/remove a vault id from the hide-list. */
+    onToggleVaultHidden?: (vaultId: string) => void;
   }
 
   let {
     vaultName,
     vaultId = vaultName,
     vaultAccent = 'slate',
-    daemonLabel,
-    daemonStatus = 'open',
-    searchValue = '',
+    vaults,
+    hiddenVaultIds = [],
     tree,
     activePath = '',
     expandedFolderIds = new Set<string>(),
     expandedVaultIds,
-    searchResults = [],
-    searchTotal = searchResults.length,
-    searchTruncated = false,
-    searchLoading = false,
-    onSearchInput,
-    onSearchClear,
     onToggleFolder,
     onToggleVault,
     onOpenFile,
     onTreeAction,
+    onToggleVaultHidden,
   }: Props = $props();
 
   let newMenuRect = $state<DOMRect | null>(null);
+  let filterOpen = $state(false);
 
   const newMenuItems = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
@@ -73,52 +66,58 @@
     newMenuRect = trigger.getBoundingClientRect();
   }
 
-  const searching = $derived(searchValue.trim().length > 0);
-  const dotColor = $derived(
-    daemonStatus === 'open'
-      ? '#1f8a4d'
-      : daemonStatus === 'connecting'
-        ? '#c27a14'
-        : '#c74436',
+  // The filter lists the panel's own vault when no explicit set is given.
+  const allVaults = $derived<VaultFilterEntry[]>(
+    vaults ?? [{ id: vaultId, name: vaultName, accent: vaultAccent }],
   );
-  const dotPulse = $derived(daemonStatus === 'connecting');
+  const totalVaults = $derived(allVaults.length);
+  const hidden = $derived(new Set(hiddenVaultIds));
+  // Visible = everything not in the hide-list. Drives the popover's
+  // checked state and the "showing N of M" count.
+  const selectedIds = $derived(allVaults.map((v) => v.id).filter((id) => !hidden.has(id)));
+  const visibleCount = $derived(selectedIds.length);
+  const filterLabel = $derived(
+    hidden.size === 0
+      ? 'All vaults'
+      : `${visibleCount} vault${visibleCount === 1 ? '' : 's'}`,
+  );
+
+  // The tree only renders vaults the user hasn't hidden. The local shell
+  // has one vault, so hiding it empties the tree; the filter stays
+  // available to bring it back.
+  const vaultHidden = $derived(hidden.has(vaultId));
 </script>
 
 <aside class="files-panel" aria-label="Vault files">
   <header class="panel-header">
     <div class="title-row">
-      <div class="vault-title">
-        <span>Vault</span>
-        <div class="vault-name">
-          <strong>{vaultName}</strong>
-          <LiveDot size={8} color={dotColor} pulse={dotPulse} title={daemonLabel} />
-        </div>
-      </div>
+      <h2>Files &amp; Vaults</h2>
       <IconButton size="sm" title="New" ariaLabel="New note or folder" onclick={openNewMenu}>
         <Icon name="plus" size={15} />
       </IconButton>
     </div>
-    <SearchInput
-      value={searchValue}
-      placeholder="Search files"
-      onInput={onSearchInput}
-      onClear={onSearchClear}
-    />
+
+    <div class="filter-row">
+      <VaultFilterButton
+        open={filterOpen}
+        label={filterLabel}
+        onclick={() => (filterOpen = !filterOpen)}
+      />
+      <span class="counts">showing {visibleCount} of {totalVaults}</span>
+    </div>
+
+    {#if filterOpen}
+      <VaultFilterPopover
+        vaults={allVaults}
+        {selectedIds}
+        onToggle={(id) => onToggleVaultHidden?.(id)}
+        onClose={() => (filterOpen = false)}
+      />
+    {/if}
   </header>
 
   <div class="panel-body">
-    {#if searching}
-      {#if searchLoading}
-        <p class="loading">Searching…</p>
-      {/if}
-      <FilesSearchResults
-        query={searchValue}
-        results={searchResults}
-        total={searchTotal}
-        truncated={searchTruncated}
-        onOpen={onOpenFile}
-      />
-    {:else if tree.length === 0}
+    {#if vaultHidden || tree.length === 0}
       <p class="loading">No notes yet.</p>
     {:else}
       <nav class="tree" aria-label="Files">
@@ -162,9 +161,10 @@
   }
 
   .panel-header {
+    position: relative;
     display: grid;
     gap: 10px;
-    padding: 14px 12px 12px;
+    padding: 14px 14px 12px;
     border-bottom: 1px solid var(--rd-rule);
   }
 
@@ -175,34 +175,28 @@
     gap: 8px;
   }
 
-  .vault-title {
-    display: grid;
-    min-width: 0;
-    gap: 2px;
-    font-family: var(--rd-ui);
-  }
-
-  .vault-title span {
-    color: var(--rd-ink-4);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-  }
-
-  .vault-title strong {
+  h2 {
+    margin: 0;
     overflow: hidden;
     color: var(--rd-ink-1);
-    font-size: 14px;
-    font-weight: 650;
+    font-family: var(--rd-ui);
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .vault-name {
+  .filter-row {
     display: flex;
     align-items: center;
-    min-width: 0;
-    gap: 7px;
+    gap: 8px;
+  }
+
+  .counts {
+    color: var(--rd-ink-4);
+    font-family: var(--rd-ui);
+    font-size: 11px;
   }
 
   .panel-body {

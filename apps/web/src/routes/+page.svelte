@@ -25,10 +25,10 @@
     TextInputDialog,
     type AccentName,
     type DialogField,
-    type LocalSearchResult,
     type LocalTreeAction,
     type LocalTreeNode,
     type RailNavId,
+    type VaultFilterEntry,
   } from '@kb-2/ui';
   import { kbService } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
@@ -101,11 +101,11 @@
   // Stable id seeding the tree's expansion keys. The single local vault
   // has no durable id of its own, so the vault name stands in.
   const vaultId = $derived(vaultName);
-  let searchValue = $state('');
-  let searchResults = $state<LocalSearchResult[]>([]);
-  let searchTotal = $state(0);
-  let searchTruncated = $state(false);
-  let searchLoading = $state(false);
+  // The filter lists the single local vault. The deny-list lives in the
+  // app-state store; toggling here hides/shows the lone vault's tree.
+  const vaults = $derived<VaultFilterEntry[]>([
+    { id: vaultId, name: vaultName, accent: 'slate' },
+  ]);
   let mounted = $state(false);
   // Which secondary panel the rail has selected. 'files' shows the tree;
   // 'starred' shows the (currently empty) starred view.
@@ -122,6 +122,11 @@
   // owns mutation and localStorage persistence.
   let expandedFolderIds = $state<Set<string>>(appState.getState().expandedFolderIds);
   let collapsedVaultIds = $state<Set<string>>(appState.getState().collapsedVaultIds);
+  // Vault-visibility deny-list and the secondary rail width — both
+  // persisted in the app-state store. Mirror into `$state` so the
+  // template re-renders on change; the store owns mutation + storage.
+  let hiddenVaultIds = $state<string[]>(appState.getState().hiddenVaultIds);
+  let secondaryRailWidth = $state<number>(appState.getState().secondaryRailWidth);
   // Vaults default open: the persisted shape is a collapse deny-list, so
   // the expanded set is its complement over the one local vault.
   const expandedVaultIds = $derived.by<Set<string>>(() => {
@@ -137,7 +142,6 @@
         : 'light'
       : colorModePref,
   );
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -311,7 +315,7 @@
 
   async function openDocument(path: string): Promise<void> {
     if (path === documentPath && notFoundPath !== path) return;
-    rebindDocument(path, { resetSearch: true });
+    rebindDocument(path);
     await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
   }
 
@@ -339,15 +343,9 @@
     void openDocument(targetPath);
   }
 
-  function rebindDocument(path: string, options: { resetSearch?: boolean } = {}): void {
+  function rebindDocument(path: string): void {
     documentPath = path;
     openProvider(path);
-    if (options.resetSearch === true) {
-      searchValue = '';
-      searchResults = [];
-      searchTotal = 0;
-      searchTruncated = false;
-    }
   }
 
   function toggleFolder(key: string): void {
@@ -364,45 +362,12 @@
     appState.cycleColorMode();
   }
 
-  function updateSearch(value: string): void {
-    searchValue = value;
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      void runSearch(value);
-    }, 250);
+  function toggleVaultHidden(id: string): void {
+    appState.toggleVaultHidden(id);
   }
 
-  function clearSearch(): void {
-    searchValue = '';
-    searchResults = [];
-    searchTotal = 0;
-    searchTruncated = false;
-  }
-
-  async function runSearch(value: string): Promise<void> {
-    const query = value.trim();
-    if (!query) {
-      clearSearch();
-      return;
-    }
-    searchLoading = true;
-    try {
-      const response = await kbService.search(query, 50);
-      if (query !== searchValue.trim()) return;
-      searchResults = response.results.map((hit) => ({
-        path: hit.path,
-        line: hit.line,
-        lineText: hit.lineText,
-        before: hit.context?.before ?? [],
-        after: hit.context?.after ?? [],
-      }));
-      searchTotal = response.total;
-      searchTruncated = response.truncated || response.total > response.results.length;
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    } finally {
-      searchLoading = false;
-    }
+  function resizeRail(next: number): void {
+    appState.setSecondaryRailWidth(next);
   }
 
   async function refreshVaultInfo(): Promise<void> {
@@ -774,9 +739,13 @@
     const snapshot = appState.getState();
     expandedFolderIds = snapshot.expandedFolderIds;
     collapsedVaultIds = snapshot.collapsedVaultIds;
+    hiddenVaultIds = snapshot.hiddenVaultIds;
+    secondaryRailWidth = snapshot.secondaryRailWidth;
     return appState.subscribe((s) => {
       expandedFolderIds = s.expandedFolderIds;
       collapsedVaultIds = s.collapsedVaultIds;
+      hiddenVaultIds = s.hiddenVaultIds;
+      secondaryRailWidth = s.secondaryRailWidth;
     });
   });
 
@@ -812,7 +781,7 @@
     if (!mounted || !navigation.to?.url) return;
     const nextPath = documentPathFromUrl(navigation.to.url);
     if (nextPath === documentPath) return;
-    rebindDocument(nextPath, { resetSearch: true });
+    rebindDocument(nextPath);
   });
 
   onMount(() => {
@@ -831,10 +800,6 @@
 
     return () => {
       mounted = false;
-      if (searchTimer) {
-        clearTimeout(searchTimer);
-        searchTimer = undefined;
-      }
       if (externalMergeTimer) {
         clearTimeout(externalMergeTimer);
         externalMergeTimer = undefined;
@@ -864,18 +829,16 @@
   colorModeChoice={colorModePref}
   {activeNav}
   {tree}
+  {vaults}
+  {hiddenVaultIds}
+  {secondaryRailWidth}
   {expandedFolderIds}
   {expandedVaultIds}
-  {searchValue}
-  {searchResults}
-  {searchTotal}
-  {searchTruncated}
-  {searchLoading}
   onSelectNav={(id) => {
     activeNav = id;
   }}
-  onSearchInput={updateSearch}
-  onSearchClear={clearSearch}
+  onToggleVaultHidden={toggleVaultHidden}
+  onResizeRail={resizeRail}
   onToggleColorMode={toggleColorMode}
   onToggleFolder={toggleFolder}
   onToggleVault={toggleVault}

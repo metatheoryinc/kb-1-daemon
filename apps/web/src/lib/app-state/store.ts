@@ -27,6 +27,23 @@ export const colorModes: readonly ColorMode[] = ['light', 'dark', 'system'];
 export const DEFAULT_PERSIST_KEY = 'kb2:app-state';
 
 /**
+ * Secondary (files) rail width bounds, in px. The setter clamps every
+ * incoming value to this range and the rehydrate path defensively
+ * re-clamps any out-of-range persisted blob, so consumers never have to
+ * clamp themselves.
+ */
+export const SECONDARY_RAIL_WIDTH_MIN = 240;
+export const SECONDARY_RAIL_WIDTH_MAX = 564;
+export const SECONDARY_RAIL_WIDTH_DEFAULT = 282;
+
+export function clampSecondaryRailWidth(width: number): number {
+  if (!Number.isFinite(width)) return SECONDARY_RAIL_WIDTH_DEFAULT;
+  if (width < SECONDARY_RAIL_WIDTH_MIN) return SECONDARY_RAIL_WIDTH_MIN;
+  if (width > SECONDARY_RAIL_WIDTH_MAX) return SECONDARY_RAIL_WIDTH_MAX;
+  return Math.round(width);
+}
+
+/**
  * Shape of the persisted blob. Versioned by structure, not by a flag.
  *
  * The two expansion sets persist as plain string arrays (JSON has no
@@ -36,6 +53,10 @@ interface PersistedState {
   colorMode: ColorMode;
   expandedFolderIds: string[];
   collapsedVaultIds: string[];
+  /** Deny-list of hidden vault ids. Empty means "nothing hidden". */
+  hiddenVaultIds: string[];
+  /** Secondary (files) rail width in px. */
+  secondaryRailWidth: number;
 }
 
 /** The live, in-memory app state. Mirrors the persisted slice plus actions. */
@@ -52,6 +73,18 @@ export interface AppState {
    * means "the user explicitly collapsed this vault group."
    */
   collapsedVaultIds: Set<string>;
+  /**
+   * Per-vault visibility filter — deny-list semantics. A vault id here
+   * is hidden from the files tree; the default `[]` means "everything
+   * visible." Stored sorted so the persisted JSON is stable across
+   * toggles that end at the same logical set.
+   */
+  hiddenVaultIds: string[];
+  /**
+   * Secondary (files) rail width in px. Always clamped to
+   * [{@link SECONDARY_RAIL_WIDTH_MIN}, {@link SECONDARY_RAIL_WIDTH_MAX}].
+   */
+  secondaryRailWidth: number;
 }
 
 export interface AppStateStore {
@@ -71,6 +104,10 @@ export interface AppStateStore {
   expandFolders: (keys: Iterable<string>) => void;
   /** Set a vault id's collapsed state in the deny-list. */
   setVaultCollapsed: (vaultId: string, collapsed: boolean) => void;
+  /** Toggle a vault id's presence in the visibility hide-list. */
+  toggleVaultHidden: (vaultId: string) => void;
+  /** Set the secondary rail width. Clamps to the sane range. */
+  setSecondaryRailWidth: (width: number) => void;
 }
 
 export interface CreateAppStateOptions {
@@ -88,7 +125,13 @@ const DEFAULT_STATE: AppState = {
   colorMode: 'system',
   expandedFolderIds: new Set<string>(),
   collapsedVaultIds: new Set<string>(),
+  hiddenVaultIds: [],
+  secondaryRailWidth: SECONDARY_RAIL_WIDTH_DEFAULT,
 };
+
+function sortedIds(ids: readonly string[]): string[] {
+  return [...ids].sort();
+}
 
 function nextColorMode(mode: ColorMode): ColorMode {
   return mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -102,10 +145,18 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
+interface PersistedSlice {
+  colorMode: ColorMode;
+  expandedFolderIds: string[];
+  collapsedVaultIds: string[];
+  hiddenVaultIds: string[];
+  secondaryRailWidth: number;
+}
+
 function readPersisted(
   storage: Pick<Storage, 'getItem' | 'setItem'> | undefined,
   key: string,
-): Partial<{ colorMode: ColorMode; expandedFolderIds: string[]; collapsedVaultIds: string[] }> {
+): Partial<PersistedSlice> {
   if (!storage) return {};
   const raw = storage.getItem(key);
   if (!raw) return {};
@@ -113,14 +164,15 @@ function readPersisted(
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object') return {};
     const blob = parsed as Record<string, unknown>;
-    const out: Partial<{
-      colorMode: ColorMode;
-      expandedFolderIds: string[];
-      collapsedVaultIds: string[];
-    }> = {};
+    const out: Partial<PersistedSlice> = {};
     if (isColorMode(blob.colorMode)) out.colorMode = blob.colorMode;
     if ('expandedFolderIds' in blob) out.expandedFolderIds = stringArray(blob.expandedFolderIds);
     if ('collapsedVaultIds' in blob) out.collapsedVaultIds = stringArray(blob.collapsedVaultIds);
+    if ('hiddenVaultIds' in blob) out.hiddenVaultIds = stringArray(blob.hiddenVaultIds);
+    if (typeof blob.secondaryRailWidth === 'number') {
+      // Defensively re-clamp any out-of-range persisted width.
+      out.secondaryRailWidth = clampSecondaryRailWidth(blob.secondaryRailWidth);
+    }
     return out;
   } catch {
     // Corrupt blob — fall back to defaults rather than throwing.
@@ -143,6 +195,8 @@ export function createAppState(
     colorMode: persisted.colorMode ?? DEFAULT_STATE.colorMode,
     expandedFolderIds: new Set(persisted.expandedFolderIds ?? []),
     collapsedVaultIds: new Set(persisted.collapsedVaultIds ?? []),
+    hiddenVaultIds: sortedIds(persisted.hiddenVaultIds ?? []),
+    secondaryRailWidth: persisted.secondaryRailWidth ?? DEFAULT_STATE.secondaryRailWidth,
   };
 
   const listeners = new Set<(state: AppState) => void>();
@@ -153,6 +207,8 @@ export function createAppState(
       colorMode: state.colorMode,
       expandedFolderIds: [...state.expandedFolderIds],
       collapsedVaultIds: [...state.collapsedVaultIds],
+      hiddenVaultIds: state.hiddenVaultIds,
+      secondaryRailWidth: state.secondaryRailWidth,
     };
     try {
       storage.setItem(persistKey, JSON.stringify(blob));
@@ -203,6 +259,18 @@ export function createAppState(
       if (collapsed) next.add(vaultId);
       else next.delete(vaultId);
       commit({ ...state, collapsedVaultIds: next });
+    },
+    toggleVaultHidden: (vaultId) => {
+      const hidden = state.hiddenVaultIds.includes(vaultId);
+      const next = hidden
+        ? state.hiddenVaultIds.filter((id) => id !== vaultId)
+        : sortedIds([...state.hiddenVaultIds, vaultId]);
+      commit({ ...state, hiddenVaultIds: next });
+    },
+    setSecondaryRailWidth: (width) => {
+      const clamped = clampSecondaryRailWidth(width);
+      if (clamped === state.secondaryRailWidth) return;
+      commit({ ...state, secondaryRailWidth: clamped });
     },
   };
 }

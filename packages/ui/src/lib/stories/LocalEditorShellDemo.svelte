@@ -3,7 +3,6 @@
   import { folderKey } from '../local-editor/expansion';
   import {
     localEditorDocumentPath,
-    localEditorSearchFixture,
     localEditorTreeFixture
   } from '../local-editor/fixtures';
 
@@ -18,6 +17,10 @@
   );
   let activeNav = $state<RailNavId>('files');
   let colorModeChoice = $state<'light' | 'dark' | 'system'>('system');
+  let hiddenVaultIds = $state<string[]>([]);
+  let secondaryRailWidth = $state(282);
+
+  const clampWidth = (w: number) => Math.round(Math.min(564, Math.max(240, w)));
 
   const cycle = (m: 'light' | 'dark' | 'system'): 'light' | 'dark' | 'system' =>
     m === 'light' ? 'dark' : m === 'dark' ? 'system' : 'light';
@@ -34,11 +37,18 @@
   vaultId={VAULT_ID}
   tree={localEditorTreeFixture}
   {expandedFolderIds}
-  searchValue=""
-  searchResults={localEditorSearchFixture}
-  searchTotal={localEditorSearchFixture.length}
+  {hiddenVaultIds}
+  {secondaryRailWidth}
   onSelectNav={(id) => {
     activeNav = id;
+  }}
+  onToggleVaultHidden={(id) => {
+    hiddenVaultIds = hiddenVaultIds.includes(id)
+      ? hiddenVaultIds.filter((x) => x !== id)
+      : [...hiddenVaultIds, id];
+  }}
+  onResizeRail={(next) => {
+    secondaryRailWidth = clampWidth(next);
   }}
   onToggleColorMode={() => {
     colorModeChoice = cycle(colorModeChoice);

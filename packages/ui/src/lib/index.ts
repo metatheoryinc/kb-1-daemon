@@ -33,6 +33,9 @@ export { default as DocumentNotFoundState } from './local-editor/DocumentNotFoun
 export { default as FileNode } from './local-editor/FileNode.svelte';
 export { default as FilesPanel } from './local-editor/FilesPanel.svelte';
 export { default as FilesSearchResults } from './local-editor/FilesSearchResults.svelte';
+export { default as VaultFilterButton } from './local-editor/VaultFilterButton.svelte';
+export { default as VaultFilterPopover } from './local-editor/VaultFilterPopover.svelte';
+export { default as RailResizeHandle } from './local-editor/RailResizeHandle.svelte';
 export { default as FolderNode } from './local-editor/FolderNode.svelte';
 export { default as VaultGroup } from './local-editor/VaultGroup.svelte';
 export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
@@ -50,6 +53,7 @@ export type {
   LocalTreeAction,
   LocalTreeNode,
   LocalVaultAction,
+  VaultFilterEntry,
 } from './local-editor/types';
 export type {
   DocumentSaveBannerProps,

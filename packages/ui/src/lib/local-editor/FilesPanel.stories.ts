@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/svelte';
 import FilesPanel from './FilesPanel.svelte';
 import { folderKey } from './expansion';
-import { localEditorSearchFixture, localEditorTreeFixture } from './fixtures';
+import { localEditorTreeFixture } from './fixtures';
 
 const VAULT_ID = 'demo-vault';
 
@@ -11,7 +11,6 @@ const meta = {
   args: {
     vaultName: 'demo-vault',
     vaultId: VAULT_ID,
-    daemonLabel: 'Daemon · live',
     tree: localEditorTreeFixture,
     activePath: 'projects/active/editor-shell.md',
     expandedFolderIds: new Set([
@@ -19,8 +18,7 @@ const meta = {
       folderKey(VAULT_ID, 'projects/active'),
       folderKey(VAULT_ID, 'research')
     ]),
-    searchValue: '',
-    searchResults: localEditorSearchFixture
+    hiddenVaultIds: []
   }
 } satisfies Meta<typeof FilesPanel>;
 
@@ -29,10 +27,8 @@ type Story = StoryObj<typeof meta>;
 
 export const Tree: Story = {};
 
-export const Search: Story = {
+export const VaultHidden: Story = {
   args: {
-    searchValue: 'editor',
-    searchTotal: 64,
-    searchTruncated: true
+    hiddenVaultIds: [VAULT_ID]
   }
 };
