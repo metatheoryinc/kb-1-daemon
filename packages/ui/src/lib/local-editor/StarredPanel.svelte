@@ -123,7 +123,8 @@
     min-width: 0;
     min-height: 0;
     background: var(--rd-panel);
-    border-right: 1px solid var(--rd-rule);
+    /* Intentional deviation from the reference: flush with the content
+       canvas, no seam border. */
     color: var(--rd-ink-1);
     font-family: var(--rd-ui);
   }

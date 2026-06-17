@@ -161,7 +161,9 @@
     height: 100%;
     min-width: 0;
     min-height: 0;
-    border-right: 1px solid var(--rd-rule);
+    /* Intentional deviation from the reference: no border between the files
+       rail and the content canvas — they sit flush, no seam. The resize
+       handle still reveals its hairline on hover. */
     background: var(--rd-panel);
   }
 
