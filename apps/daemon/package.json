@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/bundle-starter-kit.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
