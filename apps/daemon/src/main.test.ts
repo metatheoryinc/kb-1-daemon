@@ -272,6 +272,198 @@ describe('daemon boot migration', () => {
   });
 });
 
+describe('daemon vault management API', () => {
+  let kb2Home: string;
+  let originalEnv: NodeJS.ProcessEnv;
+  let port: number;
+  let started: Awaited<ReturnType<typeof startDaemon>>;
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-vaults-api-'));
+    port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(port)
+    };
+    started = await startDaemon();
+  });
+
+  afterEach(async () => {
+    await started.close();
+    process.env = originalEnv;
+    await rm(kb2Home, { force: true, recursive: true });
+  });
+
+  const base = () => `http://127.0.0.1:${port}`;
+
+  async function listVaults(): Promise<Array<{ id: string; displayName: string }>> {
+    const response = await fetch(`${base()}/api/vaults`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    return body.vaults;
+  }
+
+  it('drives the full create -> list -> rename -> delete lifecycle live, with no restart', async () => {
+    // The default vault is present from boot.
+    expect(await listVaults()).toContainEqual({ id: 'demo-vault', displayName: 'demo-vault' });
+
+    // CREATE: caller supplies only a display name; the daemon owns the slug.
+    const createResponse = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Field Notes' })
+    });
+    expect(createResponse.status).toBe(201);
+    await expect(createResponse.json()).resolves.toEqual({
+      ok: true,
+      vault: { id: 'field-notes', displayName: 'Field Notes' }
+    });
+
+    // A real, valid empty vault landed on disk with minted identity.
+    const identity = JSON.parse(
+      await readFile(join(kb2Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+    );
+    expect(identity).toEqual({ id: 'field-notes', displayName: 'Field Notes' });
+
+    // LIST: it shows up immediately, no restart.
+    expect(await listVaults()).toContainEqual({ id: 'field-notes', displayName: 'Field Notes' });
+
+    // SERVE LIVE: the brand-new vault is reachable through its scoped routes.
+    const liveTree = await fetch(`${base()}/api/vaults/field-notes/tree`);
+    expect(liveTree.status).toBe(200);
+    await expect(liveTree.json()).resolves.toMatchObject({ ok: true });
+
+    // RENAME: display name only; slug and folder are stable.
+    const renameResponse = await fetch(`${base()}/api/vaults/field-notes`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Field Journal' })
+    });
+    expect(renameResponse.status).toBe(200);
+    await expect(renameResponse.json()).resolves.toEqual({
+      ok: true,
+      vault: { id: 'field-notes', displayName: 'Field Journal' }
+    });
+    expect(await listVaults()).toContainEqual({ id: 'field-notes', displayName: 'Field Journal' });
+    // The on-disk folder did not move; only identity changed.
+    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).resolves.toBeUndefined();
+    const renamedIdentity = JSON.parse(
+      await readFile(join(kb2Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+    );
+    expect(renamedIdentity).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
+
+    // DELETE (soft): gone from the list, folder reversibly preserved in trash.
+    const deleteResponse = await fetch(`${base()}/api/vaults/field-notes`, { method: 'DELETE' });
+    expect(deleteResponse.status).toBe(200);
+    await expect(deleteResponse.json()).resolves.toMatchObject({ ok: true });
+    expect((await listVaults()).some((v) => v.id === 'field-notes')).toBe(false);
+    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
+    // The data still exists under the home-level trash (never hard-deleted).
+    const trashed = JSON.parse(
+      await readFile(join(kb2Home, '.trash', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+    );
+    expect(trashed).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
+
+    // Its scoped routes now resolve to a clean 404.
+    const goneTree = await fetch(`${base()}/api/vaults/field-notes/tree`);
+    expect(goneTree.status).toBe(404);
+  });
+
+  it('serves scoped data routes against the addressed vault, isolated from the default', async () => {
+    await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Scoped' })
+    });
+
+    // Write a note into the scoped vault only.
+    const put = await fetch(`${base()}/api/vaults/scoped/files/only-here.md`, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'scoped content\n'
+    });
+    expect(put.status).toBe(201);
+    await expect(put.json()).resolves.toMatchObject({ ok: true, path: 'only-here.md' });
+
+    // It is on disk under the scoped vault's folder.
+    await expect(
+      readFile(join(kb2Home, 'vaults', 'scoped', 'only-here.md'), 'utf8')
+    ).resolves.toBe('scoped content\n');
+
+    // Readable back through the scoped route.
+    const read = await fetch(`${base()}/api/vaults/scoped/files/only-here.md`);
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({ ok: true, content: 'scoped content\n' });
+
+    // The default (flat) vault does not see the scoped vault's note.
+    const flatRead = await fetch(`${base()}/api/files/only-here.md`);
+    expect(flatRead.status).toBe(404);
+  });
+
+  it('returns a clean 404 for data routes addressing an unknown vault, without crashing', async () => {
+    const tree = await fetch(`${base()}/api/vaults/does-not-exist/tree`);
+    expect(tree.status).toBe(404);
+    await expect(tree.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+
+    // The daemon is still healthy after the miss.
+    const health = await fetch(`${base()}/api/health`);
+    expect(health.status).toBe(200);
+  });
+
+  it('rejects a slug collision over HTTP with a clean 409', async () => {
+    const first = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Dup' })
+    });
+    expect(first.status).toBe(201);
+
+    const collision = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'dup' })
+    });
+    expect(collision.status).toBe(409);
+    await expect(collision.json()).resolves.toMatchObject({ ok: false, error: 'already_exists' });
+  });
+
+  it('edits a live document over the scoped Yjs WebSocket and persists to the scoped vault', async () => {
+    await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'WS Vault' })
+    });
+    await fetch(`${base()}/api/vaults/ws-vault/files/doc.md`, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'seed\n'
+    });
+
+    // A scoped Yjs socket opens against the addressed vault's document manager.
+    // The daemon's own shutdown (in afterEach) drains and closes it in order, so
+    // the document-session state is flushed before the throwaway home is removed.
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/ws-vault/files/doc.md/yjs`);
+    const opened = new Promise<void>((resolveOpen, rejectOpen) => {
+      socket.once('open', () => resolveOpen());
+      socket.once('error', rejectOpen);
+    });
+    await opened;
+
+    // An unknown-vault scoped socket is refused: the upgrade is destroyed, so the
+    // client sees an error/close rather than an open.
+    const badSocket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/missing-vault/files/doc.md/yjs`);
+    const badResult = await new Promise<'opened' | 'refused'>((resolveBad) => {
+      badSocket.once('open', () => resolveBad('opened'));
+      badSocket.once('error', () => resolveBad('refused'));
+      badSocket.once('close', () => resolveBad('refused'));
+    });
+    expect(badResult).toBe('refused');
+  });
+});
+
 async function reservePort(): Promise<number> {
   const server = createServer();
   await listen(server);
