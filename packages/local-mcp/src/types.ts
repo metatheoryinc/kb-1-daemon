@@ -16,15 +16,14 @@ export interface LocalMcpVaultSummary {
  * an addressed vault and for enumerating vaults, so the MCP endpoint never holds
  * a second vault map.
  *
- * `default` is the vault used when a tool call omits `vaultId`; it keeps the
- * single-vault MCP surface byte-for-byte backward compatible. `resolve` returns
- * the service for a given slug, or `undefined` when no vault carries that slug.
+ * There is no default vault: every data tool requires a `vaultId`. `resolve`
+ * returns the service for a given slug, or `undefined` when no vault carries
+ * that slug (the tool then returns a clean error). `list` powers `list_vaults`,
+ * the discovery entry point, and may be empty (zero vaults is a valid state).
  */
 export interface LocalMcpVaultProvider {
-  /** The vault served when a tool call omits `vaultId`. */
-  default(): LocalMcpVaultService;
   /** Resolve a vault's service by slug, or `undefined` when unknown. */
   resolve(id: string): LocalMcpVaultService | undefined;
-  /** Every addressable vault as `{ id, displayName }`. */
+  /** Every addressable vault as `{ id, displayName }`; may be empty. */
   list(): LocalMcpVaultSummary[];
 }

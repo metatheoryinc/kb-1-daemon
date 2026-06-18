@@ -92,43 +92,50 @@ describe('local MCP server', () => {
       'vault_info'
     ]);
 
-    // Every vault-data tool advertises the optional vaultId; list_vaults does not.
+    // Every vault-data tool advertises the required vaultId; list_vaults does not.
     const vaultInfoTool = tools.tools.find((tool) => tool.name === 'vault_info');
     expect(vaultInfoTool?.inputSchema.properties).toHaveProperty('vaultId');
+    expect(vaultInfoTool?.inputSchema.required ?? []).toContain('vaultId');
     const listVaultsTool = tools.tools.find((tool) => tool.name === 'list_vaults');
     expect(listVaultsTool?.inputSchema.properties ?? {}).not.toHaveProperty('vaultId');
 
-    expect(await toolJson(client, 'vault_info', {})).toMatchObject({ ok: true, rootName: 'demo-vault' });
-    expect(await toolJson(client, 'list_files', { under: 'notes', depth: 1 })).toMatchObject({ ok: true, entries: [{ path: 'notes', metadata: { color: 'coral' } }] });
-    expect(await toolJson(client, 'get_folder_metadata', { path: 'notes' })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'coral' } });
-    expect(await toolJson(client, 'set_folder_metadata', { path: 'notes', color: 'mint', icon: null })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'mint' } });
-    expect(await toolJson(client, 'read_note', { path: 'note.md' })).toMatchObject({ ok: true, baseline: 'b1' });
-    expect(await toolJson(client, 'create_note', { path: 'created.md', content: 'created' })).toMatchObject({ ok: true, path: 'created.md' });
-    expect(await toolJson(client, 'edit_note', { path: 'note.md', baseline: 'b1', old_text: 'alpha', new_text: 'ALPHA' })).toMatchObject({ ok: true, content: 'ALPHA' });
-    expect(await toolJson(client, 'append_note', { path: 'note.md', content: '\nnext' })).toMatchObject({ ok: true, baseline: 'b3' });
-    expect(await toolJson(client, 'prepend_note', { path: 'note.md', content: 'first\n' })).toMatchObject({ ok: true, baseline: 'b4' });
-    expect(await toolJson(client, 'delete_note', { path: 'note.md' })).toMatchObject({ ok: true, path: 'note.md' });
-    expect(await toolJson(client, 'move_note', { from_path: 'note.md', to_path: 'moved.md' })).toMatchObject({ ok: true, toPath: 'moved.md' });
-    expect(await toolJson(client, 'create_folder', { path: 'folder' })).toMatchObject({ ok: true, path: 'folder' });
-    expect(await toolJson(client, 'delete_folder', { path: 'folder', recursive: true })).toMatchObject({ ok: true, path: 'folder' });
-    expect(await toolJson(client, 'move_folder', { from_path: 'old', to_path: 'new' })).toMatchObject({ ok: true, toPath: 'new' });
-    expect(await toolJson(client, 'search', { query: 'alpha' })).toMatchObject({ ok: true, total: 1 });
+    // A bare service normalizes to a single vault addressed by the synthetic
+    // 'default' id; every data tool must pass it (there is no default fallback).
+    const V = 'default';
+    expect(await toolJson(client, 'vault_info', { vaultId: V })).toMatchObject({ ok: true, rootName: 'demo-vault' });
+    expect(await toolJson(client, 'list_files', { vaultId: V, under: 'notes', depth: 1 })).toMatchObject({ ok: true, entries: [{ path: 'notes', metadata: { color: 'coral' } }] });
+    expect(await toolJson(client, 'get_folder_metadata', { vaultId: V, path: 'notes' })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'coral' } });
+    expect(await toolJson(client, 'set_folder_metadata', { vaultId: V, path: 'notes', color: 'mint', icon: null })).toMatchObject({ ok: true, path: 'notes', metadata: { color: 'mint' } });
+    expect(await toolJson(client, 'read_note', { vaultId: V, path: 'note.md' })).toMatchObject({ ok: true, baseline: 'b1' });
+    expect(await toolJson(client, 'create_note', { vaultId: V, path: 'created.md', content: 'created' })).toMatchObject({ ok: true, path: 'created.md' });
+    expect(await toolJson(client, 'edit_note', { vaultId: V, path: 'note.md', baseline: 'b1', old_text: 'alpha', new_text: 'ALPHA' })).toMatchObject({ ok: true, content: 'ALPHA' });
+    expect(await toolJson(client, 'append_note', { vaultId: V, path: 'note.md', content: '\nnext' })).toMatchObject({ ok: true, baseline: 'b3' });
+    expect(await toolJson(client, 'prepend_note', { vaultId: V, path: 'note.md', content: 'first\n' })).toMatchObject({ ok: true, baseline: 'b4' });
+    expect(await toolJson(client, 'delete_note', { vaultId: V, path: 'note.md' })).toMatchObject({ ok: true, path: 'note.md' });
+    expect(await toolJson(client, 'move_note', { vaultId: V, from_path: 'note.md', to_path: 'moved.md' })).toMatchObject({ ok: true, toPath: 'moved.md' });
+    expect(await toolJson(client, 'create_folder', { vaultId: V, path: 'folder' })).toMatchObject({ ok: true, path: 'folder' });
+    expect(await toolJson(client, 'delete_folder', { vaultId: V, path: 'folder', recursive: true })).toMatchObject({ ok: true, path: 'folder' });
+    expect(await toolJson(client, 'move_folder', { vaultId: V, from_path: 'old', to_path: 'new' })).toMatchObject({ ok: true, toPath: 'new' });
+    expect(await toolJson(client, 'search', { vaultId: V, query: 'alpha' })).toMatchObject({ ok: true, total: 1 });
 
-    // A bare service normalizes to a single synthetic 'default' vault: list_vaults
-    // reports it, an explicit vaultId: 'default' still routes, and an unknown
-    // vaultId is a clean tool error rather than a crash.
+    // list_vaults is the discovery entry point and takes no vaultId.
     expect(await toolJson(client, 'list_vaults', {})).toMatchObject({
       ok: true,
       vaults: [{ id: 'default', displayName: 'default' }]
     });
-    expect(await toolJson(client, 'vault_info', { vaultId: 'default' })).toMatchObject({ ok: true, rootName: 'demo-vault' });
+
+    // An unknown vaultId is a clean tool error rather than a crash.
     const unknownVault = await client.callTool({ name: 'vault_info', arguments: { vaultId: 'missing' } });
     expect(unknownVault.isError).toBe(true);
     expect(textContent(unknownVault)).toBe('vault_info rejected: {"ok":false,"error":"not_found","message":"No vault with id \\"missing\\"."}');
 
+    // A data-tool call WITHOUT vaultId is rejected (the param is required).
+    const missingVaultId = await client.callTool({ name: 'vault_info', arguments: {} });
+    expect(missingVaultId.isError).toBe(true);
+
     const stale = await client.callTool({
       name: 'edit_note',
-      arguments: { path: 'note.md', baseline: 'stale', old_text: 'alpha', new_text: 'ALPHA' }
+      arguments: { vaultId: V, path: 'note.md', baseline: 'stale', old_text: 'alpha', new_text: 'ALPHA' }
     });
     expect(stale.isError).toBe(true);
     expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}');

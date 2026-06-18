@@ -1,5 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { DocumentSessionManager, OneFileDocumentSession, type DocumentSessionEvent } from '@kb-2/doc-session';
+import { DocumentSessionManager, type DocumentSessionEvent } from '@kb-2/doc-session';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { serve } from '@hono/node-server';
@@ -11,10 +11,15 @@ import { tmpdir } from 'node:os';
 import * as Y from 'yjs';
 
 import { anchoredSpliceContractCases } from '@kb-2/vault-core';
-import type { VaultChangeEvent } from '@kb-2/vault-service';
+import type { VaultChangeEvent, VaultService } from '@kb-2/vault-service';
 import { createApp } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
+import { VAULT_TRASH_DIRNAME, VaultRegistry } from './vault-registry.js';
+
+// The vault slug every scoped data-route test addresses. The data routes are
+// only reachable as `/api/vaults/:id/*`; there is no flat (default-vault) path.
+const VAULT = 'demo-vault';
 
 describe('daemon routing', () => {
   let kb2Home: string;
@@ -26,6 +31,35 @@ describe('daemon routing', () => {
   afterEach(async () => {
     await rm(kb2Home, { force: true, recursive: true });
   });
+
+  /**
+   * Stand up a registry over the throwaway home with a single empty vault, plus
+   * the app that serves it. Scoped routes hit the same live `service`/`manager`
+   * returned here, so live-session assertions and HTTP requests share state.
+   */
+  async function setupScopedVault(): Promise<{
+    app: Hono;
+    registry: VaultRegistry;
+    service: VaultService;
+    manager: DocumentSessionManager;
+    vaultRoot: string;
+    config: ReturnType<typeof createDaemonConfig>;
+  }> {
+    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const vaultsHome = config.vaultsHome;
+    await mkdir(join(vaultsHome, VAULT), { recursive: true });
+    const registry = await VaultRegistry.load(vaultsHome, join(kb2Home, VAULT_TRASH_DIRNAME));
+    const instance = registry.get(VAULT);
+    if (!instance) throw new Error('expected the seeded vault to load');
+    const app = createApp({ statusFile: config.statusFile, registry, actorDefault: config.actorDefault });
+    return { app, registry, service: instance.service, manager: instance.manager, vaultRoot: instance.entry.root, config };
+  }
+
+  /** Path to a scoped file route for the lone test vault. */
+  const filePath = (vaultPath: string): string => `/api/vaults/${VAULT}/files/${vaultPath}`;
+  /** Path to a scoped folder route for the lone test vault. */
+  const folderPath = (vaultPath?: string): string =>
+    vaultPath === undefined ? `/api/vaults/${VAULT}/folders` : `/api/vaults/${VAULT}/folders/${vaultPath}`;
 
   it('returns daemon status read back from the configured filesystem home', async () => {
     const config = createDaemonConfig({
@@ -125,56 +159,10 @@ describe('daemon routing', () => {
     await rm(webBuildDir, { force: true, recursive: true });
   });
 
-  it('reads and resets the one-file demo document through the daemon API', async () => {
-    const config = createDaemonConfig({
-      env: {
-        KB2_HOME: kb2Home
-      }
-    });
-    const demoDocumentFile = join(config.vaultRoot, 'README.md');
-    const documentSession = new OneFileDocumentSession(demoDocumentFile, { defaultContent: 'route seed\n' });
-    await documentSession.open();
+  it('exposes scoped vault file routes with no-clobber writes, overwrite, taxonomy, and audit rows', async () => {
+    const { app, vaultRoot } = await setupScopedVault();
 
-    const app = createApp({
-      statusFile: config.statusFile,
-      demoDocumentSession: documentSession
-    });
-
-    const readResponse = await app.request('/api/demo-document');
-    const readBody = await readResponse.json();
-
-    expect(readResponse.status).toBe(200);
-    expect(readBody).toEqual({
-      ok: true,
-      document: 'demo-vault/README.md',
-      content: 'route seed\n'
-    });
-
-    const resetResponse = await app.request('/api/demo-document/reset', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({ content: 'route reset\n' })
-    });
-    const resetBody = await resetResponse.json();
-
-    expect(resetResponse.status).toBe(200);
-    expect(resetBody).toEqual({
-      ok: true,
-      document: 'demo-vault/README.md',
-      content: 'route reset\n'
-    });
-    await expect(readFile(demoDocumentFile, 'utf8')).resolves.toBe('route reset\n');
-
-    await documentSession.close();
-  });
-
-  it('exposes vault file routes with no-clobber writes, overwrite, taxonomy, and audit rows', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
-
-    const created = await app.request('/api/files/notes/a.md', {
+    const created = await app.request(filePath('notes/a.md'), {
       method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: 'first'
@@ -182,7 +170,7 @@ describe('daemon routing', () => {
     expect(created.status).toBe(201);
     await expect(created.json()).resolves.toMatchObject({ ok: true, path: 'notes/a.md' });
 
-    const duplicate = await app.request('/api/files/notes/a.md', {
+    const duplicate = await app.request(filePath('notes/a.md'), {
       method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: 'second'
@@ -190,42 +178,44 @@ describe('daemon routing', () => {
     expect(duplicate.status).toBe(409);
     await expect(duplicate.json()).resolves.toMatchObject({ ok: false, error: 'already_exists' });
 
-    const overwritten = await app.request('/api/files/notes/a.md?overwrite=true', {
+    const overwritten = await app.request(`${filePath('notes/a.md')}?overwrite=true`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'second' })
     });
     expect(overwritten.status).toBe(200);
 
-    const read = await app.request('/api/files/notes/a.md');
+    const read = await app.request(filePath('notes/a.md'));
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({ ok: true, path: 'notes/a.md', content: 'second' });
 
-    const invalid = await app.request('/api/files/no-extension', { method: 'PUT', body: 'x' });
+    const invalid = await app.request(filePath('no-extension'), { method: 'PUT', body: 'x' });
     expect(invalid.status).toBe(400);
     await expect(invalid.json()).resolves.toMatchObject({ ok: false, error: 'invalid_path' });
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(2);
     expect(audit[0]).toMatchObject({ operation: 'create', entityKind: 'file', path: 'notes/a.md', actor: { kind: 'user' } });
     expect(audit[1]).toMatchObject({ operation: 'write', path: 'notes/a.md' });
   });
 
+  it('returns a clean 404 for a scoped data route addressing an unknown vault', async () => {
+    const { app } = await setupScopedVault();
+    const response = await app.request('/api/vaults/does-not-exist/tree');
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
+  });
+
   it('attributes REST writes from the x-kb2-actor header in responses and audit JSONL', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({
-      statusFile: config.statusFile,
-      vaultRoot: config.vaultRoot,
-      actorDefault: config.actorDefault
-    });
+    const { app, vaultRoot } = await setupScopedVault();
     const suppliedActor = {
       kind: 'integration',
       id: 'user-123',
       name: 'Ada Lovelace',
-      client: 'kb-1-cloud'
+      client: 'integration-client'
     };
 
-    const created = await app.request('/api/files/notes/attributed.md', {
+    const created = await app.request(filePath('notes/attributed.md'), {
       method: 'PUT',
       headers: {
         'content-type': 'text/plain',
@@ -240,9 +230,9 @@ describe('daemon routing', () => {
       path: 'notes/attributed.md',
       audit: { actor: suppliedActor }
     });
-    await expect(readFile(join(config.vaultRoot, 'notes/attributed.md'), 'utf8')).resolves.toBe('attributed\n');
+    await expect(readFile(join(vaultRoot, 'notes/attributed.md'), 'utf8')).resolves.toBe('attributed\n');
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({
       operation: 'create',
@@ -257,13 +247,12 @@ describe('daemon routing', () => {
     { name: 'configured unknown mode', env: { KB2_ACTOR_DEFAULT: 'unknown' }, expectedActor: { kind: 'unknown' } }
   ])('uses $name for REST writes without an actor header', async ({ env, expectedActor }) => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home, ...env } });
-    const app = createApp({
-      statusFile: config.statusFile,
-      vaultRoot: config.vaultRoot,
-      actorDefault: config.actorDefault
-    });
+    await mkdir(join(config.vaultsHome, VAULT), { recursive: true });
+    const registry = await VaultRegistry.load(config.vaultsHome, join(kb2Home, VAULT_TRASH_DIRNAME));
+    const vaultRoot = registry.get(VAULT)!.entry.root;
+    const app = createApp({ statusFile: config.statusFile, registry, actorDefault: config.actorDefault });
 
-    const created = await app.request('/api/files/notes/defaulted.md', {
+    const created = await app.request(filePath('notes/defaulted.md'), {
       method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: 'defaulted\n'
@@ -274,15 +263,16 @@ describe('daemon routing', () => {
       ok: true,
       audit: { actor: expectedActor }
     });
-    await expect(readFile(join(config.vaultRoot, 'notes/defaulted.md'), 'utf8')).resolves.toBe('defaulted\n');
+    await expect(readFile(join(vaultRoot, 'notes/defaulted.md'), 'utf8')).resolves.toBe('defaulted\n');
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({
       operation: 'create',
       path: 'notes/defaulted.md',
       actor: expectedActor
     });
+    await registry.close();
   });
 
   it.each([
@@ -293,14 +283,9 @@ describe('daemon routing', () => {
     { name: 'oversized payload', header: JSON.stringify({ kind: 'user', name: 'x'.repeat(1025) }) },
     { name: 'non-string identity field', header: JSON.stringify({ kind: 'user', id: 123 }) }
   ])('rejects malformed REST actor header: $name', async ({ header }) => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({
-      statusFile: config.statusFile,
-      vaultRoot: config.vaultRoot,
-      actorDefault: config.actorDefault
-    });
+    const { app, vaultRoot } = await setupScopedVault();
 
-    const response = await app.request('/api/files/notes/rejected.md', {
+    const response = await app.request(filePath('notes/rejected.md'), {
       method: 'PUT',
       headers: {
         'content-type': 'text/plain',
@@ -314,22 +299,21 @@ describe('daemon routing', () => {
       ok: false,
       error: 'invalid_actor'
     });
-    await expect(stat(join(config.vaultRoot, 'notes/rejected.md'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(stat(join(config.vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(vaultRoot, 'notes/rejected.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('moves and deletes live file sessions through the API with doc events and trash', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const liveSession = sessions.getSession('notes/live.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'notes/live.md'), '');
+    const liveSession = manager.getSession('notes/live.md');
     const events: DocumentSessionEvent[] = [];
     liveSession.onEvent((event) => events.push(event));
     await liveSession.open();
     liveSession.ydoc.getText('markdown').insert(0, 'live content\n');
     await liveSession.flush();
 
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const moved = await app.request('/api/files/notes/live.md/move', {
+    const moved = await app.request(`${filePath('notes/live.md')}/move`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: 'notes/renamed.md' })
@@ -339,36 +323,34 @@ describe('daemon routing', () => {
     liveSession.ydoc.getText('markdown').insert(liveSession.ydoc.getText('markdown').length, 'after move\n');
     await liveSession.flush();
 
-    await expect(readFile(join(config.vaultRoot, 'notes/renamed.md'), 'utf8')).resolves.toBe('live content\nafter move\n');
-    await expect(readFile(join(config.vaultRoot, 'notes/live.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(vaultRoot, 'notes/renamed.md'), 'utf8')).resolves.toBe('live content\nafter move\n');
+    await expect(readFile(join(vaultRoot, 'notes/live.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(events).toContainEqual(expect.objectContaining({ kind: 'doc-moved', fromPath: 'notes/live.md', toPath: 'notes/renamed.md' }));
 
-    const deleted = await app.request('/api/files/notes/renamed.md', { method: 'DELETE' });
+    const deleted = await app.request(filePath('notes/renamed.md'), { method: 'DELETE' });
     expect(deleted.status).toBe(200);
     await expect(deleted.json()).resolves.toMatchObject({ ok: true, path: 'notes/renamed.md', live: true });
     expect(events).toContainEqual(expect.objectContaining({ kind: 'doc-deleted', path: 'notes/renamed.md' }));
 
-    const tree = await app.request('/api/tree');
+    const tree = await app.request(`/api/vaults/${VAULT}/tree`);
     const treeBody = await tree.json() as { entries: Array<{ path: string }> };
     expect(treeBody.entries.map((entry) => entry.path)).not.toContain('notes/renamed.md');
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit.map((row) => row.operation)).toEqual(['move', 'delete']);
     expect(String(audit[1].summary)).toContain('trash');
-    await sessions.close();
   });
 
   it('moves folder subtrees and rekeys live sessions underneath them', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const nested = sessions.getSession('parent/folder/deep/live.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'parent/folder/deep/live.md'), '');
+    const nested = manager.getSession('parent/folder/deep/live.md');
     const events: DocumentSessionEvent[] = [];
     nested.onEvent((event) => events.push(event));
     await nested.open();
     nested.ydoc.getText('markdown').insert(0, 'nested\n');
     await nested.flush();
 
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const moved = await app.request('/api/folders/parent/folder/move', {
+    const moved = await app.request(`${folderPath('parent/folder')}/move`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: 'parent/moved/folder' })
@@ -384,23 +366,20 @@ describe('daemon routing', () => {
     nested.ydoc.getText('markdown').insert(nested.ydoc.getText('markdown').length, 'after folder move\n');
     await nested.flush();
 
-    await expect(readFile(join(config.vaultRoot, 'parent/moved/folder/deep/live.md'), 'utf8')).resolves.toBe('nested\nafter folder move\n');
-    await expect(readFile(join(config.vaultRoot, 'parent/folder/deep/live.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(vaultRoot, 'parent/moved/folder/deep/live.md'), 'utf8')).resolves.toBe('nested\nafter folder move\n');
+    await expect(readFile(join(vaultRoot, 'parent/folder/deep/live.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(events).toContainEqual(expect.objectContaining({
       kind: 'doc-moved',
       fromPath: 'parent/folder/deep/live.md',
       toPath: 'parent/moved/folder/deep/live.md'
     }));
-    await sessions.close();
   });
 
   it('moves zero-live folder subtrees through the production session manager once', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    await mkdir(join(config.vaultRoot, 'emptydir'), { recursive: true });
+    const { app, vaultRoot } = await setupScopedVault();
+    await mkdir(join(vaultRoot, 'emptydir'), { recursive: true });
 
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const moved = await app.request('/api/folders/emptydir/move', {
+    const moved = await app.request(`${folderPath('emptydir')}/move`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: 'moved/emptydir' })
@@ -413,26 +392,24 @@ describe('daemon routing', () => {
       toPath: 'moved/emptydir',
       liveMoved: []
     });
-    expect((await stat(join(config.vaultRoot, 'moved/emptydir'))).isDirectory()).toBe(true);
-    await expect(stat(join(config.vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
-    const audit = await readAuditRows(config.vaultRoot);
+    expect((await stat(join(vaultRoot, 'moved/emptydir'))).isDirectory()).toBe(true);
+    await expect(stat(join(vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ operation: 'move', entityKind: 'folder', fromPath: 'emptydir', toPath: 'moved/emptydir' });
-    await sessions.close();
   });
 
   it('reads and writes folder metadata through REST and hydrates tree folders inline', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+    const { app, vaultRoot } = await setupScopedVault();
 
-    const created = await app.request('/api/folders', {
+    const created = await app.request(folderPath(), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: 'notes' })
     });
     expect(created.status).toBe(201);
 
-    const set = await app.request('/api/folders/notes/metadata', {
+    const set = await app.request(`${folderPath('notes')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: 'coral', icon: 'folder' })
@@ -444,43 +421,42 @@ describe('daemon routing', () => {
       metadata: { color: 'coral', icon: 'folder' },
       audit: { operation: 'write', entityKind: 'folder', path: 'notes' }
     });
-    const setRaw = await readRawFolderMetadata(config.vaultRoot);
+    const setRaw = await readRawFolderMetadata(vaultRoot);
     expect(setRaw).toContain('notes:');
     expect(setRaw).toContain('color: coral');
     expect(setRaw).toContain('icon: folder');
 
-    const read = await app.request('/api/folders/notes/metadata');
+    const read = await app.request(`${folderPath('notes')}/metadata`);
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({ ok: true, path: 'notes', metadata: { color: 'coral', icon: 'folder' } });
 
-    const tree = await app.request('/api/tree');
+    const tree = await app.request(`/api/vaults/${VAULT}/tree`);
     expect(tree.status).toBe(200);
     await expect(tree.json()).resolves.toMatchObject({
       ok: true,
       entries: [{ path: 'notes', kind: 'folder', metadata: { color: 'coral', icon: 'folder' } }]
     });
 
-    const cleared = await app.request('/api/folders/notes/metadata', {
+    const cleared = await app.request(`${folderPath('notes')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: null, icon: null })
     });
     expect(cleared.status).toBe(200);
     await expect(cleared.json()).resolves.toMatchObject({ ok: true, metadata: {} });
-    const raw = await readRawFolderMetadata(config.vaultRoot);
+    const raw = await readRawFolderMetadata(vaultRoot);
     expect(raw).toContain('folders: {}');
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit.map((row) => row.operation)).toEqual(['mkdir', 'write', 'write']);
   });
 
   it('maps folder metadata REST failures through the canonical service dialect', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+    const { app, vaultRoot } = await setupScopedVault();
 
-    await mkdir(join(config.vaultRoot, 'notes'), { recursive: true });
+    await mkdir(join(vaultRoot, 'notes'), { recursive: true });
 
-    const nonString = await app.request('/api/folders/notes/metadata', {
+    const nonString = await app.request(`${folderPath('notes')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: 42 })
@@ -488,7 +464,7 @@ describe('daemon routing', () => {
     expect(nonString.status).toBe(400);
     await expect(nonString.json()).resolves.toMatchObject({ ok: false, error: 'invalid_request' });
 
-    const invalidAccent = await app.request('/api/folders/notes/metadata', {
+    const invalidAccent = await app.request(`${folderPath('notes')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: 'amber' })
@@ -496,23 +472,22 @@ describe('daemon routing', () => {
     expect(invalidAccent.status).toBe(400);
     await expect(invalidAccent.json()).resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
 
-    const missing = await app.request('/api/folders/missing/metadata');
+    const missing = await app.request(`${folderPath('missing')}/metadata`);
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
 
-    await writeFileWithParents(join(config.vaultRoot, '.kb2', 'folders.yml'), 'folders: [');
-    const malformed = await app.request('/api/folders/notes/metadata');
+    await writeFileWithParents(join(vaultRoot, '.kb2', 'folders.yml'), 'folders: [');
+    const malformed = await app.request(`${folderPath('notes')}/metadata`);
     expect(malformed.status).toBe(500);
     await expect(malformed.json()).resolves.toMatchObject({ ok: false, error: 'metadata_parse_failed' });
   });
 
   it('routes nested folder metadata through the canonical service dialect', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+    const { app, vaultRoot } = await setupScopedVault();
 
-    await mkdir(join(config.vaultRoot, 'projects', 'active'), { recursive: true });
+    await mkdir(join(vaultRoot, 'projects', 'active'), { recursive: true });
 
-    const set = await app.request('/api/folders/projects/active/metadata', {
+    const set = await app.request(`${folderPath('projects/active')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: 'mint', icon: 'folder' })
@@ -524,7 +499,7 @@ describe('daemon routing', () => {
       metadata: { color: 'mint', icon: 'folder' }
     });
 
-    const read = await app.request('/api/folders/projects/active/metadata');
+    const read = await app.request(`${folderPath('projects/active')}/metadata`);
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({
       ok: true,
@@ -532,7 +507,7 @@ describe('daemon routing', () => {
       metadata: { color: 'mint', icon: 'folder' }
     });
 
-    const invalidAccent = await app.request('/api/folders/projects/active/metadata', {
+    const invalidAccent = await app.request(`${folderPath('projects/active')}/metadata`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ color: 'amber' })
@@ -540,45 +515,40 @@ describe('daemon routing', () => {
     expect(invalidAccent.status).toBe(400);
     await expect(invalidAccent.json()).resolves.toMatchObject({ ok: false, error: 'invalid_metadata' });
 
-    const missing = await app.request('/api/folders/projects/missing/metadata');
+    const missing = await app.request(`${folderPath('projects/missing')}/metadata`);
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
   });
 
   it('deletes zero-live folder subtrees through the production session manager once', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    await mkdir(join(config.vaultRoot, 'emptydir'), { recursive: true });
+    const { app, vaultRoot } = await setupScopedVault();
+    await mkdir(join(vaultRoot, 'emptydir'), { recursive: true });
 
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const deleted = await app.request('/api/folders/emptydir', { method: 'DELETE' });
+    const deleted = await app.request(folderPath('emptydir'), { method: 'DELETE' });
 
     expect(deleted.status).toBe(200);
     await expect(deleted.json()).resolves.toMatchObject({ ok: true, path: 'emptydir', liveDeleted: [] });
-    await expect(stat(join(config.vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
-    const audit = await readAuditRows(config.vaultRoot);
+    await expect(stat(join(vaultRoot, 'emptydir'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ operation: 'delete', entityKind: 'folder', path: 'emptydir' });
-    await sessions.close();
   });
 
   it('routes live whole-file writes through the open session', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: 'old\n' });
-    const session = sessions.getSession('live-write.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'live-write.md'), 'old\n');
+    const session = manager.getSession('live-write.md');
     await session.open();
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
 
-    const noClobber = await app.request('/api/files/live-write.md', {
+    const noClobber = await app.request(filePath('live-write.md'), {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'should not clobber\n' })
     });
     expect(noClobber.status).toBe(409);
     await expect(noClobber.json()).resolves.toMatchObject({ ok: false, error: 'already_exists' });
-    await expect(readFile(join(config.vaultRoot, 'live-write.md'), 'utf8')).resolves.toBe('old\n');
 
-    const response = await app.request('/api/files/live-write.md?overwrite=true', {
+    const response = await app.request(`${filePath('live-write.md')}?overwrite=true`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'new through session\n' })
@@ -586,17 +556,13 @@ describe('daemon routing', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true, path: 'live-write.md', live: true, content: 'new through session\n' });
-    await expect(readFile(join(config.vaultRoot, 'live-write.md'), 'utf8')).resolves.toBe('new through session\n');
-    const audit = await readAuditRows(config.vaultRoot);
-    expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ operation: 'write', entityKind: 'file', path: 'live-write.md', actor: { kind: 'user' } });
-    await sessions.close();
+    await expect(readFile(join(vaultRoot, 'live-write.md'), 'utf8')).resolves.toBe('new through session\n');
   });
 
   it('routes live whole-file writes through a fast-diff session merge', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: 'alpha\nomega\n' });
-    const session = sessions.getSession('live-merge.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'live-merge.md'), 'alpha\nomega\n');
+    const session = manager.getSession('live-merge.md');
     await session.open();
 
     const clientDoc = new Y.Doc();
@@ -605,8 +571,7 @@ describe('daemon routing', () => {
     clientText.insert('alpha\n'.length, 'typed concurrently\n');
     const inFlightUpdate = Y.encodeStateAsUpdate(clientDoc, Y.encodeStateVector(session.ydoc));
 
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const response = await app.request('/api/files/live-merge.md?overwrite=true', {
+    const response = await app.request(`${filePath('live-merge.md')}?overwrite=true`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'alpha\nservice write\nomega\n' })
@@ -623,30 +588,24 @@ describe('daemon routing', () => {
     Y.applyUpdate(session.ydoc, inFlightUpdate, clientDoc);
     await session.flush();
 
-    const mergedContent = await readFile(join(config.vaultRoot, 'live-merge.md'), 'utf8');
+    const mergedContent = await readFile(join(vaultRoot, 'live-merge.md'), 'utf8');
     expect([
       'alpha\ntyped concurrently\nservice write\nomega\n',
       'alpha\nservice write\ntyped concurrently\nomega\n'
     ]).toContain(mergedContent);
-    const audit = await readAuditRows(config.vaultRoot);
-    expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ operation: 'write', entityKind: 'file', path: 'live-merge.md' });
-    await sessions.close();
   });
 
   it('serves baselines and applies agent splice with stale retry through live sessions', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    await writeFileWithParents(join(config.vaultRoot, 'notes', 'splice.md'), 'one two three\n');
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { app, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'notes', 'splice.md'), 'one two three\n');
 
-    const read = await app.request('/api/files/notes/splice.md');
+    const read = await app.request(filePath('notes/splice.md'));
     expect(read.status).toBe(200);
     const readBody = await read.json() as { content: string; baseline: string };
     expect(readBody.content).toBe('one two three\n');
     expect(readBody.baseline.length).toBeGreaterThan(0);
 
-    const firstSplice = await app.request('/api/files/notes/splice.md/splice', {
+    const firstSplice = await app.request(`${filePath('notes/splice.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -658,9 +617,9 @@ describe('daemon routing', () => {
     expect(firstSplice.status).toBe(200);
     const firstBody = await firstSplice.json() as { content: string; baseline: string };
     expect(firstBody.content).toBe('one TWO three\n');
-    await expect(readFile(join(config.vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO three\n');
+    await expect(readFile(join(vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO three\n');
 
-    const stale = await app.request('/api/files/notes/splice.md/splice', {
+    const stale = await app.request(`${filePath('notes/splice.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -677,7 +636,7 @@ describe('daemon routing', () => {
     });
     expect(staleBody.baseline).not.toBe(readBody.baseline);
 
-    const retry = await app.request('/api/files/notes/splice.md/splice', {
+    const retry = await app.request(`${filePath('notes/splice.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -688,44 +647,43 @@ describe('daemon routing', () => {
     });
     expect(retry.status).toBe(200);
     await expect(retry.json()).resolves.toMatchObject({ ok: true, content: 'one TWO THREE\n' });
-    await expect(readFile(join(config.vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO THREE\n');
+    await expect(readFile(join(vaultRoot, 'notes/splice.md'), 'utf8')).resolves.toBe('one TWO THREE\n');
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => row.operation)).toEqual(['splice', 'splice']);
     expect(audit.every((row) => (row.actor as { kind?: string }).kind === 'user')).toBe(true);
-    await sessions.close();
   });
 
   it('exercises every MCP tool end-to-end through the SDK client with mcp_client audit attribution', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { app, vaultRoot } = await setupScopedVault();
     const { client, transport } = await connectMcpClient(app, 'daemon-sdk-test');
 
-    await expect(mcpToolJson(client, 'create_note', { path: 'notes/a.md', content: 'alpha beta alpha\n' }))
+    await expect(mcpToolJson(client, 'create_note', { vaultId: VAULT, path: 'notes/a.md', content: 'alpha beta alpha\n' }))
       .resolves.toMatchObject({ ok: true, path: 'notes/a.md' });
-    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha beta alpha\n');
+    await expect(readFile(join(vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha beta alpha\n');
 
-    await expect(mcpToolJson(client, 'vault_info', {})).resolves.toMatchObject({ ok: true, fileCount: 1 });
-    await expect(mcpToolJson(client, 'list_files', { under: 'notes', depth: 1 }))
+    await expect(mcpToolJson(client, 'vault_info', { vaultId: VAULT })).resolves.toMatchObject({ ok: true, fileCount: 1 });
+    await expect(mcpToolJson(client, 'list_files', { vaultId: VAULT, under: 'notes', depth: 1 }))
       .resolves.toMatchObject({ ok: true, entries: [{ path: 'notes/a.md', kind: 'file' }] });
 
-    const read = await mcpToolJson(client, 'read_note', { path: 'notes/a.md' }) as { content: string; baseline: string };
+    const read = await mcpToolJson(client, 'read_note', { vaultId: VAULT, path: 'notes/a.md' }) as { content: string; baseline: string };
     expect(read.content).toBe('alpha beta alpha\n');
     expect(read.baseline.length).toBeGreaterThan(0);
 
     await expect(mcpToolJson(client, 'edit_note', {
+      vaultId: VAULT,
       path: 'notes/a.md',
       baseline: read.baseline,
       old_text: 'beta',
       new_text: 'BETA'
     })).resolves.toMatchObject({ ok: true, content: 'alpha BETA alpha\n' });
-    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha BETA alpha\n');
+    await expect(readFile(join(vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('alpha BETA alpha\n');
 
     const stale = await client.callTool({
       name: 'edit_note',
       arguments: {
+        vaultId: VAULT,
         path: 'notes/a.md',
         baseline: read.baseline,
         old_text: 'alpha',
@@ -737,10 +695,11 @@ describe('daemon routing', () => {
     expect(mcpText(stale)).toContain('"current_content":"alpha BETA alpha\\n"');
     expect(mcpText(stale)).toContain('"baseline"');
 
-    const fresh = await mcpToolJson(client, 'read_note', { path: 'notes/a.md' }) as { baseline: string };
+    const fresh = await mcpToolJson(client, 'read_note', { vaultId: VAULT, path: 'notes/a.md' }) as { baseline: string };
     const ambiguous = await client.callTool({
       name: 'edit_note',
       arguments: {
+        vaultId: VAULT,
         path: 'notes/a.md',
         baseline: fresh.baseline,
         old_text: 'alpha',
@@ -751,42 +710,42 @@ describe('daemon routing', () => {
     expect(mcpText(ambiguous)).toContain('"error":"ambiguous"');
     expect(mcpText(ambiguous)).toContain('"match_count":2');
 
-    await expect(mcpToolJson(client, 'append_note', { path: 'notes/a.md', content: 'tail\n' }))
+    await expect(mcpToolJson(client, 'append_note', { vaultId: VAULT, path: 'notes/a.md', content: 'tail\n' }))
       .resolves.toMatchObject({ ok: true, content: 'alpha BETA alpha\ntail\n' });
-    await expect(mcpToolJson(client, 'prepend_note', { path: 'notes/a.md', content: 'head\n' }))
+    await expect(mcpToolJson(client, 'prepend_note', { vaultId: VAULT, path: 'notes/a.md', content: 'head\n' }))
       .resolves.toMatchObject({ ok: true, content: 'head\nalpha BETA alpha\ntail\n' });
-    await expect(readFile(join(config.vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
+    await expect(readFile(join(vaultRoot, 'notes/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
 
-    await expect(mcpToolJson(client, 'create_folder', { path: 'moved' })).resolves.toMatchObject({ ok: true, path: 'moved' });
-    await expect(mcpToolJson(client, 'set_folder_metadata', { path: 'moved', color: 'mint', icon: 'folder' }))
+    await expect(mcpToolJson(client, 'create_folder', { vaultId: VAULT, path: 'moved' })).resolves.toMatchObject({ ok: true, path: 'moved' });
+    await expect(mcpToolJson(client, 'set_folder_metadata', { vaultId: VAULT, path: 'moved', color: 'mint', icon: 'folder' }))
       .resolves.toMatchObject({ ok: true, path: 'moved', metadata: { color: 'mint', icon: 'folder' } });
-    await expect(mcpToolJson(client, 'get_folder_metadata', { path: 'moved' }))
+    await expect(mcpToolJson(client, 'get_folder_metadata', { vaultId: VAULT, path: 'moved' }))
       .resolves.toMatchObject({ ok: true, path: 'moved', metadata: { color: 'mint', icon: 'folder' } });
-    const metadataRaw = await readRawFolderMetadata(config.vaultRoot);
+    const metadataRaw = await readRawFolderMetadata(vaultRoot);
     expect(metadataRaw).toContain('moved:');
     expect(metadataRaw).toContain('color: mint');
     expect(metadataRaw).toContain('icon: folder');
-    await expect(mcpToolJson(client, 'move_note', { from_path: 'notes/a.md', to_path: 'moved/a.md' }))
+    await expect(mcpToolJson(client, 'move_note', { vaultId: VAULT, from_path: 'notes/a.md', to_path: 'moved/a.md' }))
       .resolves.toMatchObject({ ok: true, fromPath: 'notes/a.md', toPath: 'moved/a.md', live: true });
-    await expect(readFile(join(config.vaultRoot, 'moved/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
-    await expect(stat(join(config.vaultRoot, 'notes/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(vaultRoot, 'moved/a.md'), 'utf8')).resolves.toBe('head\nalpha BETA alpha\ntail\n');
+    await expect(stat(join(vaultRoot, 'notes/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await expect(mcpToolJson(client, 'move_folder', { from_path: 'moved', to_path: 'archived' }))
+    await expect(mcpToolJson(client, 'move_folder', { vaultId: VAULT, from_path: 'moved', to_path: 'archived' }))
       .resolves.toMatchObject({ ok: true, fromPath: 'moved', toPath: 'archived', liveMoved: ['archived/a.md'] });
-    await expect(readFile(join(config.vaultRoot, 'archived/a.md'), 'utf8')).resolves.toContain('BETA');
+    await expect(readFile(join(vaultRoot, 'archived/a.md'), 'utf8')).resolves.toContain('BETA');
 
-    await expect(mcpToolJson(client, 'search', { query: 'BETA', under: 'archived', context: 0 }))
+    await expect(mcpToolJson(client, 'search', { vaultId: VAULT, query: 'BETA', under: 'archived', context: 0 }))
       .resolves.toMatchObject({ ok: true, total: 1, results: [{ path: 'archived/a.md' }] });
 
-    await expect(mcpToolJson(client, 'delete_note', { path: 'archived/a.md' }))
+    await expect(mcpToolJson(client, 'delete_note', { vaultId: VAULT, path: 'archived/a.md' }))
       .resolves.toMatchObject({ ok: true, path: 'archived/a.md', live: true });
-    await expect(stat(join(config.vaultRoot, 'archived/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(vaultRoot, 'archived/a.md'))).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await expect(mcpToolJson(client, 'delete_folder', { path: 'archived', recursive: true }))
+    await expect(mcpToolJson(client, 'delete_folder', { vaultId: VAULT, path: 'archived', recursive: true }))
       .resolves.toMatchObject({ ok: true, path: 'archived', liveDeleted: [] });
-    await expect(stat(join(config.vaultRoot, 'archived'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(vaultRoot, 'archived'))).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit.map((row) => row.operation)).toEqual([
       'create',
       'splice',
@@ -805,21 +764,37 @@ describe('daemon routing', () => {
     })).toBe(true);
 
     await transport.terminateSession();
-    await sessions.close();
+  });
+
+  it('returns a clean MCP tool error for an unknown vaultId without crashing', async () => {
+    const { app } = await setupScopedVault();
+    const { client, transport } = await connectMcpClient(app, 'mcp-unknown-vault');
+
+    const result = await client.callTool({
+      name: 'create_note',
+      arguments: { vaultId: 'no-such-vault', path: 'x.md', content: 'x\n' }
+    });
+    expect(result.isError).toBe(true);
+    expect(mcpText(result)).toBe('create_note rejected: {"ok":false,"error":"not_found","message":"No vault with id \\"no-such-vault\\"."}');
+
+    // A data tool call WITHOUT vaultId is rejected: the param is required.
+    const missing = await client.callTool({ name: 'create_note', arguments: { path: 'x.md', content: 'x\n' } });
+    expect(missing.isError).toBe(true);
+
+    await transport.terminateSession();
   });
 
   it.each(anchoredSpliceContractCases)('runs the shared splice contract over MCP: $name', async ({ initialContent, request, expected }) => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
+    const { app, vaultRoot } = await setupScopedVault();
     const notePath = 'notes/contract.md';
-    await writeFileWithParents(join(config.vaultRoot, notePath), initialContent);
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    await writeFileWithParents(join(vaultRoot, notePath), initialContent);
     const { client, transport } = await connectMcpClient(app, 'mcp-splice-contract-test');
 
-    const read = await mcpToolJson(client, 'read_note', { path: notePath }) as { baseline: string };
+    const read = await mcpToolJson(client, 'read_note', { vaultId: VAULT, path: notePath }) as { baseline: string };
     const result = await client.callTool({
       name: 'edit_note',
       arguments: {
+        vaultId: VAULT,
         path: notePath,
         baseline: read.baseline,
         old_text: request.oldText,
@@ -837,45 +812,42 @@ describe('daemon routing', () => {
         path: notePath,
         content: expected.content
       });
-      await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(expected.content);
+      await expect(readFile(join(vaultRoot, notePath), 'utf8')).resolves.toBe(expected.content);
     } else {
       expect(result.isError).toBe(true);
       expect(parseMcpRejection(result, 'edit_note')).toMatchObject(serviceFailureFromContract(expected));
-      await expect(readFile(join(config.vaultRoot, notePath), 'utf8')).resolves.toBe(initialContent);
+      await expect(readFile(join(vaultRoot, notePath), 'utf8')).resolves.toBe(initialContent);
     }
 
     await transport.terminateSession();
-    await sessions.close();
   });
 
   it('surfaces MCP persist failures without a success audit row and recovers the live session', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { app, vaultRoot } = await setupScopedVault();
     const { client, transport } = await connectMcpClient(app, 'mcp-persist-test');
 
-    await expect(mcpToolJson(client, 'create_note', { path: 'notes/readonly.md', content: 'base\n' }))
+    await expect(mcpToolJson(client, 'create_note', { vaultId: VAULT, path: 'notes/readonly.md', content: 'base\n' }))
       .resolves.toMatchObject({ ok: true, path: 'notes/readonly.md' });
-    await mcpToolJson(client, 'read_note', { path: 'notes/readonly.md' });
+    await mcpToolJson(client, 'read_note', { vaultId: VAULT, path: 'notes/readonly.md' });
 
-    const beforeAudit = await readAuditRows(config.vaultRoot);
-    await chmod(join(config.vaultRoot, 'notes'), 0o500);
+    const beforeAudit = await readAuditRows(vaultRoot);
+    await chmod(join(vaultRoot, 'notes'), 0o500);
     const failed = await client.callTool({
       name: 'append_note',
-      arguments: { path: 'notes/readonly.md', content: 'unsaved\n' }
+      arguments: { vaultId: VAULT, path: 'notes/readonly.md', content: 'unsaved\n' }
     });
 
     expect(failed.isError).toBe(true);
     expect(mcpText(failed)).toBe('append_note rejected: {"ok":false,"error":"persist_failed","message":"Document edit could not be durably saved to disk."}');
-    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
-    expect(await readAuditRows(config.vaultRoot)).toHaveLength(beforeAudit.length);
+    await expect(readFile(join(vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
+    expect(await readAuditRows(vaultRoot)).toHaveLength(beforeAudit.length);
 
-    await chmod(join(config.vaultRoot, 'notes'), 0o700);
-    await expect(mcpToolJson(client, 'append_note', { path: 'notes/readonly.md', content: 'recovered\n' }))
+    await chmod(join(vaultRoot, 'notes'), 0o700);
+    await expect(mcpToolJson(client, 'append_note', { vaultId: VAULT, path: 'notes/readonly.md', content: 'recovered\n' }))
       .resolves.toMatchObject({ ok: true, content: 'base\nunsaved\nrecovered\n' });
-    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nrecovered\n');
+    await expect(readFile(join(vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nrecovered\n');
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit).toHaveLength(beforeAudit.length + 1);
     expect(audit.at(-1)).toMatchObject({
       operation: 'append',
@@ -884,17 +856,14 @@ describe('daemon routing', () => {
     });
 
     await transport.terminateSession();
-    await sessions.close();
   });
 
   it('applies anchored splice disambiguation and structured rejections', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    await writeFileWithParents(join(config.vaultRoot, 'ambiguous.md'), 'foo bar foo baz foo');
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const read = await (await app.request('/api/files/ambiguous.md')).json() as { baseline: string };
+    const { app, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'ambiguous.md'), 'foo bar foo baz foo');
+    const read = await (await app.request(filePath('ambiguous.md'))).json() as { baseline: string };
 
-    const ambiguous = await app.request('/api/files/ambiguous.md/splice', {
+    const ambiguous = await app.request(`${filePath('ambiguous.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ baseline: read.baseline, old_text: 'foo', new_text: 'FOO' })
@@ -902,73 +871,63 @@ describe('daemon routing', () => {
     expect(ambiguous.status).toBe(409);
     await expect(ambiguous.json()).resolves.toMatchObject({ ok: false, error: 'ambiguous', match_count: 3 });
 
-    const occurrence = await app.request('/api/files/ambiguous.md/splice', {
+    const occurrence = await app.request(`${filePath('ambiguous.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ baseline: read.baseline, old_text: 'foo', new_text: 'FOO', occurrence: 2 })
     });
     expect(occurrence.status).toBe(200);
-    await expect(readFile(join(config.vaultRoot, 'ambiguous.md'), 'utf8')).resolves.toBe('foo bar FOO baz foo');
+    await expect(readFile(join(vaultRoot, 'ambiguous.md'), 'utf8')).resolves.toBe('foo bar FOO baz foo');
 
-    const reread = await (await app.request('/api/files/ambiguous.md')).json() as { baseline: string };
-    const notFound = await app.request('/api/files/ambiguous.md/splice', {
+    const reread = await (await app.request(filePath('ambiguous.md'))).json() as { baseline: string };
+    const notFound = await app.request(`${filePath('ambiguous.md')}/splice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ baseline: reread.baseline, old_text: 'missing', new_text: 'x' })
     });
     expect(notFound.status).toBe(404);
     await expect(notFound.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
-    await sessions.close();
   });
 
   it.each([
     {
       name: 'PUT JSON content',
-      path: '/api/files/bad-put.md',
+      path: 'bad-put.md',
       method: 'PUT',
       body: { content: 42 },
       message: 'content must be a string'
     },
     {
       name: 'splice baseline',
-      path: '/api/files/bad-splice.md/splice',
+      path: 'bad-splice.md/splice',
       method: 'POST',
       body: { old_text: 'a', new_text: 'b' },
       message: 'baseline must be a string'
     },
     {
       name: 'append content',
-      path: '/api/files/bad-append.md/append',
+      path: 'bad-append.md/append',
       method: 'POST',
       body: { content: false },
       message: 'content must be a string'
     },
     {
       name: 'prepend content',
-      path: '/api/files/bad-prepend.md/prepend',
+      path: 'bad-prepend.md/prepend',
       method: 'POST',
       body: {},
       message: 'content must be a string'
     },
     {
       name: 'file move target',
-      path: '/api/files/bad-move.md/move',
+      path: 'bad-move.md/move',
       method: 'POST',
       body: { to: 42 },
       message: 'to must be a string'
-    },
-    {
-      name: 'folder move target',
-      path: '/api/folders/bad-folder/move',
-      method: 'POST',
-      body: { to: null },
-      message: 'to must be a string'
     }
-  ])('returns invalid_request for malformed $name bodies', async ({ path, method, body, message }) => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const response = await app.request(path, {
+  ])('returns invalid_request for malformed file $name bodies', async ({ path, method, body, message }) => {
+    const { app, vaultRoot } = await setupScopedVault();
+    const response = await app.request(filePath(path), {
       method,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
@@ -980,38 +939,52 @@ describe('daemon routing', () => {
       error: 'invalid_request',
       message
     });
-    await expect(stat(join(config.vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await sessions.close();
+    await expect(stat(join(vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('returns invalid_request for a malformed folder move target body', async () => {
+    const { app, vaultRoot } = await setupScopedVault();
+    const response = await app.request(`${folderPath('bad-folder')}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: null })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'invalid_request',
+      message: 'to must be a string'
+    });
+    await expect(stat(join(vaultRoot, '.kb2/audit/changes.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('appends missing files, prepends after frontmatter, searches with context, and does not audit search', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { app, vaultRoot } = await setupScopedVault();
 
-    const append = await app.request('/api/files/notes/new.md/append', {
+    const append = await app.request(`${filePath('notes/new.md')}/append`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'created by append\n' })
     });
     expect(append.status).toBe(200);
     await expect(append.json()).resolves.toMatchObject({ ok: true, path: 'notes/new.md', content: 'created by append\n' });
-    await expect(readFile(join(config.vaultRoot, 'notes/new.md'), 'utf8')).resolves.toBe('created by append\n');
+    await expect(readFile(join(vaultRoot, 'notes/new.md'), 'utf8')).resolves.toBe('created by append\n');
 
-    await writeFileWithParents(join(config.vaultRoot, 'notes/front.md'), '---\ntitle: Front\n---\nbody\n');
-    const prepend = await app.request('/api/files/notes/front.md/prepend', {
+    await writeFileWithParents(join(vaultRoot, 'notes/front.md'), '---\ntitle: Front\n---\nbody\n');
+    const prepend = await app.request(`${filePath('notes/front.md')}/prepend`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'inserted\n' })
     });
     expect(prepend.status).toBe(200);
-    await expect(readFile(join(config.vaultRoot, 'notes/front.md'), 'utf8')).resolves.toBe(
+    await expect(readFile(join(vaultRoot, 'notes/front.md'), 'utf8')).resolves.toBe(
       '---\ntitle: Front\n---\ninserted\nbody\n'
     );
 
-    await writeFileWithParents(join(config.vaultRoot, 'notes/deep/search.md'), 'before\nneedle here\nafter\n');
-    await writeFileWithParents(join(config.vaultRoot, '.kb2/trash/hidden.md'), 'needle hidden\n');
-    const search = await app.request('/api/search?q=NEEDLE&under=notes&context=1&limit=5');
+    await writeFileWithParents(join(vaultRoot, 'notes/deep/search.md'), 'before\nneedle here\nafter\n');
+    await writeFileWithParents(join(vaultRoot, '.kb2/trash/hidden.md'), 'needle hidden\n');
+    const search = await app.request(`/api/vaults/${VAULT}/search?q=NEEDLE&under=notes&context=1&limit=5`);
     expect(search.status).toBe(200);
     await expect(search.json()).resolves.toMatchObject({
       ok: true,
@@ -1024,98 +997,43 @@ describe('daemon routing', () => {
       }]
     });
 
-    const audit = await readAuditRows(config.vaultRoot);
+    const audit = await readAuditRows(vaultRoot);
     expect(audit.map((row) => row.operation)).toEqual(['append', 'prepend']);
-    await sessions.close();
-  });
-
-  it('surfaces live append persist failures without auditing or idle-dropping unsaved content, then recovers', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({
-      root: config.vaultRoot,
-      defaultContent: '',
-      idleSessionGraceMs: 30
-    });
-    await writeFileWithParents(join(config.vaultRoot, 'notes', 'readonly.md'), 'base\n');
-    const hydrated = sessions.getSession('notes/readonly.md');
-    await hydrated.open();
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const notesDir = join(config.vaultRoot, 'notes');
-
-    await chmod(notesDir, 0o500);
-    const failedAppend = await app.request('/api/files/notes/readonly.md/append', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'lost if dropped\n' })
-    });
-
-    expect(failedAppend.status).toBe(500);
-    await expect(failedAppend.json()).resolves.toMatchObject({ ok: false, error: 'persist_failed' });
-    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
-    await expect(readFile(join(config.vaultRoot, '.kb2/audit/changes.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-
-    await new Promise((resolve) => setTimeout(resolve, 90));
-    expect(sessions.getOpenSession('notes/readonly.md')).toBe(hydrated);
-    await expect(hydrated.getContent()).resolves.toBe('base\nlost if dropped\n');
-
-    await chmod(notesDir, 0o700);
-    const recoveredAppend = await app.request('/api/files/notes/readonly.md/append', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'after recovery\n' })
-    });
-
-    expect(recoveredAppend.status).toBe(200);
-    await expect(recoveredAppend.json()).resolves.toMatchObject({
-      ok: true,
-      path: 'notes/readonly.md',
-      content: 'base\nlost if dropped\nafter recovery\n'
-    });
-    await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\nlost if dropped\nafter recovery\n');
-    const audit = await readAuditRows(config.vaultRoot);
-    expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ operation: 'append', path: 'notes/readonly.md' });
-    expect(hydrated.getActivePersistFailureEvent()).toBeUndefined();
-    await sessions.close();
   });
 
   it('flushes dirty live sessions through a real HTTP barrier with durable file content', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const session = sessions.getSession('notes/flush.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'notes/flush.md'), '');
+    const session = manager.getSession('notes/flush.md');
     await session.open();
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
     const server = await startHttpApp(app);
 
     try {
       session.ydoc.getText('markdown').insert(0, 'flush me now\n');
-      const response = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      const response = await fetch(`${server.origin}/api/vaults/${VAULT}/ops/flush`, { method: 'POST' });
       const body = await response.json() as { ok: boolean; flushed: number; durableAsOf: string };
 
       expect(response.status).toBe(200);
       expect(body).toMatchObject({ ok: true, flushed: 1 });
       expect(new Date(body.durableAsOf).toISOString()).toBe(body.durableAsOf);
-      await expect(readFile(join(config.vaultRoot, 'notes/flush.md'), 'utf8')).resolves.toBe('flush me now\n');
+      await expect(readFile(join(vaultRoot, 'notes/flush.md'), 'utf8')).resolves.toBe('flush me now\n');
 
-      const clean = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      const clean = await fetch(`${server.origin}/api/vaults/${VAULT}/ops/flush`, { method: 'POST' });
       await expect(clean.json()).resolves.toMatchObject({ ok: true, flushed: 0 });
     } finally {
       await server.close();
-      await sessions.close();
     }
   });
 
   it('maps flush persist failures through the canonical dialect while the loud session event fires', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    await writeFileWithParents(join(config.vaultRoot, 'notes', 'readonly.md'), 'base\n');
-    const session = sessions.getSession('notes/readonly.md');
+    const { app, manager, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, 'notes', 'readonly.md'), 'base\n');
+    const session = manager.getSession('notes/readonly.md');
     const events: DocumentSessionEvent[] = [];
     session.onEvent((event) => events.push(event));
     await session.open();
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
     const server = await startHttpApp(app);
-    const notesDir = join(config.vaultRoot, 'notes');
+    const notesDir = join(vaultRoot, 'notes');
 
     try {
       await chmod(notesDir, 0o500);
@@ -1124,14 +1042,14 @@ describe('daemon routing', () => {
         `Timed out waiting for persist-failure; events=${JSON.stringify(events)}`
       );
 
-      const response = await fetch(`${server.origin}/api/ops/flush`, { method: 'POST' });
+      const response = await fetch(`${server.origin}/api/vaults/${VAULT}/ops/flush`, { method: 'POST' });
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toEqual({
         ok: false,
         error: 'persist_failed',
         message: 'Document edit could not be durably saved to disk.'
       });
-      await expect(readFile(join(config.vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
+      await expect(readFile(join(vaultRoot, 'notes/readonly.md'), 'utf8')).resolves.toBe('base\n');
       expect(events).toContainEqual(expect.objectContaining({ kind: 'persist-failure', path: 'notes/readonly.md' }));
     } finally {
       await chmod(notesDir, 0o700).catch(() => undefined);
@@ -1140,43 +1058,40 @@ describe('daemon routing', () => {
         await session.flush().catch(() => undefined);
       }
       await server.close();
-      await sessions.close();
     }
   });
 
   it('streams change events over SSE without content bytes and disconnects cleanly', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({ root: config.vaultRoot, defaultContent: '' });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
+    const { app } = await setupScopedVault();
     const server = await startHttpApp(app);
-    const stream = await openSseStream(`${server.origin}/api/events`);
-    const folderPath = 'notes/ユニコード';
-    const notePath = `${folderPath}/stream.md`;
-    const movedPath = `${folderPath}/moved.md`;
+    const stream = await openSseStream(`${server.origin}/api/vaults/${VAULT}/events`);
+    const folder = 'notes/ユニコード';
+    const notePath = `${folder}/stream.md`;
+    const movedPath = `${folder}/moved.md`;
     const secret = 'SECRET_STREAM_BYTES_012';
 
     try {
-      await expect(fetchJson(`${server.origin}/api/folders`, {
+      await expect(fetchJson(`${server.origin}${folderPath()}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: folderPath })
-      })).resolves.toMatchObject({ ok: true, path: folderPath });
-      await expect(fetchText(`${server.origin}/api/files/${encodeVaultPath(notePath)}`, {
+        body: JSON.stringify({ path: folder })
+      })).resolves.toMatchObject({ ok: true, path: folder });
+      await expect(fetchText(`${server.origin}${filePath(encodeVaultPath(notePath))}`, {
         method: 'PUT',
         headers: { 'content-type': 'text/plain' },
         body: 'initial visible content\n'
       })).resolves.toMatchObject({ ok: true, path: notePath });
-      await expect(fetchJson(`${server.origin}/api/folders/${encodeVaultPath(folderPath)}/metadata`, {
+      await expect(fetchJson(`${server.origin}${folderPath(encodeVaultPath(folder))}/metadata`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ color: 'mint', icon: 'folder' })
-      })).resolves.toMatchObject({ ok: true, path: folderPath });
-      await expect(fetchJson(`${server.origin}/api/files/${encodeVaultPath(notePath)}/append`, {
+      })).resolves.toMatchObject({ ok: true, path: folder });
+      await expect(fetchJson(`${server.origin}${filePath(encodeVaultPath(notePath))}/append`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content: secret })
       })).resolves.toMatchObject({ ok: true, path: notePath });
-      await expect(fetchJson(`${server.origin}/api/files/${encodeVaultPath(notePath)}/move`, {
+      await expect(fetchJson(`${server.origin}${filePath(encodeVaultPath(notePath))}/move`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: movedPath })
@@ -1190,57 +1105,20 @@ describe('daemon routing', () => {
         'content_persisted',
         'file_moved'
       ]);
-      expect(events[0]).toMatchObject({ path: folderPath, actor: { kind: 'user' } });
+      expect(events[0]).toMatchObject({ path: folder, actor: { kind: 'user' } });
       expect(events[3]).toMatchObject({ path: notePath, actor: { kind: 'system' } });
       expect(events[4]).toMatchObject({ fromPath: notePath, toPath: movedPath, actor: { kind: 'user' } });
       expect(stream.raw()).not.toContain(secret);
-      await expect(readFile(join(config.vaultRoot, movedPath), 'utf8')).resolves.toBe(`initial visible content\n${secret}`);
     } finally {
       await stream.close();
       await server.close();
-      await sessions.close();
     }
   });
 
-  it('keeps live move failures classified and resumes old-path watching', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const sessions = new DocumentSessionManager({
-      root: config.vaultRoot,
-      defaultContent: '',
-      watchDebounceMs: 10,
-      watchPollMs: 50
-    });
-    const session = sessions.getSession('notes/live-fail.md');
-    const events: DocumentSessionEvent[] = [];
-    session.onEvent((event) => events.push(event));
-    await session.open();
-    session.ydoc.getText('markdown').insert(0, 'live before failure\n');
-    await session.flush();
-    await writeFile(join(config.vaultRoot, 'notes/target.md'), 'existing target\n', 'utf8');
-
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot, documentSessions: sessions });
-    const failedMove = await app.request('/api/files/notes/live-fail.md/move', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: 'notes/target.md' })
-    });
-    expect(failedMove.status).toBe(409);
-    await expect(failedMove.json()).resolves.toMatchObject({ ok: false, error: 'path_collision' });
-
-    await writeFile(join(config.vaultRoot, 'notes/live-fail.md'), 'external after failed move\n', 'utf8');
-    await waitUntil(async () => await session.getContent() === 'external after failed move\n', () =>
-      `Timed out waiting for watcher recovery; content=${session.ydoc.getText('markdown').toString()}`
-    );
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'external-merge' }));
-    expect(sessions.getOpenSession('notes/live-fail.md')).toBe(session);
-    await sessions.close();
-  });
-
   it('covers vault info and non-live folder route branches', async () => {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
-    const app = createApp({ statusFile: config.statusFile, vaultRoot: config.vaultRoot });
+    const { app } = await setupScopedVault();
 
-    const mkdirResponse = await app.request('/api/folders', {
+    const mkdirResponse = await app.request(folderPath(), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: 'folder' })
@@ -1248,16 +1126,16 @@ describe('daemon routing', () => {
     expect(mkdirResponse.status).toBe(201);
     await expect(mkdirResponse.json()).resolves.toMatchObject({ ok: true, path: 'folder' });
 
-    await app.request('/api/files/folder/file.md', {
+    await app.request(filePath('folder/file.md'), {
       method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: 'x'
     });
-    const blockedDelete = await app.request('/api/folders/folder', { method: 'DELETE' });
+    const blockedDelete = await app.request(folderPath('folder'), { method: 'DELETE' });
     expect(blockedDelete.status).toBe(409);
     await expect(blockedDelete.json()).resolves.toMatchObject({ ok: false, error: 'folder_not_empty' });
 
-    const moved = await app.request('/api/folders/folder/move', {
+    const moved = await app.request(`${folderPath('folder')}/move`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: 'moved/folder' })
@@ -1265,15 +1143,15 @@ describe('daemon routing', () => {
     expect(moved.status).toBe(200);
     await expect(moved.json()).resolves.toMatchObject({ ok: true, fromPath: 'folder', toPath: 'moved/folder' });
 
-    const deleted = await app.request('/api/folders/moved/folder?recursive=true', { method: 'DELETE' });
+    const deleted = await app.request(`${folderPath('moved/folder')}?recursive=true`, { method: 'DELETE' });
     expect(deleted.status).toBe(200);
     await expect(deleted.json()).resolves.toMatchObject({ ok: true, path: 'moved/folder' });
 
-    const info = await app.request('/api/vault');
+    const info = await app.request(`/api/vaults/${VAULT}/vault`);
     expect(info.status).toBe(200);
-    await expect(info.json()).resolves.toMatchObject({ ok: true, rootName: 'demo-vault' });
+    await expect(info.json()).resolves.toMatchObject({ ok: true, rootName: VAULT });
 
-    const missing = await app.request('/api/files/missing.md/move', {
+    const missing = await app.request(`${filePath('missing.md')}/move`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to: 'next.md' })

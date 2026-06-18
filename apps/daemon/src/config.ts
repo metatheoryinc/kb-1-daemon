@@ -24,8 +24,9 @@ export interface DaemonConfig {
   /** Directory that holds every vault: `<home>/vaults/<slug>/`. */
   vaultsHome: string;
   /**
-   * Root of the default vault. Derived from the default slug under
-   * `vaultsHome` for backward compatibility with the single-vault surface.
+   * Well-known root of the vault stood up on first boot (and the legacy
+   * migration target): `<vaultsHome>/<default slug>/`. A convenience pointer to
+   * that location — the daemon serves vaults through the registry, not this path.
    */
   vaultRoot: string;
   statusFile: string;

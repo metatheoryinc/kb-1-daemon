@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-2/doc-session';
 import { createVaultService, type VaultService } from '@kb-2/vault-service';
+import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
 
@@ -35,18 +36,23 @@ export interface VaultInstance {
 }
 
 /**
- * Derive a slug from a folder name. Lowercases, replaces runs of
- * non-alphanumeric characters with a single hyphen, and trims hyphens.
- * Falls back to `vault` when nothing usable remains.
+ * Normalize a string into a vault slug using github-slugger (battle-tested, not
+ * hand-rolled). Used to derive a slug from a folder name when minting identity,
+ * and as the basis for {@link isWellFormedSlug}. Stateless: it does not dedupe
+ * across calls, so the same input always yields the same output.
  */
-export function slugFromFolderName(folderName: string): string {
-  const slug = folderName
-    .normalize('NFKD')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+export function slugify(value: string): string {
+  return githubSlug(value);
+}
 
-  return slug.length > 0 ? slug : 'vault';
+/**
+ * Whether a caller-supplied slug is well-formed: non-empty AND already
+ * normalized (idempotent under {@link slugify} — slugging it again leaves it
+ * unchanged). Server and client share this exact definition so a slug the UI
+ * suggests is accepted verbatim by the server.
+ */
+export function isWellFormedSlug(slug: string): boolean {
+  return slug.length > 0 && slugify(slug) === slug;
 }
 
 function identityPath(vaultRoot: string): string {
@@ -79,7 +85,7 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
   }
 
   const identity: VaultIdentity = {
-    id: slugFromFolderName(folderName),
+    id: slugify(folderName),
     displayName: folderName
   };
   await writeVaultIdentity(vaultRoot, identity);
@@ -284,18 +290,27 @@ export class VaultRegistry {
 
   /**
    * Create a fresh, essentially-empty vault in the primary `vaultsHome`. The
-   * daemon owns the slug and the folder: the caller supplies only a display
-   * name, never a path. Slug uniqueness is enforced (collision is a clean
-   * client error, not a crash). The vault registers live and is immediately
-   * servable.
+   * caller supplies BOTH the display name and the slug; the daemon never infers
+   * the slug from the display name. The slug must be well-formed (non-empty and
+   * already normalized) and unique within the daemon — a bad slug is a clean
+   * `invalid_request`, a collision a clean `already_exists`, never a crash. The
+   * folder is still owned by the daemon (placed at `vaultsHome/<slug>/`). The
+   * vault registers live and is immediately servable.
    */
-  async create(input: { displayName: string }): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {
+  async create(input: { displayName: string; slug: string }): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {
     const displayName = input.displayName.trim();
     if (displayName.length === 0) {
       return { ok: false, error: 'invalid_request', message: 'displayName must be a non-empty string' };
     }
 
-    const slug = slugFromFolderName(displayName);
+    const slug = input.slug;
+    if (!isWellFormedSlug(slug)) {
+      return {
+        ok: false,
+        error: 'invalid_request',
+        message: 'slug must be non-empty and already normalized (lowercase, hyphen-separated).'
+      };
+    }
     if (this.instances.has(slug)) {
       return { ok: false, error: 'already_exists', message: `A vault with id "${slug}" already exists.` };
     }

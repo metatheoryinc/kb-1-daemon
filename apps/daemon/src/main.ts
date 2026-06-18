@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
+import { bindYjsWebSocket, type DocumentSessionManager } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readVaultFile, validateVaultPath } from '@kb-2/vault-core';
+import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -22,12 +22,6 @@ import {
   VAULT_TRASH_DIRNAME,
   VaultRegistry
 } from './vault-registry.js';
-
-// The legacy single-vault demo surface (`/api/demo-document` + its Yjs socket)
-// is backed by the starter kit's top-level README, which a first-boot vault is
-// always seeded with. The session is bound only when that file is present.
-const DEMO_DOCUMENT_PATH = 'README.md';
-const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -53,38 +47,23 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
   // First boot: with no legacy vault to migrate and nothing discovered, stand up
   // a single starter vault seeded from the bundled kit. `create` performs the
-  // seeding, so there is no separate seed path.
+  // seeding, so there is no separate seed path. After first boot, zero vaults is
+  // a valid state — deleting every vault leaves the daemon serving an empty list.
   if (registry.list().length === 0) {
-    const created = await registry.create({ displayName: DEFAULT_VAULT_SLUG });
+    const created = await registry.create({ displayName: DEFAULT_VAULT_SLUG, slug: DEFAULT_VAULT_SLUG });
     if (!created.ok) {
       throw new Error(`Failed to create the starter vault: ${created.message}`);
     }
   }
 
-  // Backward compat: the existing single-vault HTTP/WS/MCP surface operates on
-  // the default vault's instance. First boot guarantees it exists; discovery
-  // finds it on every subsequent boot.
-  const defaultInstance = registry.get(DEFAULT_VAULT_SLUG);
-  if (!defaultInstance) {
-    throw new Error(`Default vault "${DEFAULT_VAULT_SLUG}" was not discovered after boot.`);
-  }
-  const documentSessions = defaultInstance.manager;
-  const vaultService = defaultInstance.service;
-  const demoDocumentSession = await openDemoDocumentSession(documentSessions, config.vaultRoot);
-
   // One MCP endpoint, every vault: vaultId resolution and vault enumeration both
   // go through the SAME live registry the HTTP layer uses — no second vault map.
-  // Omitted vaultId targets the default vault, keeping the single-vault MCP
-  // surface backward compatible.
-  const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(vaultService, registry));
+  // Every data tool requires a vaultId; there is no default vault.
+  const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry));
 
   const app = createApp({
     statusFile: config.statusFile,
-    vaultRoot: config.vaultRoot,
-    vaultService,
-    documentSessions,
     registry,
-    demoDocumentSession,
     mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget,
@@ -142,9 +121,10 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.on('upgrade', (request, socket, head) => {
       const pathname = request.url ? new URL(request.url, `http://${request.headers.host ?? 'localhost'}`).pathname : '';
-      // Resolve the addressed vault's document manager: the flat WS path uses
-      // the default vault, the `/api/vaults/:id/...` path uses that vault.
-      const target = resolveWebSocketTarget(pathname, documentSessions, registry);
+      // Resolve the addressed vault's document manager from the scoped
+      // `/api/vaults/:id/files/.../yjs` path. An unknown vault or invalid path
+      // is refused.
+      const target = resolveWebSocketTarget(pathname, registry);
       if (!target) {
         socket.destroy();
         return;
@@ -210,28 +190,6 @@ const daemonRelayLogger: TunnelClientLogger = {
   },
 };
 
-/**
- * Open the legacy demo-document session when the default vault has the backing
- * file. The demo surface is served only while that file exists, so a vault that
- * lacks it simply has no demo session.
- */
-async function openDemoDocumentSession(
-  manager: DocumentSessionManager,
-  vaultRoot: string
-): Promise<OneFileDocumentSession | undefined> {
-  const existing = await readVaultFile({ root: vaultRoot }, DEMO_DOCUMENT_PATH);
-  if (!existing.ok) {
-    if (existing.error !== 'not_found') {
-      throw new Error(existing.message);
-    }
-    return undefined;
-  }
-
-  const session = manager.getSession(DEMO_DOCUMENT_PATH);
-  await session.open();
-  return session;
-}
-
 interface WebSocketTarget {
   manager: DocumentSessionManager;
   documentPath: string;
@@ -239,40 +197,30 @@ interface WebSocketTarget {
 
 /**
  * Resolve a Yjs WebSocket path to the document manager and vault-relative path
- * it addresses. Recognizes the demo-document alias, the flat `/api/files/.../yjs`
- * path (default vault), and the scoped `/api/vaults/:id/files/.../yjs` path
- * (the addressed vault). Returns `undefined` for an unknown id or invalid path.
+ * it addresses. Only the scoped `/api/vaults/:id/files/.../yjs` path is served;
+ * there is no flat (default-vault) path. Returns `undefined` for an unknown id
+ * or invalid path so the upgrade is refused.
  */
 function resolveWebSocketTarget(
   pathname: string,
-  defaultManager: DocumentSessionManager,
   registry: VaultRegistry
 ): WebSocketTarget | undefined {
-  if (pathname === DEMO_DOCUMENT_YJS_PATH) {
-    return { manager: defaultManager, documentPath: DEMO_DOCUMENT_PATH };
-  }
-
   const suffix = '/yjs';
   if (!pathname.endsWith(suffix)) {
     return undefined;
   }
 
   const scoped = parseScopedFilesPath(pathname.slice(0, -suffix.length));
-  if (scoped) {
-    const instance = registry.get(scoped.id);
-    if (!instance) {
-      return undefined;
-    }
-    const documentPath = safeValidateFilePath(scoped.rawPath);
-    return documentPath ? { manager: instance.manager, documentPath } : undefined;
-  }
-
-  const flatPrefix = '/api/files/';
-  if (!pathname.startsWith(flatPrefix)) {
+  if (!scoped) {
     return undefined;
   }
-  const documentPath = safeValidateFilePath(pathname.slice(flatPrefix.length, -suffix.length));
-  return documentPath ? { manager: defaultManager, documentPath } : undefined;
+
+  const instance = registry.get(scoped.id);
+  if (!instance) {
+    return undefined;
+  }
+  const documentPath = safeValidateFilePath(scoped.rawPath);
+  return documentPath ? { manager: instance.manager, documentPath } : undefined;
 }
 
 /** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */
