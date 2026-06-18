@@ -41,6 +41,10 @@ export { default as VaultFilterPopover } from './local-editor/VaultFilterPopover
 export { default as RailResizeHandle } from './local-editor/RailResizeHandle.svelte';
 export { default as FolderNode } from './local-editor/FolderNode.svelte';
 export { default as VaultGroup } from './local-editor/VaultGroup.svelte';
+export { default as NewVaultDialog } from './local-editor/NewVaultDialog.svelte';
+export type { NewVaultSubmit } from './local-editor/NewVaultDialog.svelte';
+export { default as EmptyVaultsState } from './local-editor/EmptyVaultsState.svelte';
+export { suggestSlug, isWellFormedSlug } from './local-editor/slug';
 export { default as LocalEditorShell } from './local-editor/LocalEditorShell.svelte';
 export { default as LocalEditorMobileShell } from './local-editor/LocalEditorMobileShell.svelte';
 export { default as StarredPanel } from './local-editor/StarredPanel.svelte';

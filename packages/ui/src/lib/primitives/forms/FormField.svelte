@@ -17,6 +17,9 @@
     required?: boolean;
     ref?: HTMLInputElement | null;
     onkeydown?: (event: KeyboardEvent) => void;
+    /** Fires on every keystroke — used by callers that derive a live
+        value (e.g. the new-vault dialog's slug-suggest) from the input. */
+    oninput?: (event: Event) => void;
   }
 
   let {
@@ -29,6 +32,7 @@
     required = false,
     ref = $bindable(null),
     onkeydown,
+    oninput,
   }: Props = $props();
 </script>
 
@@ -39,6 +43,7 @@
   {type}
   {placeholder}
   {onkeydown}
+  {oninput}
   {disabled}
   {autocomplete}
   {name}
