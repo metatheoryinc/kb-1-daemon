@@ -21,10 +21,12 @@
     ConfirmDialog,
     DocumentNotFoundState,
     EditorSaveNotifications,
+    EmptyVaultsState,
     FolderCanvas,
     LocalEditorShell,
     LocalEditorMobileShell,
     MovePickerDialog,
+    NewVaultDialog,
     TextInputDialog,
     type AccentName,
     type BreadcrumbItem,
@@ -32,6 +34,7 @@
     type LocalFolderNode,
     type LocalTreeAction,
     type LocalTreeNode,
+    type NewVaultSubmit,
     type RailNavId,
     type VaultFilterEntry,
     type VaultGroupData,
@@ -93,6 +96,15 @@
         run: (folderPath: string) => Promise<void>;
         busy: boolean;
         error: string | null;
+      }
+    // The "New vault" dialog. Carries the create op, which always submits
+    // both the display name and the (suggested, editable) slug. `busy`/
+    // `error` surface in-flight + server validation outcomes inline.
+    | {
+        kind: 'new-vault';
+        run: (value: NewVaultSubmit) => Promise<void>;
+        busy: boolean;
+        error: string | null;
       };
 
   let dialog = $state<DialogState>({ kind: 'none' });
@@ -142,6 +154,11 @@
       tree: vaultTrees[v.id] ?? [],
     })),
   );
+  // Whether the daemon serves any vaults. Zero vaults is a VALID state
+  // (a fresh daemon, or the user deleted the last one) — not an error.
+  // When false, the page shows the calm "create your first vault" empty
+  // state instead of the editor shell.
+  const hasVaults = $derived(knownVaults.length > 0);
   let mounted = $state(false);
   // Which secondary panel the rail has selected. 'files' shows the tree;
   // 'starred' shows the (currently empty) starred view.
@@ -525,9 +542,11 @@
   }
 
   // Switch the active vault: navigate to its root. The afterNavigate hook
-  // rebinds state (active id, document, tree) off the new URL.
+  // rebinds state (active id, document, tree) off the new URL. Remember it
+  // as the last-opened so the next cold load reopens here.
   async function openVault(vaultId: string): Promise<void> {
     if (vaultId === activeVaultId) return;
+    appState.setLastOpenedVaultId(vaultId);
     await goto(vaultRoute(vaultId, ''), { noScroll: true });
   }
 
@@ -754,6 +773,23 @@
     }
   }
 
+  // Run the new-vault create, keeping the dialog open with busy/error so a
+  // server validation outcome (bad slug, collision) surfaces inline. The
+  // create op already refreshes the list + navigates, so there's no tree
+  // follow-up here (and there may be no active tree on the first vault).
+  async function runNewVaultDialog(value: NewVaultSubmit): Promise<void> {
+    if (dialog.kind !== 'new-vault') return;
+    const run = dialog.run;
+    patchDialog({ busy: true, error: null });
+    try {
+      await run(value);
+      closeDialog();
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      patchDialog({ busy: false, error: message });
+    }
+  }
+
   function handleTreeAction(action: LocalTreeAction): void {
     if (action.kind === 'file') {
       openFileDialog(action);
@@ -957,41 +993,50 @@
       run: async () => {
         await kbService.deleteVault(targetVaultId);
       },
-      // Drop the vault from the list; if it was active, land in a survivor.
+      // Drop the vault from the list. If it was the active one, land in a
+      // survivor — or, when it was the LAST vault, in the empty state
+      // (zero vaults is valid). Deleting the active vault also clears its
+      // last-opened so a stale slug isn't reopened next cold load.
       afterSuccess: async () => {
         await refreshVaults();
         if (targetVaultId === activeVaultId) {
           const survivor = knownVaults[0];
-          if (survivor) await openVault(survivor.id);
+          if (survivor) {
+            await openVault(survivor.id);
+          } else {
+            // No vaults left — fall to the empty state cleanly.
+            activeVaultId = '';
+            documentPath = '';
+            provider?.destroy();
+            provider = null;
+            providerSynced = false;
+            appState.setLastOpenedVaultId(null);
+            await goto('/', { replaceState: true, noScroll: true });
+          }
         }
       },
     };
   }
 
-  // The footer "New vault" affordance. Collects a display name (matching
-  // the new-note/new-folder naming UX) and creates the vault; the daemon
-  // infers the slug. A slug collision surfaces the daemon's 409 cleanly
-  // in the dialog's error slot. On success the new vault appears in the
-  // rail and becomes active.
+  // The "New vault" affordance (footer + empty state). Opens the
+  // slug-suggest dialog, which auto-suggests a slug from the display name
+  // (client-side, the SAME github-slugger definition the daemon uses),
+  // lets the user edit it, and ALWAYS submits both `{ displayName, slug }`.
+  // The server validates the slug (format + uniqueness): a bad slug (400)
+  // or a collision (409) surfaces inline in the dialog's error slot, never
+  // a silent failure. On success the new vault appears in the rail and
+  // becomes active.
   function openNewVaultDialog(): void {
     dialog = {
-      kind: 'text',
-      title: 'New vault',
-      description: 'Create a new vault. A folder is created on disk from the name.',
-      fields: [{ type: 'text', label: 'Name', placeholder: 'untitled', required: true }],
-      submitLabel: 'Create',
+      kind: 'new-vault',
       busy: false,
       error: null,
-      run: async ([nextName]) => {
-        const trimmed = nextName.trim();
-        if (!trimmed) return;
-        const created = await kbService.createVault(trimmed);
+      run: async ({ displayName, slug }) => {
+        const created = await kbService.createVault(displayName, slug);
         // Reflect the new vault and switch to it.
         await refreshVaults();
         await openVault(created.id);
       },
-      // `run` already refreshed the list + navigated; no tree refresh.
-      afterSuccess: async () => undefined,
     };
   }
 
@@ -1094,7 +1139,8 @@
 
 
   // Parse the route into `{ vaultId, path }`. A root URL (`/`) yields a
-  // null vaultId, signalling "land in the default vault".
+  // null vaultId, signalling "resolve a target on bootstrap" (last-opened
+  // else first vault — there is no default vault).
   function routeFromUrl(url: URL): { vaultId: string | null; path: string } {
     return parseVaultRoute(url.pathname);
   }
@@ -1156,24 +1202,37 @@
   });
 
   // First-load bootstrap. Load the vault list, resolve the active vault
-  // from the URL (or fall back to the default = first vault), normalize
-  // the URL to `/<vaultId>/<path>`, then open the document + load the
-  // rail's trees. Visiting `/` lands in the default vault.
+  // from the URL (or fall back to the last-opened vault, else the first in
+  // the list — there is NO default vault), normalize the URL to
+  // `/<vaultId>/<path>`, then open the document + load the rail's trees.
+  // Zero vaults is a valid state: nothing to open, the empty state renders.
   async function bootstrap(): Promise<void> {
     const loaded = await refreshVaults();
     if (loaded.length === 0) {
-      // No vaults to serve — nothing to open. The rail shows its empty
-      // state; an explicit error (if any) already surfaced.
+      // No vaults to serve — a fresh daemon or every vault deleted. This
+      // is normal, not an error; the empty "create your first vault" state
+      // renders. Forget any stale last-opened so we don't reopen a gone
+      // vault when one is created.
+      activeVaultId = '';
+      appState.setLastOpenedVaultId(null);
       return;
     }
 
     const route = routeFromUrl(new URL(window.location.href));
     const known = route.vaultId && loaded.some((v) => v.id === route.vaultId);
-    const targetVaultId = known ? (route.vaultId as string) : loaded[0].id;
+    // Fall back to the last-opened vault if it still exists, else the
+    // first in the list. No "default vault" — just the remembered choice.
+    const remembered = appState.getState().lastOpenedVaultId;
+    const fallbackId =
+      remembered && loaded.some((v) => v.id === remembered)
+        ? remembered
+        : loaded[0].id;
+    const targetVaultId = known ? (route.vaultId as string) : fallbackId;
     const targetPath = known ? route.path : '';
 
     activeVaultId = targetVaultId;
     documentPath = targetPath;
+    appState.setLastOpenedVaultId(targetVaultId);
 
     // Normalize the URL when we redirected (root, or an unknown vault).
     if (!known) {
@@ -1191,13 +1250,18 @@
   afterNavigate((navigation) => {
     if (!mounted || !navigation.to?.url) return;
     const route = routeFromUrl(navigation.to.url);
-    // A root URL or an unknown vault redirects to the default vault; the
-    // bootstrap + this same hook handle that, so ignore until resolved.
+    // A root URL (no vault segment) means "resolve a target on bootstrap"
+    // or, with zero vaults, the empty state. Either way there's nothing to
+    // rebind off the URL here, so ignore it.
     if (!route.vaultId) return;
 
     const vaultChanged = route.vaultId !== activeVaultId;
     if (vaultChanged) {
       activeVaultId = route.vaultId;
+      // Remember the now-active vault (covers cross-vault navigation that
+      // doesn't go through `openVault`, e.g. opening a file in another
+      // vault's group). The next cold load reopens here.
+      appState.setLastOpenedVaultId(route.vaultId);
       // Ensure the now-active vault's tree is loaded for the canvas.
       if (!vaultTrees[route.vaultId]) void loadVaultTree(route.vaultId);
     }
@@ -1313,7 +1377,13 @@
   {/if}
 {/snippet}
 
-{#if viewport.mode === 'mobile'}
+{#if !hasVaults}
+  <!-- Zero vaults is a valid state (fresh daemon, or the last vault was
+       deleted). Show the calm "create your first vault" empty state with
+       a way to create one — no error, no blank void. The create button
+       opens the same slug-suggest dialog the footer uses. -->
+  <EmptyVaultsState onCreateVault={openNewVaultDialog} />
+{:else if viewport.mode === 'mobile'}
   <LocalEditorMobileShell
     bind:navOpen
     {vaultName}
@@ -1443,6 +1513,16 @@
     error={dialog.error}
     onsubmit={(destination) => {
       void runDialogOperation(() => dialog.kind === 'move' ? dialog.run(destination) : Promise.resolve());
+    }}
+    oncancel={closeDialog}
+  />
+{:else if dialog.kind === 'new-vault'}
+  <NewVaultDialog
+    open
+    busy={dialog.busy}
+    error={dialog.error}
+    onsubmit={(value) => {
+      void runNewVaultDialog(value);
     }}
     oncancel={closeDialog}
   />

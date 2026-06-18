@@ -128,7 +128,10 @@ describe('local editor route', () => {
   it('hides the vault tree when the vault is toggled off in the filter', async () => {
     render(AppStateHarness);
 
-    const filesPanel = within(screen.getByRole('complementary', { name: 'Vault files' }));
+    // The rail (and the shell) only render once the vault list loads —
+    // zero vaults is a valid state that shows the empty "create your first
+    // vault" screen instead — so wait for the rail before querying it.
+    const filesPanel = within(await screen.findByRole('complementary', { name: 'Vault files' }));
     // The tree renders the vault's folders while the vault is visible.
     expect(await filesPanel.findByText('projects')).toBeTruthy();
 

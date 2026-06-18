@@ -79,6 +79,12 @@ interface PersistedState {
   railCollapsed: boolean;
   /** Pinned notes/folders. Persisted verbatim — see {@link FavoriteEntry}. */
   favorites: FavoriteEntry[];
+  /**
+   * The vault the user last had open (its slug), or `null` if none yet.
+   * First load reopens this vault; switching vaults updates it. There is
+   * no "default vault" — this is purely the remembered last-opened.
+   */
+  lastOpenedVaultId: string | null;
 }
 
 /** The live, in-memory app state. Mirrors the persisted slice plus actions. */
@@ -118,6 +124,12 @@ export interface AppState {
    * inserted; the starred panel sorts by `addedAt` for display.
    */
   favorites: FavoriteEntry[];
+  /**
+   * The slug of the vault the user last opened, or `null` if none. First
+   * load reopens it (else the first vault in the list). NOT a default
+   * vault — just the remembered last-opened.
+   */
+  lastOpenedVaultId: string | null;
 }
 
 export interface AppStateStore {
@@ -145,6 +157,12 @@ export interface AppStateStore {
   toggleRailCollapsed: () => void;
   /** Set the primary rail's collapsed state directly. */
   setRailCollapsed: (collapsed: boolean) => void;
+  /**
+   * Remember the vault the user is now in (its slug). `null` forgets the
+   * last-opened (e.g. the last vault was deleted). First load reopens
+   * this; switching vaults updates it.
+   */
+  setLastOpenedVaultId: (vaultId: string | null) => void;
   /**
    * Star/unstar a note or folder. Adds the entry (stamped with
    * `addedAt`) when absent, removes it when present.
@@ -184,6 +202,7 @@ const DEFAULT_STATE: AppState = {
   secondaryRailWidth: SECONDARY_RAIL_WIDTH_DEFAULT,
   railCollapsed: false,
   favorites: [],
+  lastOpenedVaultId: null,
 };
 
 function sortedIds(ids: readonly string[]): string[] {
@@ -229,6 +248,7 @@ interface PersistedSlice {
   secondaryRailWidth: number;
   railCollapsed: boolean;
   favorites: FavoriteEntry[];
+  lastOpenedVaultId: string | null;
 }
 
 function readPersisted(
@@ -253,6 +273,7 @@ function readPersisted(
     }
     if (typeof blob.railCollapsed === 'boolean') out.railCollapsed = blob.railCollapsed;
     if ('favorites' in blob) out.favorites = favoriteArray(blob.favorites);
+    if (typeof blob.lastOpenedVaultId === 'string') out.lastOpenedVaultId = blob.lastOpenedVaultId;
     return out;
   } catch {
     // Corrupt blob — fall back to defaults rather than throwing.
@@ -279,6 +300,7 @@ export function createAppState(
     secondaryRailWidth: persisted.secondaryRailWidth ?? DEFAULT_STATE.secondaryRailWidth,
     railCollapsed: persisted.railCollapsed ?? DEFAULT_STATE.railCollapsed,
     favorites: persisted.favorites ?? [],
+    lastOpenedVaultId: persisted.lastOpenedVaultId ?? DEFAULT_STATE.lastOpenedVaultId,
   };
 
   const listeners = new Set<(state: AppState) => void>();
@@ -293,6 +315,7 @@ export function createAppState(
       secondaryRailWidth: state.secondaryRailWidth,
       railCollapsed: state.railCollapsed,
       favorites: state.favorites,
+      lastOpenedVaultId: state.lastOpenedVaultId,
     };
     try {
       storage.setItem(persistKey, JSON.stringify(blob));
@@ -360,6 +383,10 @@ export function createAppState(
     setRailCollapsed: (collapsed) => {
       if (collapsed === state.railCollapsed) return;
       commit({ ...state, railCollapsed: collapsed });
+    },
+    setLastOpenedVaultId: (vaultId) => {
+      if (vaultId === state.lastOpenedVaultId) return;
+      commit({ ...state, lastOpenedVaultId: vaultId });
     },
     toggleFavorite: (entry) => {
       const target = favoriteKey(entry);

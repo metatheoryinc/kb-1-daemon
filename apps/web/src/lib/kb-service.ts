@@ -57,12 +57,14 @@ function messageForError(
   if (context === 'vault') {
     switch (code) {
       case 'already_exists':
-        // Slug collision: the inferred slug already names a vault. Surface
+        // Slug collision: the submitted slug already names a vault. Surface
         // the daemon's specific message when present (it names the slug),
         // otherwise a plain vault-collision sentence.
-        return fallback ?? 'A vault with that name already exists.';
+        return fallback ?? 'A vault with that slug already exists.';
       case 'invalid_request':
-        return fallback ?? 'That vault name is not allowed.';
+        // A malformed slug the server rejected. The daemon's message names
+        // the problem; fall back to a slug-shaped sentence.
+        return fallback ?? 'That slug is not allowed.';
       case 'not_found':
         return 'That vault no longer exists.';
       default:
@@ -127,17 +129,20 @@ export const kbService = {
   },
 
   /**
-   * Create a vault from a display name. The daemon infers the slug; a
-   * slug collision surfaces as a clean error (the daemon's 409), never a
-   * silent failure.
+   * Create a vault from an explicit display name + slug. Both are always
+   * sent; the daemon validates the slug (format + uniqueness) and never
+   * infers it. A bad slug (400) or a slug collision (409) surfaces as a
+   * clean error, never a silent failure. The caller suggests the slug
+   * with the SAME github-slugger definition the daemon uses, so a
+   * suggested slug is accepted verbatim.
    */
-  async createVault(displayName: string): Promise<VaultSummary> {
+  async createVault(displayName: string, slug: string): Promise<VaultSummary> {
     const result = await request<{ ok: true; vault: VaultSummary }>(
       '/api/vaults',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName }),
+        body: JSON.stringify({ displayName, slug }),
       },
       'vault',
     );
