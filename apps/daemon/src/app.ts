@@ -2,7 +2,8 @@ import { Hono, type Context } from 'hono';
 import { DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
 import {
   createLocalMcpEndpoint,
-  type LocalMcpEndpoint
+  type LocalMcpEndpoint,
+  type LocalMcpVaultProvider
 } from '@kb-2/local-mcp';
 import {
   createVaultService,
@@ -106,10 +107,20 @@ export function createApp(options: CreateAppOptions): Hono {
       vaultRoot: options.vaultRoot,
       documentSessions: options.documentSessions ?? new DocumentSessionManager({ root: options.vaultRoot })
     });
-    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
+    // One MCP endpoint addresses every vault. When a registry is present, vaultId
+    // resolution and vault enumeration go through it (the same source of truth as
+    // the HTTP layer); omitted vaultId still targets the default vault. Without a
+    // registry, the endpoint is the legacy single (default-vault) surface.
+    const mcpEndpoint = options.mcpEndpoint
+      ?? createLocalMcpEndpoint(
+        options.registry
+          ? mcpVaultProvider(vaultService, options.registry)
+          : vaultService
+      );
     const actorDefault = options.actorDefault ?? 'user';
 
-    // Default-vault-only surface: flush, the SSE event stream, and local MCP.
+    // Default-vault-only surface: flush and the SSE event stream. The local MCP
+    // endpoint above addresses any vault via its optional vaultId parameter.
     api.post('/ops/flush', async (context) => {
       return mapServiceResult(context, await vaultService.flushDirtySessions());
     });
@@ -487,6 +498,20 @@ function mapServiceResult(
   }
 
   return context.json(result, statusForServiceError(result.error));
+}
+
+/**
+ * Adapt the live registry to the MCP layer's vault provider. vaultId resolution
+ * and vault enumeration both read from the same registry the HTTP routes use, so
+ * the MCP endpoint never holds a second vault map. Omitted vaultId resolves to
+ * the supplied default-vault service.
+ */
+export function mcpVaultProvider(defaultService: VaultService, registry: VaultRegistry): LocalMcpVaultProvider {
+  return {
+    default: () => defaultService,
+    resolve: (id) => registry.get(id)?.service,
+    list: () => registry.list()
+  };
 }
 
 /**

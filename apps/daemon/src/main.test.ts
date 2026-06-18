@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-2/doc-session';
 import { startDaemon } from './main.js';
@@ -464,12 +466,158 @@ describe('daemon vault management API', () => {
   });
 });
 
+describe('daemon multi-vault MCP surface', () => {
+  let kb2Home: string;
+  let originalEnv: NodeJS.ProcessEnv;
+  let port: number;
+  let started: Awaited<ReturnType<typeof startDaemon>>;
+  let client: Client;
+  let transport: StreamableHTTPClientTransport;
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-mcp-vaults-'));
+    port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(port)
+    };
+    started = await startDaemon();
+    client = new Client({ name: 'mcp-multi-vault-test', version: '1.0.0' });
+    transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client.connect(transport);
+  });
+
+  afterEach(async () => {
+    await transport.terminateSession().catch(() => undefined);
+    await started.close();
+    process.env = originalEnv;
+    await rm(kb2Home, { force: true, recursive: true });
+  });
+
+  const base = () => `http://127.0.0.1:${port}`;
+
+  async function createVault(displayName: string): Promise<string> {
+    const response = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName })
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    return body.vault.id as string;
+  }
+
+  it('lists every vault through the list_vaults tool, mirroring the registry', async () => {
+    const created = await createVault('Field Notes');
+    expect(created).toBe('field-notes');
+
+    const listed = await mcpToolJson(client, 'list_vaults', {}) as {
+      ok: boolean;
+      vaults: Array<{ id: string; displayName: string }>;
+    };
+    expect(listed.ok).toBe(true);
+    // The default vault plus the freshly created one — same shape the HTTP API returns.
+    expect(listed.vaults).toContainEqual({ id: 'demo-vault', displayName: 'demo-vault' });
+    expect(listed.vaults).toContainEqual({ id: 'field-notes', displayName: 'Field Notes' });
+  });
+
+  it('advertises the optional vaultId param on data tools but not on list_vaults', async () => {
+    const tools = await client.listTools();
+    const vaultInfo = tools.tools.find((tool) => tool.name === 'vault_info');
+    expect(vaultInfo?.inputSchema.properties).toHaveProperty('vaultId');
+    const createNote = tools.tools.find((tool) => tool.name === 'create_note');
+    expect(createNote?.inputSchema.properties).toHaveProperty('vaultId');
+    const listVaults = tools.tools.find((tool) => tool.name === 'list_vaults');
+    expect(listVaults?.inputSchema.properties ?? {}).not.toHaveProperty('vaultId');
+  });
+
+  it('operates on the default vault when vaultId is omitted (backward compatible)', async () => {
+    await expect(mcpToolJson(client, 'create_note', { path: 'in-default.md', content: 'default body\n' }))
+      .resolves.toMatchObject({ ok: true, path: 'in-default.md' });
+
+    // It landed in the default vault's folder on disk.
+    await expect(readFile(join(kb2Home, 'vaults', 'demo-vault', 'in-default.md'), 'utf8'))
+      .resolves.toBe('default body\n');
+
+    // And reads back with no vaultId.
+    await expect(mcpToolJson(client, 'read_note', { path: 'in-default.md' }))
+      .resolves.toMatchObject({ ok: true, content: 'default body\n' });
+  });
+
+  it('addresses a second vault by vaultId and keeps it isolated from the default vault', async () => {
+    const vaultId = await createVault('Second');
+    expect(vaultId).toBe('second');
+
+    // Write a note into the second vault via MCP using its vaultId.
+    await expect(mcpToolJson(client, 'create_note', {
+      vaultId,
+      path: 'only-in-second.md',
+      content: 'second body\n'
+    })).resolves.toMatchObject({ ok: true, path: 'only-in-second.md' });
+
+    // It is on disk under the second vault's folder.
+    await expect(readFile(join(kb2Home, 'vaults', 'second', 'only-in-second.md'), 'utf8'))
+      .resolves.toBe('second body\n');
+
+    // Readable back addressing the second vault via MCP.
+    await expect(mcpToolJson(client, 'read_note', { vaultId, path: 'only-in-second.md' }))
+      .resolves.toMatchObject({ ok: true, content: 'second body\n' });
+
+    // Cross-vault isolation: the default vault does not see it (MCP and HTTP both miss).
+    const defaultRead = await client.callTool({ name: 'read_note', arguments: { path: 'only-in-second.md' } });
+    expect(defaultRead.isError).toBe(true);
+    expect(mcpText(defaultRead)).toContain('"error":"not_found"');
+
+    const httpFlatRead = await fetch(`${base()}/api/files/only-in-second.md`);
+    expect(httpFlatRead.status).toBe(404);
+
+    // And the HTTP scoped route for the second vault DOES see it — same content.
+    const httpScopedRead = await fetch(`${base()}/api/vaults/second/files/only-in-second.md`);
+    expect(httpScopedRead.status).toBe(200);
+    await expect(httpScopedRead.json()).resolves.toMatchObject({ ok: true, content: 'second body\n' });
+  });
+
+  it('returns a clean tool error for an unknown vaultId without crashing the daemon', async () => {
+    const result = await client.callTool({
+      name: 'create_note',
+      arguments: { vaultId: 'does-not-exist', path: 'nope.md', content: 'x\n' }
+    });
+    expect(result.isError).toBe(true);
+    expect(mcpText(result)).toBe('create_note rejected: {"ok":false,"error":"not_found","message":"No vault with id \\"does-not-exist\\"."}');
+
+    // The daemon is still healthy and serving after the miss.
+    const health = await fetch(`${base()}/api/health`);
+    expect(health.status).toBe(200);
+
+    // Nothing was written anywhere.
+    await expect(access(join(kb2Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
+  });
+});
+
 async function reservePort(): Promise<number> {
   const server = createServer();
   await listen(server);
   const port = (server.address() as AddressInfo).port;
   await close(server);
   return port;
+}
+
+async function mcpToolJson(client: Client, name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return JSON.parse(mcpText(await client.callTool({ name, arguments: args }))) as Record<string, unknown>;
+}
+
+function mcpText(result: Awaited<ReturnType<Client['callTool']>>): string {
+  if (!Array.isArray(result.content)) {
+    throw new Error('Expected MCP content array');
+  }
+  const first = result.content[0] as { type?: unknown; text?: unknown } | undefined;
+  if (!first || first.type !== 'text' || typeof first.text !== 'string') {
+    throw new Error('Expected text MCP content');
+  }
+  return first.text;
 }
 
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
