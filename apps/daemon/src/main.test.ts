@@ -58,16 +58,16 @@ describe('daemon startup', () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
       ok: true,
-      document: 'demo-vault/hello-world.md'
+      document: 'demo-vault/README.md'
     });
     expect(typeof body.content).toBe('string');
-    expect(body.content).toContain('Hello KB-2');
-    await expect(readFile(join(started.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toBe(body.content);
+    expect(body.content).toContain('Welcome to your vault');
+    await expect(readFile(join(started.config.vaultRoot, 'README.md'), 'utf8')).resolves.toBe(body.content);
 
     await started.close();
   });
 
-  it('seeds the demo document only for a first boot of an empty vault', async () => {
+  it('seeds the starter kit only for a first boot of an empty vault', async () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
@@ -77,17 +77,22 @@ describe('daemon startup', () => {
     };
 
     const firstBoot = await startDaemon();
-    await expect(readFile(join(firstBoot.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toContain('Hello KB-2');
+    // The whole bundled kit lands in the first-boot vault: a top-level README and
+    // a nested note, proving the seeder copies the template tree recursively.
+    await expect(readFile(join(firstBoot.config.vaultRoot, 'README.md'), 'utf8')).resolves.toContain('Welcome to your vault');
+    await expect(readFile(join(firstBoot.config.vaultRoot, 'notes', 'getting-started.md'), 'utf8')).resolves.toContain('Getting started');
 
-    const deleted = await fetch(`http://127.0.0.1:${port}/api/files/hello-world.md`, { method: 'DELETE' });
+    const deleted = await fetch(`http://127.0.0.1:${port}/api/files/README.md`, { method: 'DELETE' });
     expect(deleted.status).toBe(200);
-    await expect(access(join(firstBoot.config.vaultRoot, 'hello-world.md'))).rejects.toBeTruthy();
+    await expect(access(join(firstBoot.config.vaultRoot, 'README.md'))).rejects.toBeTruthy();
     await firstBoot.close();
 
+    // Restart does not re-seed an existing vault: the deleted file stays gone.
     const restartedAfterDelete = await startDaemon();
-    await expect(access(join(restartedAfterDelete.config.vaultRoot, 'hello-world.md'))).rejects.toBeTruthy();
+    await expect(access(join(restartedAfterDelete.config.vaultRoot, 'README.md'))).rejects.toBeTruthy();
     await restartedAfterDelete.close();
 
+    // A pre-existing (non-empty) vault is migrated but never seeded with the kit.
     const populatedHome = await mkdtemp(join(tmpdir(), 'kb2-populated-startup-'));
     process.env = {
       ...originalEnv,
@@ -100,7 +105,7 @@ describe('daemon startup', () => {
     await writeFile(join(populatedVault, 'notes', 'preexisting.md'), 'already here\n', 'utf8');
 
     const populatedBoot = await startDaemon();
-    await expect(access(join(populatedBoot.config.vaultRoot, 'hello-world.md'))).rejects.toBeTruthy();
+    await expect(access(join(populatedBoot.config.vaultRoot, 'README.md'))).rejects.toBeTruthy();
     await expect(readFile(join(populatedBoot.config.vaultRoot, 'notes', 'preexisting.md'), 'utf8')).resolves.toBe('already here\n');
     await populatedBoot.close();
     await rm(populatedHome, { force: true, recursive: true });
@@ -126,7 +131,7 @@ describe('daemon startup', () => {
       reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
     });
     await expect(access(join(started.config.vaultRoot, 'typo'))).rejects.toBeTruthy();
-    await expect(readFile(join(started.config.vaultRoot, 'hello-world.md'), 'utf8')).resolves.toContain('Hello KB-2');
+    await expect(readFile(join(started.config.vaultRoot, 'README.md'), 'utf8')).resolves.toContain('Welcome to your vault');
 
     await started.close();
   });

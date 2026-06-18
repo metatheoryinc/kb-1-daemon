@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager } from '@kb-2/doc-session';
+import { bindYjsWebSocket, type DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
-import { mkdir, readdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readVaultFile, validateVaultPath, writeVaultFile } from '@kb-2/vault-core';
+import { readVaultFile, validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -23,14 +23,11 @@ import {
   VaultRegistry
 } from './vault-registry.js';
 
-const DEMO_DOCUMENT_PATH = 'hello-world.md';
+// The legacy single-vault demo surface (`/api/demo-document` + its Yjs socket)
+// is backed by the starter kit's top-level README, which a first-boot vault is
+// always seeded with. The session is bound only when that file is present.
+const DEMO_DOCUMENT_PATH = 'README.md';
 const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
-const DEFAULT_DEMO_DOCUMENT_CONTENT = [
-  '# Hello KB-2',
-  '',
-  'This Markdown file is served by the local KB-2 daemon.',
-  ''
-].join('\n');
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -48,28 +45,32 @@ export async function startDaemon(): Promise<StartedDaemon> {
     targetSlug: DEFAULT_VAULT_SLUG
   });
 
-  // Fresh install: ensure the vaults directory and a default vault exist, then
-  // seed the demo document into the default vault.
-  await mkdir(config.vaultsHome, { recursive: true });
-  await mkdir(config.vaultRoot, { recursive: true });
-  const hasDemoDocument = await seedDemoDocument(config.vaultRoot);
-
   // Discover every vault into a live registry: listable, addressable by slug,
   // and mutable at runtime (create/rename/soft-delete) with no restart.
+  await mkdir(config.vaultsHome, { recursive: true });
   const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
   const registry = await VaultRegistry.load(config.vaultsHome, trashHome);
 
+  // First boot: with no legacy vault to migrate and nothing discovered, stand up
+  // a single starter vault seeded from the bundled kit. `create` performs the
+  // seeding, so there is no separate seed path.
+  if (registry.list().length === 0) {
+    const created = await registry.create({ displayName: DEFAULT_VAULT_SLUG });
+    if (!created.ok) {
+      throw new Error(`Failed to create the starter vault: ${created.message}`);
+    }
+  }
+
+  // Backward compat: the existing single-vault HTTP/WS/MCP surface operates on
+  // the default vault's instance. First boot guarantees it exists; discovery
+  // finds it on every subsequent boot.
   const defaultInstance = registry.get(DEFAULT_VAULT_SLUG);
   if (!defaultInstance) {
     throw new Error(`Default vault "${DEFAULT_VAULT_SLUG}" was not discovered after boot.`);
   }
-
-  // Backward compat: the existing single-vault HTTP/WS/MCP surface operates on
-  // the default vault's instance.
   const documentSessions = defaultInstance.manager;
   const vaultService = defaultInstance.service;
-  const demoDocumentSession = hasDemoDocument ? documentSessions.getSession(DEMO_DOCUMENT_PATH) : undefined;
-  await demoDocumentSession?.open();
+  const demoDocumentSession = await openDemoDocumentSession(documentSessions, config.vaultRoot);
 
   // One MCP endpoint, every vault: vaultId resolution and vault enumeration both
   // go through the SAME live registry the HTTP layer uses — no second vault map.
@@ -209,67 +210,26 @@ const daemonRelayLogger: TunnelClientLogger = {
   },
 };
 
-async function seedDemoDocument(vaultRoot: string): Promise<boolean> {
+/**
+ * Open the legacy demo-document session when the default vault has the backing
+ * file. The demo surface is served only while that file exists, so a vault that
+ * lacks it simply has no demo session.
+ */
+async function openDemoDocumentSession(
+  manager: DocumentSessionManager,
+  vaultRoot: string
+): Promise<OneFileDocumentSession | undefined> {
   const existing = await readVaultFile({ root: vaultRoot }, DEMO_DOCUMENT_PATH);
-  if (existing.ok) return true;
-  if (existing.error !== 'not_found') {
-    throw new Error(existing.message);
-  }
-
-  if (await hasMarkdownFiles(vaultRoot) || await hasKb2State(vaultRoot)) {
-    return false;
-  }
-
-  const seeded = await writeVaultFile(
-    { root: vaultRoot, actor: { kind: 'system' } },
-    { path: DEMO_DOCUMENT_PATH, content: DEFAULT_DEMO_DOCUMENT_CONTENT }
-  );
-  if (!seeded.ok) {
-    throw new Error(seeded.message);
-  }
-  return true;
-}
-
-async function hasKb2State(vaultRoot: string): Promise<boolean> {
-  try {
-    await readdir(join(vaultRoot, '.kb2'), { withFileTypes: true });
-    return true;
-  } catch (error) {
-    if (isNodeErrorCode(error, 'ENOENT')) {
-      return false;
+  if (!existing.ok) {
+    if (existing.error !== 'not_found') {
+      throw new Error(existing.message);
     }
-    throw error;
-  }
-}
-
-async function hasMarkdownFiles(directory: string): Promise<boolean> {
-  let entries;
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if (isNodeErrorCode(error, 'ENOENT')) {
-      return false;
-    }
-    throw error;
+    return undefined;
   }
 
-  for (const entry of entries) {
-    if (entry.name === '.kb2') {
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith('.md')) {
-      return true;
-    }
-    if (entry.isDirectory() && await hasMarkdownFiles(join(directory, entry.name))) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isNodeErrorCode(error: unknown, code: string): boolean {
-  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
+  const session = manager.getSession(DEMO_DOCUMENT_PATH);
+  await session.open();
+  return session;
 }
 
 interface WebSocketTarget {

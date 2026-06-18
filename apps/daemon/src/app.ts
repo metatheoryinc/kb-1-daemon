@@ -32,7 +32,7 @@ import type {
   VaultRegistryErrorCode
 } from './vault-registry.js';
 
-const DEMO_DOCUMENT_PATH = 'demo-vault/hello-world.md';
+const DEMO_DOCUMENT_PATH = 'demo-vault/README.md';
 const ACTOR_HEADER = 'x-kb2-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 

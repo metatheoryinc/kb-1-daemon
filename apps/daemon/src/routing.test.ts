@@ -131,7 +131,7 @@ describe('daemon routing', () => {
         KB2_HOME: kb2Home
       }
     });
-    const demoDocumentFile = join(config.vaultRoot, 'hello-world.md');
+    const demoDocumentFile = join(config.vaultRoot, 'README.md');
     const documentSession = new OneFileDocumentSession(demoDocumentFile, { defaultContent: 'route seed\n' });
     await documentSession.open();
 
@@ -146,7 +146,7 @@ describe('daemon routing', () => {
     expect(readResponse.status).toBe(200);
     expect(readBody).toEqual({
       ok: true,
-      document: 'demo-vault/hello-world.md',
+      document: 'demo-vault/README.md',
       content: 'route seed\n'
     });
 
@@ -162,7 +162,7 @@ describe('daemon routing', () => {
     expect(resetResponse.status).toBe(200);
     expect(resetBody).toEqual({
       ok: true,
-      document: 'demo-vault/hello-world.md',
+      document: 'demo-vault/README.md',
       content: 'route reset\n'
     });
     await expect(readFile(demoDocumentFile, 'utf8')).resolves.toBe('route reset\n');
