@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-2/doc-session';
@@ -6,6 +6,9 @@ import { createVaultService, type VaultService } from '@kb-2/vault-service';
 
 const VAULT_IDENTITY_DIR = '.kb2';
 const VAULT_IDENTITY_FILE = 'vault.json';
+
+/** Home-level directory that holds soft-deleted vault folders (reversible). */
+export const VAULT_TRASH_DIRNAME = '.trash';
 
 /** Durable identity for a single vault, stored at `<vault>/.kb2/vault.json`. */
 export interface VaultIdentity {
@@ -77,9 +80,14 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
     id: slugFromFolderName(folderName),
     displayName: folderName
   };
-  await mkdir(join(vaultRoot, VAULT_IDENTITY_DIR), { recursive: true });
-  await writeFile(file, `${JSON.stringify(identity, null, 2)}\n`, 'utf8');
+  await writeVaultIdentity(vaultRoot, identity);
   return identity;
+}
+
+/** Persist a vault's identity to `<vault>/.kb2/vault.json`, creating `.kb2` if needed. */
+export async function writeVaultIdentity(vaultRoot: string, identity: VaultIdentity): Promise<void> {
+  await mkdir(join(vaultRoot, VAULT_IDENTITY_DIR), { recursive: true });
+  await writeFile(identityPath(vaultRoot), `${JSON.stringify(identity, null, 2)}\n`, 'utf8');
 }
 
 function parseVaultIdentity(raw: string, file: string): VaultIdentity {
@@ -218,11 +226,171 @@ export async function discoverVaults(vaultsHome: string): Promise<VaultRegistryE
 export function buildVaultInstances(entries: VaultRegistryEntry[]): Map<string, VaultInstance> {
   const instances = new Map<string, VaultInstance>();
   for (const entry of entries) {
-    const manager = new DocumentSessionManager({ root: entry.root });
-    const service = createVaultService({ vaultRoot: entry.root, documentSessions: manager });
-    instances.set(entry.slug, { entry, service, manager });
+    instances.set(entry.slug, buildVaultInstance(entry));
   }
   return instances;
+}
+
+/** A summary of a vault for listing: stable slug as `id` plus its display name. */
+export interface VaultSummary {
+  id: string;
+  displayName: string;
+}
+
+/** Error codes the registry can return for vault-management operations. */
+export type VaultRegistryErrorCode = 'invalid_request' | 'already_exists' | 'not_found';
+
+export type VaultRegistryResult<T extends object = object> =
+  | ({ ok: true } & T)
+  | { ok: false; error: VaultRegistryErrorCode; message: string };
+
+/**
+ * Live, mutable registry of the vaults a daemon serves. Built from a disk scan
+ * at boot and kept in sync as vaults are created, renamed, and soft-deleted at
+ * runtime — no restart required. The filesystem stays the source of truth; the
+ * registry mirrors it (identity always lands in `.kb2/vault.json` first).
+ */
+export class VaultRegistry {
+  private readonly instances: Map<string, VaultInstance>;
+
+  private constructor(
+    private readonly vaultsHome: string,
+    private readonly trashHome: string,
+    instances: Map<string, VaultInstance>
+  ) {
+    this.instances = instances;
+  }
+
+  /** Scan `vaultsHome`, mint identities as needed, and build one instance per vault. */
+  static async load(vaultsHome: string, trashHome: string): Promise<VaultRegistry> {
+    const entries = await discoverVaults(vaultsHome);
+    const instances = buildVaultInstances(entries);
+    return new VaultRegistry(vaultsHome, trashHome, instances);
+  }
+
+  /** Every registered vault as `{ id, displayName }`, ordered by slug. */
+  list(): VaultSummary[] {
+    return [...this.instances.values()]
+      .map((instance) => ({ id: instance.entry.slug, displayName: instance.entry.displayName }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Resolve a vault's live instance by slug, or `undefined` when unknown. */
+  get(id: string): VaultInstance | undefined {
+    return this.instances.get(id);
+  }
+
+  /**
+   * Create a fresh, essentially-empty vault in the primary `vaultsHome`. The
+   * daemon owns the slug and the folder: the caller supplies only a display
+   * name, never a path. Slug uniqueness is enforced (collision is a clean
+   * client error, not a crash). The vault registers live and is immediately
+   * servable.
+   */
+  async create(input: { displayName: string }): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {
+    const displayName = input.displayName.trim();
+    if (displayName.length === 0) {
+      return { ok: false, error: 'invalid_request', message: 'displayName must be a non-empty string' };
+    }
+
+    const slug = slugFromFolderName(displayName);
+    if (this.instances.has(slug)) {
+      return { ok: false, error: 'already_exists', message: `A vault with id "${slug}" already exists.` };
+    }
+
+    const root = join(this.vaultsHome, slug);
+    // Disk first: a directory already sitting here means another vault owns the
+    // slot even if it is not loaded; refuse rather than clobber user data.
+    if (await pathExists(root)) {
+      return { ok: false, error: 'already_exists', message: `A vault folder already exists at id "${slug}".` };
+    }
+
+    await mkdir(root, { recursive: true });
+    const identity: VaultIdentity = { id: slug, displayName };
+    await writeVaultIdentity(root, identity);
+
+    const entry: VaultRegistryEntry = { slug, displayName, root };
+    this.instances.set(slug, buildVaultInstance(entry));
+
+    return { ok: true, vault: { id: slug, displayName } };
+  }
+
+  /**
+   * Rename a vault: change its display name only. The slug/id and on-disk
+   * folder are immutable, so identity in `.kb2/vault.json` is rewritten but the
+   * folder never moves.
+   */
+  async rename(id: string, input: { displayName: string }): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {
+    const displayName = input.displayName.trim();
+    if (displayName.length === 0) {
+      return { ok: false, error: 'invalid_request', message: 'displayName must be a non-empty string' };
+    }
+
+    const instance = this.instances.get(id);
+    if (!instance) {
+      return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
+    }
+
+    const identity: VaultIdentity = { id: instance.entry.slug, displayName };
+    await writeVaultIdentity(instance.entry.root, identity);
+    instance.entry.displayName = displayName;
+
+    return { ok: true, vault: { id: instance.entry.slug, displayName } };
+  }
+
+  /**
+   * Soft-delete a vault: move its folder to the home-level trash (reversible,
+   * never a hard delete of user data) and drop it from the live registry. The
+   * vault's document sessions are closed first so nothing keeps writing into a
+   * folder that is being moved out from under it.
+   */
+  async softDelete(id: string): Promise<VaultRegistryResult<{ trashedTo: string }>> {
+    const instance = this.instances.get(id);
+    if (!instance) {
+      return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
+    }
+
+    await instance.manager.close();
+
+    await mkdir(this.trashHome, { recursive: true });
+    const destination = await uniqueTrashDestination(this.trashHome, id);
+    await rename(instance.entry.root, destination);
+
+    this.instances.delete(id);
+
+    return { ok: true, trashedTo: destination };
+  }
+
+  /** Close every vault's document session manager (used on daemon shutdown). */
+  async close(): Promise<void> {
+    await Promise.all([...this.instances.values()].map((instance) => instance.manager.close()));
+  }
+}
+
+/** Build a single root-scoped service + document manager for one vault entry. */
+function buildVaultInstance(entry: VaultRegistryEntry): VaultInstance {
+  const manager = new DocumentSessionManager({ root: entry.root });
+  const service = createVaultService({ vaultRoot: entry.root, documentSessions: manager });
+  return { entry, service, manager };
+}
+
+/**
+ * Pick a collision-free path under the trash home for a soft-deleted vault.
+ * Re-deleting a slug that was already trashed (and never restored) appends a
+ * numeric suffix so an earlier trashed copy is never overwritten.
+ */
+async function uniqueTrashDestination(trashHome: string, id: string): Promise<string> {
+  const base = join(trashHome, id);
+  if (!(await pathExists(base))) {
+    return base;
+  }
+
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
 }
 
 async function pathExists(target: string): Promise<boolean> {

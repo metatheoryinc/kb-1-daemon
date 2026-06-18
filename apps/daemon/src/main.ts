@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket } from '@kb-2/doc-session';
+import { bindYjsWebSocket, type DocumentSessionManager } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
 import { mkdir, readdir } from 'node:fs/promises';
@@ -18,10 +18,9 @@ import {
 } from './config.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
 import {
-  buildVaultInstances,
-  discoverVaults,
   migrateLegacyVaultLayout,
-  type VaultInstance
+  VAULT_TRASH_DIRNAME,
+  VaultRegistry
 } from './vault-registry.js';
 
 const DEMO_DOCUMENT_PATH = 'hello-world.md';
@@ -55,11 +54,12 @@ export async function startDaemon(): Promise<StartedDaemon> {
   await mkdir(config.vaultRoot, { recursive: true });
   const hasDemoDocument = await seedDemoDocument(config.vaultRoot);
 
-  // Discover every vault and build one root-scoped instance per vault.
-  const entries = await discoverVaults(config.vaultsHome);
-  const vaultInstances = buildVaultInstances(entries);
+  // Discover every vault into a live registry: listable, addressable by slug,
+  // and mutable at runtime (create/rename/soft-delete) with no restart.
+  const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
+  const registry = await VaultRegistry.load(config.vaultsHome, trashHome);
 
-  const defaultInstance = vaultInstances.get(DEFAULT_VAULT_SLUG);
+  const defaultInstance = registry.get(DEFAULT_VAULT_SLUG);
   if (!defaultInstance) {
     throw new Error(`Default vault "${DEFAULT_VAULT_SLUG}" was not discovered after boot.`);
   }
@@ -77,6 +77,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
     vaultRoot: config.vaultRoot,
     vaultService,
     documentSessions,
+    registry,
     demoDocumentSession,
     mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
@@ -123,7 +124,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
               await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
-              await closeVaultInstances(vaultInstances);
+              await registry.close();
             }
           });
         } catch (error) {
@@ -135,15 +136,17 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.on('upgrade', (request, socket, head) => {
       const pathname = request.url ? new URL(request.url, `http://${request.headers.host ?? 'localhost'}`).pathname : '';
-      const documentPath = documentPathFromWebSocketPath(pathname);
-      if (!documentPath) {
+      // Resolve the addressed vault's document manager: the flat WS path uses
+      // the default vault, the `/api/vaults/:id/...` path uses that vault.
+      const target = resolveWebSocketTarget(pathname, documentSessions, registry);
+      if (!target) {
         socket.destroy();
         return;
       }
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
         void (async () => {
-          const bindingLease = documentSessions.attachClientSession(documentPath);
+          const bindingLease = target.manager.attachClientSession(target.documentPath);
           try {
             const binding = await bindYjsWebSocket(bindingLease.session, webSocket);
             activeDocumentConnections.add(binding.closed);
@@ -162,10 +165,6 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
-}
-
-async function closeVaultInstances(instances: Map<string, VaultInstance>): Promise<void> {
-  await Promise.all([...instances.values()].map((instance) => instance.manager.close()));
 }
 
 function createRelayTunnelClient(config: DaemonConfig): TunnelClient | undefined {
@@ -260,20 +259,75 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
 }
 
-function documentPathFromWebSocketPath(pathname: string): string | undefined {
+interface WebSocketTarget {
+  manager: DocumentSessionManager;
+  documentPath: string;
+}
+
+/**
+ * Resolve a Yjs WebSocket path to the document manager and vault-relative path
+ * it addresses. Recognizes the demo-document alias, the flat `/api/files/.../yjs`
+ * path (default vault), and the scoped `/api/vaults/:id/files/.../yjs` path
+ * (the addressed vault). Returns `undefined` for an unknown id or invalid path.
+ */
+function resolveWebSocketTarget(
+  pathname: string,
+  defaultManager: DocumentSessionManager,
+  registry: VaultRegistry
+): WebSocketTarget | undefined {
   if (pathname === DEMO_DOCUMENT_YJS_PATH) {
-    return DEMO_DOCUMENT_PATH;
+    return { manager: defaultManager, documentPath: DEMO_DOCUMENT_PATH };
   }
 
-  const prefix = '/api/files/';
   const suffix = '/yjs';
-  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+  if (!pathname.endsWith(suffix)) {
     return undefined;
   }
 
+  const scoped = parseScopedFilesPath(pathname.slice(0, -suffix.length));
+  if (scoped) {
+    const instance = registry.get(scoped.id);
+    if (!instance) {
+      return undefined;
+    }
+    const documentPath = safeValidateFilePath(scoped.rawPath);
+    return documentPath ? { manager: instance.manager, documentPath } : undefined;
+  }
+
+  const flatPrefix = '/api/files/';
+  if (!pathname.startsWith(flatPrefix)) {
+    return undefined;
+  }
+  const documentPath = safeValidateFilePath(pathname.slice(flatPrefix.length, -suffix.length));
+  return documentPath ? { manager: defaultManager, documentPath } : undefined;
+}
+
+/** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */
+function parseScopedFilesPath(pathWithoutYjs: string): { id: string; rawPath: string } | undefined {
+  const prefix = '/api/vaults/';
+  if (!pathWithoutYjs.startsWith(prefix)) {
+    return undefined;
+  }
+
+  const rest = pathWithoutYjs.slice(prefix.length);
+  const filesMarker = '/files/';
+  const markerIndex = rest.indexOf(filesMarker);
+  if (markerIndex <= 0) {
+    return undefined;
+  }
+
+  const id = rest.slice(0, markerIndex);
+  const rawPath = rest.slice(markerIndex + filesMarker.length);
+  if (id.length === 0 || rawPath.length === 0) {
+    return undefined;
+  }
+
+  return { id, rawPath };
+}
+
+function safeValidateFilePath(rawPath: string): string | undefined {
   try {
-    const candidate = decodeURIComponent(pathname.slice(prefix.length, -suffix.length));
-    return validateVaultPath(candidate, 'file');
+    return validateVaultPath(decodeURIComponent(rawPath), 'file');
   } catch {
     return undefined;
   }

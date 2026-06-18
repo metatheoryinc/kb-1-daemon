@@ -6,7 +6,9 @@ import {
   discoverVaults,
   migrateLegacyVaultLayout,
   readOrMintVaultIdentity,
-  slugFromFolderName
+  slugFromFolderName,
+  VAULT_TRASH_DIRNAME,
+  VaultRegistry
 } from './vault-registry.js';
 
 describe('vault registry', () => {
@@ -154,6 +156,164 @@ describe('vault registry', () => {
       // The legacy original must still be fully intact (copy-not-move).
       await expect(readFile(join(legacy, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
       await expect(readFile(join(legacy, 'notes', 'deep.md'), 'utf8')).resolves.toBe('deep content\n');
+    });
+  });
+
+  describe('VaultRegistry runtime CRUD', () => {
+    let vaultsHome: string;
+    let trashHome: string;
+
+    beforeEach(() => {
+      vaultsHome = join(home, 'vaults');
+      trashHome = join(home, VAULT_TRASH_DIRNAME);
+    });
+
+    async function loadRegistry(): Promise<VaultRegistry> {
+      return VaultRegistry.load(vaultsHome, trashHome);
+    }
+
+    it('creates a valid empty vault, minting identity, and registers it live', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      const created = await registry.create({ displayName: 'My Notes' });
+      expect(created).toEqual({ ok: true, vault: { id: 'my-notes', displayName: 'My Notes' } });
+
+      // Filesystem is the source of truth: the folder and minted identity exist.
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'my-notes', '.kb2', 'vault.json'), 'utf8'));
+      expect(identity).toEqual({ id: 'my-notes', displayName: 'My Notes' });
+
+      // It is immediately listable and servable from the in-memory registry.
+      expect(registry.list()).toContainEqual({ id: 'my-notes', displayName: 'My Notes' });
+      expect(registry.get('my-notes')).toBeDefined();
+
+      // A second, independent load sees the same vault on disk (no restart needed
+      // to persist, but it survives one too).
+      const reloaded = await loadRegistry();
+      expect(reloaded.get('my-notes')).toBeDefined();
+
+      await registry.close();
+      await reloaded.close();
+    });
+
+    it('rejects creating a vault whose slug collides with an existing one', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      const first = await registry.create({ displayName: 'Project X' });
+      expect(first.ok).toBe(true);
+
+      // A different display name that normalizes to the same slug is a clean
+      // collision, not a crash, and does not disturb the first vault.
+      const collision = await registry.create({ displayName: 'project x' });
+      expect(collision).toEqual({
+        ok: false,
+        error: 'already_exists',
+        message: expect.stringContaining('project-x')
+      });
+      expect(registry.list().filter((v) => v.id === 'project-x')).toHaveLength(1);
+
+      await registry.close();
+    });
+
+    it('rejects an empty display name on create', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      const created = await registry.create({ displayName: '   ' });
+      expect(created).toEqual({
+        ok: false,
+        error: 'invalid_request',
+        message: expect.any(String)
+      });
+
+      await registry.close();
+    });
+
+    it('renames a vault by display name only, leaving slug and folder unchanged', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+      await registry.create({ displayName: 'Original' });
+
+      const renamed = await registry.rename('original', { displayName: 'Renamed' });
+      expect(renamed).toEqual({ ok: true, vault: { id: 'original', displayName: 'Renamed' } });
+
+      // The slug is stable, the folder did not move, and identity on disk reflects
+      // the new display name.
+      expect(registry.get('original')).toBeDefined();
+      expect(registry.list()).toContainEqual({ id: 'original', displayName: 'Renamed' });
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb2', 'vault.json'), 'utf8'));
+      expect(identity).toEqual({ id: 'original', displayName: 'Renamed' });
+
+      await registry.close();
+    });
+
+    it('returns a clean not_found when renaming an unknown vault', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      const renamed = await registry.rename('ghost', { displayName: 'Nope' });
+      expect(renamed).toEqual({ ok: false, error: 'not_found', message: expect.stringContaining('ghost') });
+
+      await registry.close();
+    });
+
+    it('soft-deletes a vault: folder moves to trash with data intact, gone from the registry', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+      await registry.create({ displayName: 'Disposable' });
+
+      // Drop a note in so we can prove the data survives the soft delete.
+      await writeFile(join(vaultsHome, 'disposable', 'kept.md'), 'precious\n', 'utf8');
+
+      const deleted = await registry.softDelete('disposable');
+      expect(deleted.ok).toBe(true);
+      if (!deleted.ok) throw new Error('expected soft delete to succeed');
+
+      // Removed from the live registry...
+      expect(registry.get('disposable')).toBeUndefined();
+      expect(registry.list().some((v) => v.id === 'disposable')).toBe(false);
+
+      // ...and gone from the active vaults directory...
+      await expect(access(join(vaultsHome, 'disposable'))).rejects.toBeTruthy();
+
+      // ...but reversibly preserved under trash, byte-for-byte.
+      expect(deleted.trashedTo.startsWith(trashHome)).toBe(true);
+      await expect(readFile(join(deleted.trashedTo, 'kept.md'), 'utf8')).resolves.toBe('precious\n');
+
+      await registry.close();
+    });
+
+    it('returns a clean not_found when soft-deleting an unknown vault', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      const deleted = await registry.softDelete('ghost');
+      expect(deleted).toEqual({ ok: false, error: 'not_found', message: expect.stringContaining('ghost') });
+
+      await registry.close();
+    });
+
+    it('does not overwrite an earlier trashed copy when a recreated slug is deleted again', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      await registry.create({ displayName: 'Recycle' });
+      await writeFile(join(vaultsHome, 'recycle', 'v1.md'), 'first\n', 'utf8');
+      const firstDelete = await registry.softDelete('recycle');
+      if (!firstDelete.ok) throw new Error('expected first soft delete to succeed');
+
+      await registry.create({ displayName: 'Recycle' });
+      await writeFile(join(vaultsHome, 'recycle', 'v2.md'), 'second\n', 'utf8');
+      const secondDelete = await registry.softDelete('recycle');
+      if (!secondDelete.ok) throw new Error('expected second soft delete to succeed');
+
+      // Two distinct trash destinations: neither copy clobbers the other.
+      expect(secondDelete.trashedTo).not.toBe(firstDelete.trashedTo);
+      await expect(readFile(join(firstDelete.trashedTo, 'v1.md'), 'utf8')).resolves.toBe('first\n');
+      await expect(readFile(join(secondDelete.trashedTo, 'v2.md'), 'utf8')).resolves.toBe('second\n');
+
+      await registry.close();
     });
   });
 });

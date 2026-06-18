@@ -26,6 +26,10 @@ import {
 } from './request-helpers.js';
 import { readDaemonStatus } from './status.js';
 import { missingUiBuildResponse, proxyUi, serveUi } from './ui-static.js';
+import type {
+  VaultRegistry,
+  VaultRegistryErrorCode
+} from './vault-registry.js';
 
 const DEMO_DOCUMENT_PATH = 'demo-vault/hello-world.md';
 const ACTOR_HEADER = 'x-kb2-actor';
@@ -36,11 +40,28 @@ export interface CreateAppOptions {
   vaultRoot?: string;
   documentSessions?: DocumentSessionManager;
   vaultService?: VaultService;
+  /** Live multi-vault registry powering vault CRUD and the `:id`-scoped data routes. */
+  registry?: VaultRegistry;
   demoDocumentSession?: OneFileDocumentSession;
   mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
   webProxyTarget?: string;
   actorDefault?: ActorDefault;
+}
+
+/**
+ * How a data route resolves the vault it operates on and the path prefixes used
+ * to slice the vault-relative file/folder path out of the request URL. The flat
+ * routes and the `:id`-scoped routes share the exact same handlers; only this
+ * resolver differs.
+ */
+interface VaultRouteScope {
+  /** Resolve the addressed vault service, or a clean failure for an unknown id. */
+  resolve(context: Context): ServiceResult<{ service: VaultService }>;
+  /** Prefix to strip when extracting a `/files/...` path from this scope. */
+  filesPrefix(context: Context): string;
+  /** Prefix to strip when extracting a `/folders/...` path from this scope. */
+  foldersPrefix(context: Context): string;
 }
 
 export function createApp(options: CreateAppOptions): Hono {
@@ -88,6 +109,7 @@ export function createApp(options: CreateAppOptions): Hono {
     const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(vaultService);
     const actorDefault = options.actorDefault ?? 'user';
 
+    // Default-vault-only surface: flush, the SSE event stream, and local MCP.
     api.post('/ops/flush', async (context) => {
       return mapServiceResult(context, await vaultService.flushDirtySessions());
     });
@@ -96,208 +118,70 @@ export function createApp(options: CreateAppOptions): Hono {
       return eventStreamResponse(vaultService);
     });
 
-    api.get('/vault', async (context) => {
-      return mapServiceResult(context, await vaultService.vaultInfo());
-    });
-
-    api.get('/tree', async (context) => {
-      const depthRaw = context.req.query('depth');
-      const depth = depthRaw === undefined ? undefined : Number(depthRaw);
-      return mapServiceResult(context, await vaultService.listFiles({
-        under: context.req.query('under'),
-        ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
-      }));
-    });
-
-    api.get('/search', async (context) => {
-      return mapServiceResult(context, await vaultService.search({
-        query: context.req.query('q') ?? '',
-        under: context.req.query('under'),
-        context: queryNumber(context, 'context'),
-        limit: queryNumber(context, 'limit'),
-        offset: queryNumber(context, 'offset')
-      }));
-    });
-
-    api.get('/files/*', async (context) => {
-      const filePath = filePathParam(context.req.path, '/api/files/');
-      return mapServiceResult(context, await vaultService.readNote({ path: filePath }));
-    });
-
-    api.put('/files/*', async (context) => {
-      const filePath = filePathParam(context.req.path, '/api/files/');
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const content = await requestTextContent(context.req.raw);
-      if (!content.ok) return mapServiceResult(context, content);
-      const overwrite = context.req.query('overwrite') === 'true';
-      return mapServiceResult(context, await vaultService.createNote({
-        path: filePath,
-        content: content.content,
-        overwrite,
-        actor: actor.actor
-      }), overwrite ? 200 : 201);
-    });
-
-    api.delete('/files/*', async (context) => {
-      const filePath = filePathParam(context.req.path, '/api/files/');
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const permanent = context.req.query('permanent') === 'true';
-      return mapServiceResult(context, await vaultService.deleteNote({
-        path: filePath,
-        permanent,
-        actor: actor.actor
-      }));
-    });
-
-    api.post('/files/*', async (context) => {
-      if (context.req.path.endsWith('/splice')) {
-        const actor = actorFromRequest(context, actorDefault);
-        if (!actor.ok) return mapServiceResult(context, actor);
-        const filePath = filePathParam(context.req.path, '/api/files/', '/splice');
-        const body = await readJsonObject(context.req.raw);
-        if (!body.ok) return mapServiceResult(context, body);
-        const splice = readSpliceRequest(body);
-        if (!splice.ok) return mapServiceResult(context, splice);
-        return mapServiceResult(context, await vaultService.editNote({
-          path: filePath,
-          baseline: splice.baseline,
-          oldText: splice.request.oldText,
-          newText: splice.request.newText,
-          before: splice.request.before,
-          after: splice.request.after,
-          occurrence: splice.request.occurrence,
-          actor: actor.actor
-        }));
-      }
-
-      if (context.req.path.endsWith('/append')) {
-        const actor = actorFromRequest(context, actorDefault);
-        if (!actor.ok) return mapServiceResult(context, actor);
-        const filePath = filePathParam(context.req.path, '/api/files/', '/append');
-        const body = await readJsonObject(context.req.raw);
-        if (!body.ok) return mapServiceResult(context, body);
-        const content = readRequiredString(body.body, 'content');
-        if (!content.ok) return mapServiceResult(context, content);
-        return mapServiceResult(context, await vaultService.appendNote({
-          path: filePath,
-          content: content.value,
-          actor: actor.actor
-        }));
-      }
-
-      if (context.req.path.endsWith('/prepend')) {
-        const actor = actorFromRequest(context, actorDefault);
-        if (!actor.ok) return mapServiceResult(context, actor);
-        const filePath = filePathParam(context.req.path, '/api/files/', '/prepend');
-        const body = await readJsonObject(context.req.raw);
-        if (!body.ok) return mapServiceResult(context, body);
-        const content = readRequiredString(body.body, 'content');
-        if (!content.ok) return mapServiceResult(context, content);
-        return mapServiceResult(context, await vaultService.prependNote({
-          path: filePath,
-          content: content.value,
-          actor: actor.actor
-        }));
-      }
-
-      if (!context.req.path.endsWith('/move')) {
-        return context.json({ ok: false, error: 'Not found' }, 404);
-      }
-
-      const fromPath = filePathParam(context.req.path, '/api/files/', '/move');
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const to = readRequiredString(body.body, 'to');
-      if (!to.ok) return mapServiceResult(context, to);
-      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
-      return mapServiceResult(context, await vaultService.moveNote({
-        fromPath,
-        toPath: to.value,
-        actor: actor.actor
-      }));
-    });
-
-    api.post('/folders', async (context) => {
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const folderPath = typeof body.body.path === 'string' ? body.body.path : '';
-      return mapServiceResult(context, await vaultService.createFolder({
-        path: folderPath,
-        actor: actor.actor
-      }), 201);
-    });
-
-    api.get('/folders/*', async (context) => {
-      if (!context.req.path.endsWith('/metadata')) {
-        return context.json({ ok: false, error: 'Not found' }, 404);
-      }
-
-      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
-      return mapServiceResult(context, await vaultService.getFolderMetadata({ path: folderPath }));
-    });
-
-    api.put('/folders/*', async (context) => {
-      if (!context.req.path.endsWith('/metadata')) {
-        return context.json({ ok: false, error: 'Not found' }, 404);
-      }
-
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const folderPath = filePathParam(context.req.path, '/api/folders/', '/metadata');
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const metadata = readFolderMetadataBody(body.body);
-      if (!metadata.ok) return mapServiceResult(context, metadata);
-      return mapServiceResult(context, await vaultService.setFolderMetadata({
-        path: folderPath,
-        metadata: metadata.metadata,
-        actor: actor.actor
-      }));
-    });
-
-    api.delete('/folders/*', async (context) => {
-      const folderPath = filePathParam(context.req.path, '/api/folders/');
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const recursive = context.req.query('recursive') === 'true';
-      const permanent = context.req.query('permanent') === 'true';
-      return mapServiceResult(context, await vaultService.deleteFolder({
-        path: folderPath,
-        recursive,
-        permanent,
-        actor: actor.actor
-      }));
-    });
-
-    api.post('/folders/*', async (context) => {
-      if (!context.req.path.endsWith('/move')) {
-        return context.json({ ok: false, error: 'Not found' }, 404);
-      }
-
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const fromPath = filePathParam(context.req.path, '/api/folders/', '/move');
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const to = readRequiredString(body.body, 'to');
-      if (!to.ok) return mapServiceResult(context, to);
-      // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
-      return mapServiceResult(context, await vaultService.moveFolder({
-        fromPath,
-        toPath: to.value,
-        actor: actor.actor
-      }));
-    });
-
     app.all('/mcp', async (context) => {
       return mcpEndpoint.handleRequest(context.req.raw);
     });
+
+    // Backward-compat flat data routes, mapped to the default vault. They are
+    // retired in a later slice; until then they share the exact handlers used by
+    // the `:id`-scoped routes below — no parallel implementation.
+    const flatScope: VaultRouteScope = {
+      resolve: () => ({ ok: true, service: vaultService }),
+      filesPrefix: () => '/api/files/',
+      foldersPrefix: () => '/api/folders/'
+    };
+    registerVaultDataRoutes(api, flatScope, actorDefault);
+  }
+
+  if (options.registry) {
+    const registry = options.registry;
+    const actorDefault = options.actorDefault ?? 'user';
+
+    // Vault management: list, create (live, no restart), rename (displayName
+    // only), and soft-delete (folder to trash, removed from the live registry).
+    api.get('/vaults', (context) => {
+      return context.json({ ok: true, vaults: registry.list() });
+    });
+
+    api.post('/vaults', async (context) => {
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const displayName = readRequiredString(body.body, 'displayName');
+      if (!displayName.ok) return mapServiceResult(context, displayName);
+      const created = await registry.create({ displayName: displayName.value });
+      return mapRegistryResult(context, created, created.ok ? { vault: created.vault } : undefined, 201);
+    });
+
+    api.put('/vaults/:id', async (context) => {
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const displayName = readRequiredString(body.body, 'displayName');
+      if (!displayName.ok) return mapServiceResult(context, displayName);
+      const renamed = await registry.rename(vaultIdParam(context), { displayName: displayName.value });
+      return mapRegistryResult(context, renamed, renamed.ok ? { vault: renamed.vault } : undefined);
+    });
+
+    api.delete('/vaults/:id', async (context) => {
+      const deleted = await registry.softDelete(vaultIdParam(context));
+      return mapRegistryResult(context, deleted, deleted.ok ? {} : undefined);
+    });
+
+    // `:id`-scoped data routes. `:id` resolves to that vault's instance from the
+    // registry; an unknown id is a clean 404. Otherwise these are the identical
+    // handlers used by the flat routes, just against the addressed vault.
+    const scopedScope: VaultRouteScope = {
+      resolve: (context) => {
+        const id = vaultIdParam(context);
+        const instance = registry.get(id);
+        if (!instance) {
+          return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
+        }
+        return { ok: true, service: instance.service };
+      },
+      filesPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/files/`,
+      foldersPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/folders/`
+    };
+    registerVaultDataRoutes(api, scopedScope, actorDefault, '/vaults/:id');
   }
 
   app.route('/api', api);
@@ -326,6 +210,243 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   return app;
+}
+
+/**
+ * Register the per-vault data routes (vault info, tree, search, files, folders)
+ * on `router` under `basePath`. The `scope` decides which vault service each
+ * request hits and which URL prefixes to strip when extracting vault-relative
+ * paths. The flat routes and the `:id`-scoped routes both call this with
+ * different scopes, so the file/folder/tree/search logic is written once.
+ */
+function registerVaultDataRoutes(
+  router: Hono,
+  scope: VaultRouteScope,
+  actorDefault: ActorDefault,
+  basePath = ''
+): void {
+  router.get(`${basePath}/vault`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    return mapServiceResult(context, await resolved.service.vaultInfo());
+  });
+
+  router.get(`${basePath}/tree`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const depthRaw = context.req.query('depth');
+    const depth = depthRaw === undefined ? undefined : Number(depthRaw);
+    return mapServiceResult(context, await resolved.service.listFiles({
+      under: context.req.query('under'),
+      ...(depth !== undefined && Number.isInteger(depth) ? { depth } : {})
+    }));
+  });
+
+  router.get(`${basePath}/search`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    return mapServiceResult(context, await resolved.service.search({
+      query: context.req.query('q') ?? '',
+      under: context.req.query('under'),
+      context: queryNumber(context, 'context'),
+      limit: queryNumber(context, 'limit'),
+      offset: queryNumber(context, 'offset')
+    }));
+  });
+
+  router.get(`${basePath}/files/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
+    return mapServiceResult(context, await resolved.service.readNote({ path: filePath }));
+  });
+
+  router.put(`${basePath}/files/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const content = await requestTextContent(context.req.raw);
+    if (!content.ok) return mapServiceResult(context, content);
+    const overwrite = context.req.query('overwrite') === 'true';
+    return mapServiceResult(context, await resolved.service.createNote({
+      path: filePath,
+      content: content.content,
+      overwrite,
+      actor: actor.actor
+    }), overwrite ? 200 : 201);
+  });
+
+  router.delete(`${basePath}/files/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const permanent = context.req.query('permanent') === 'true';
+    return mapServiceResult(context, await resolved.service.deleteNote({
+      path: filePath,
+      permanent,
+      actor: actor.actor
+    }));
+  });
+
+  router.post(`${basePath}/files/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const service = resolved.service;
+    const filesPrefix = scope.filesPrefix(context);
+
+    if (context.req.path.endsWith('/splice')) {
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
+      const filePath = filePathParam(context.req.path, filesPrefix, '/splice');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const splice = readSpliceRequest(body);
+      if (!splice.ok) return mapServiceResult(context, splice);
+      return mapServiceResult(context, await service.editNote({
+        path: filePath,
+        baseline: splice.baseline,
+        oldText: splice.request.oldText,
+        newText: splice.request.newText,
+        before: splice.request.before,
+        after: splice.request.after,
+        occurrence: splice.request.occurrence,
+        actor: actor.actor
+      }));
+    }
+
+    if (context.req.path.endsWith('/append')) {
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
+      const filePath = filePathParam(context.req.path, filesPrefix, '/append');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const content = readRequiredString(body.body, 'content');
+      if (!content.ok) return mapServiceResult(context, content);
+      return mapServiceResult(context, await service.appendNote({
+        path: filePath,
+        content: content.value,
+        actor: actor.actor
+      }));
+    }
+
+    if (context.req.path.endsWith('/prepend')) {
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
+      const filePath = filePathParam(context.req.path, filesPrefix, '/prepend');
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const content = readRequiredString(body.body, 'content');
+      if (!content.ok) return mapServiceResult(context, content);
+      return mapServiceResult(context, await service.prependNote({
+        path: filePath,
+        content: content.value,
+        actor: actor.actor
+      }));
+    }
+
+    if (!context.req.path.endsWith('/move')) {
+      return context.json({ ok: false, error: 'Not found' }, 404);
+    }
+
+    const fromPath = filePathParam(context.req.path, filesPrefix, '/move');
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const body = await readJsonObject(context.req.raw);
+    if (!body.ok) return mapServiceResult(context, body);
+    const to = readRequiredString(body.body, 'to');
+    if (!to.ok) return mapServiceResult(context, to);
+    // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+    return mapServiceResult(context, await service.moveNote({
+      fromPath,
+      toPath: to.value,
+      actor: actor.actor
+    }));
+  });
+
+  router.post(`${basePath}/folders`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const body = await readJsonObject(context.req.raw);
+    if (!body.ok) return mapServiceResult(context, body);
+    const folderPath = typeof body.body.path === 'string' ? body.body.path : '';
+    return mapServiceResult(context, await resolved.service.createFolder({
+      path: folderPath,
+      actor: actor.actor
+    }), 201);
+  });
+
+  router.get(`${basePath}/folders/*`, async (context) => {
+    if (!context.req.path.endsWith('/metadata')) {
+      return context.json({ ok: false, error: 'Not found' }, 404);
+    }
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const folderPath = filePathParam(context.req.path, scope.foldersPrefix(context), '/metadata');
+    return mapServiceResult(context, await resolved.service.getFolderMetadata({ path: folderPath }));
+  });
+
+  router.put(`${basePath}/folders/*`, async (context) => {
+    if (!context.req.path.endsWith('/metadata')) {
+      return context.json({ ok: false, error: 'Not found' }, 404);
+    }
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const folderPath = filePathParam(context.req.path, scope.foldersPrefix(context), '/metadata');
+    const body = await readJsonObject(context.req.raw);
+    if (!body.ok) return mapServiceResult(context, body);
+    const metadata = readFolderMetadataBody(body.body);
+    if (!metadata.ok) return mapServiceResult(context, metadata);
+    return mapServiceResult(context, await resolved.service.setFolderMetadata({
+      path: folderPath,
+      metadata: metadata.metadata,
+      actor: actor.actor
+    }));
+  });
+
+  router.delete(`${basePath}/folders/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const folderPath = filePathParam(context.req.path, scope.foldersPrefix(context));
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const recursive = context.req.query('recursive') === 'true';
+    const permanent = context.req.query('permanent') === 'true';
+    return mapServiceResult(context, await resolved.service.deleteFolder({
+      path: folderPath,
+      recursive,
+      permanent,
+      actor: actor.actor
+    }));
+  });
+
+  router.post(`${basePath}/folders/*`, async (context) => {
+    if (!context.req.path.endsWith('/move')) {
+      return context.json({ ok: false, error: 'Not found' }, 404);
+    }
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const fromPath = filePathParam(context.req.path, scope.foldersPrefix(context), '/move');
+    const body = await readJsonObject(context.req.raw);
+    if (!body.ok) return mapServiceResult(context, body);
+    const to = readRequiredString(body.body, 'to');
+    if (!to.ok) return mapServiceResult(context, to);
+    // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+    return mapServiceResult(context, await resolved.service.moveFolder({
+      fromPath,
+      toPath: to.value,
+      actor: actor.actor
+    }));
+  });
 }
 
 function eventStreamResponse(vaultService: VaultService): Response {
@@ -366,6 +487,39 @@ function mapServiceResult(
   }
 
   return context.json(result, statusForServiceError(result.error));
+}
+
+/**
+ * Map a vault-management result onto an HTTP response. A slug collision is a
+ * clean 409, an unknown vault a 404, and a bad request a 400 — never a crash.
+ */
+function mapRegistryResult(
+  context: Context,
+  result: { ok: true } | { ok: false; error: VaultRegistryErrorCode; message: string },
+  okBody: Record<string, unknown> | undefined,
+  okStatus: 200 | 201 = 200
+): Response {
+  if (result.ok) {
+    return context.json({ ok: true, ...(okBody ?? {}) }, okStatus);
+  }
+
+  return context.json(result, statusForRegistryError(result.error));
+}
+
+/** The `:id` path param, normalized to a string (an absent id can match no vault). */
+function vaultIdParam(context: Context): string {
+  return context.req.param('id') ?? '';
+}
+
+function statusForRegistryError(error: VaultRegistryErrorCode): 400 | 404 | 409 {
+  switch (error) {
+    case 'invalid_request':
+      return 400;
+    case 'not_found':
+      return 404;
+    case 'already_exists':
+      return 409;
+  }
 }
 
 function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 500 {
