@@ -53,7 +53,9 @@
     kebabAlwaysVisible?: boolean;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
-    onOpenFile?: (path: string) => void;
+    /** Open a file row — called with the opaque row id
+        (`note:<vaultId>:<path>`). */
+    onOpenFile?: (key: string) => void;
     /** Navigate to a folder (the three-state row click's open branch). */
     onOpenFolder?: (key: string) => void;
     /** Navigate to the vault root. */

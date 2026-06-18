@@ -196,6 +196,7 @@
         {:else}
           <FileNode
             node={child}
+            {vaultId}
             depth={depth + 1}
             {activePath}
             {favoritedNotePaths}

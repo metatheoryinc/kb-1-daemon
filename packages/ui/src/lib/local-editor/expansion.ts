@@ -7,6 +7,7 @@
  *
  *   - `vault:<vaultId>`         — a vault group row
  *   - `folder:<vaultId>:<path>` — a folder row inside that vault
+ *   - `note:<vaultId>:<path>`   — a file row inside that vault
  *
  * These are pure string functions — no fetch, no storage. The shell
  * owns the expanded/collapsed sets and persistence; components only
@@ -21,4 +22,11 @@ export function vaultKey(vaultId: string): string {
 /** Mint the opaque expansion key for a folder row. */
 export function folderKey(vaultId: string, path: string): string {
   return `folder:${vaultId}:${path}`;
+}
+
+/** Mint the opaque row id for a file row — the file twin of
+    {@link folderKey}, so a file row carries its owning vault the same way
+    a folder row does. */
+export function noteKey(vaultId: string, path: string): string {
+  return `note:${vaultId}:${path}`;
 }

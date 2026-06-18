@@ -44,7 +44,9 @@
     onToggleFolder?: (key: string) => void;
     /** Toggle this vault group's expansion. Called with the vault key. */
     onToggleVault?: (key: string) => void;
-    onOpenFile?: (path: string) => void;
+    /** Open a file row. Called with the opaque row id
+        (`note:<vaultId>:<path>`) so the host routes to the owning vault. */
+    onOpenFile?: (key: string) => void;
     /** Navigate to the vault root. Called with the vault key on a header
         click, alongside the expansion toggle. When unset, the header
         click only toggles. */
@@ -164,6 +166,7 @@
         {:else}
           <FileNode
             {node}
+            {vaultId}
             {activePath}
             {favoritedNotePaths}
             {kebabAlwaysVisible}

@@ -68,7 +68,9 @@
     onToggleColorMode?: () => void;
     onToggleFolder?: (key: string) => void;
     onToggleVault?: (key: string) => void;
-    onOpenFile?: (path: string) => void;
+    /** Open a file row — called with the opaque row id
+        (`note:<vaultId>:<path>`). */
+    onOpenFile?: (key: string) => void;
     onOpenFolder?: (key: string) => void;
     onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
@@ -139,8 +141,8 @@
   //   - Folder row click         → routes to the folder canvas, but the
   //                                user is still drilling toward a file
   //   - Primary rail switch      → mode swap inside the flyout
-  const onOpenFileRow = (path: string) => {
-    onOpenFile?.(path);
+  const onOpenFileRow = (key: string) => {
+    onOpenFile?.(key);
     navOpen = false;
   };
   const onOpenFolderRow = (key: string) => {
