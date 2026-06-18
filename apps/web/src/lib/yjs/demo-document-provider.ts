@@ -41,6 +41,8 @@ export class DemoDocumentProviderOpenError extends Error {
 
 export interface DemoDocumentProviderOptions {
   url?: string;
+  /** Vault the document lives in — selects the scoped Yjs WS route. */
+  vaultId?: string;
   path?: string;
   onStatus?: (status: DemoDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
@@ -53,7 +55,7 @@ export function createDemoDocumentProvider(
 ): DemoDocumentProvider {
   const doc = new Y.Doc();
   const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
-  const socket = new WebSocket(options.url ?? yjsWebSocketUrl(options.path));
+  const socket = new WebSocket(options.url ?? yjsWebSocketUrl(options.vaultId, options.path));
   socket.binaryType = 'arraybuffer';
 
   let destroyed = false;
@@ -149,14 +151,51 @@ export function isDemoDocumentProviderOpenError(error: unknown): error is DemoDo
   return error instanceof DemoDocumentProviderOpenError;
 }
 
-function yjsWebSocketUrl(documentPath = 'hello-world.md'): string {
-  const url = new URL(`/api/files/${encodeVaultPath(documentPath)}/yjs`, window.location.href);
+function yjsWebSocketUrl(vaultId: string | undefined, documentPath = 'hello-world.md'): string {
+  // The collaborative socket is vault-scoped. A vaultId is always supplied
+  // in the app; the fallback keeps the helper usable without one.
+  const base = vaultId
+    ? `/api/vaults/${encodeURIComponent(vaultId)}/files/${encodeVaultPath(documentPath)}/yjs`
+    : `/api/files/${encodeVaultPath(documentPath)}/yjs`;
+  const url = new URL(base, window.location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.href;
 }
 
 export function encodeVaultPath(documentPath: string): string {
   return documentPath.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * Build the browser route for a document inside a vault:
+ * `/<vaultId>/<encoded path>` (or just `/<vaultId>` at the vault root).
+ * The vault id is the daemon's stable slug.
+ */
+export function vaultRoute(vaultId: string, documentPath = ''): string {
+  const base = `/${encodeURIComponent(vaultId)}`;
+  return documentPath ? `${base}/${encodeVaultPath(documentPath)}` : base;
+}
+
+/**
+ * Split a browser pathname into `{ vaultId, path }`. The first segment is
+ * the vault id; the rest is the vault-relative document path. The root
+ * path (`/`) yields no vault id, signalling "redirect to the default
+ * vault".
+ */
+export function parseVaultRoute(pathname: string): { vaultId: string | null; path: string } {
+  const trimmed = pathname.replace(/^\/+/, '');
+  if (trimmed === '') return { vaultId: null, path: '' };
+  const slash = trimmed.indexOf('/');
+  if (slash === -1) {
+    return { vaultId: decodeURIComponent(trimmed), path: '' };
+  }
+  const vaultId = decodeURIComponent(trimmed.slice(0, slash));
+  const rest = trimmed.slice(slash + 1);
+  const path = rest
+    .split('/')
+    .map((segment) => decodeURIComponent(segment))
+    .join('/');
+  return { vaultId, path };
 }
 
 function toUint8Array(data: unknown): Uint8Array | undefined {

@@ -11,6 +11,7 @@
     LocalTreeNode,
     StarredRowData,
     VaultFilterEntry,
+    VaultGroupData,
   } from './types';
 
   interface Props {
@@ -59,8 +60,14 @@
     /** Whether the primary icon rail is collapsed to icon-only width.
         App-owned + persisted. */
     railCollapsed?: boolean;
-    tree: LocalTreeNode[];
-    /** Full set of vaults the filter lists. Omit for the single-vault default. */
+    tree?: LocalTreeNode[];
+    /** The vaults the rail groups by, each with its own tree. Omit for the
+        single-vault default (synthesized from vaultName/vaultId/tree). */
+    vaultGroups?: VaultGroupData[];
+    /** Which vault owns the active document path. Scopes the active-row
+        highlight to that vault's group when more than one is shown. */
+    activeVaultIdForPath?: string;
+    /** Full set of vaults the filter lists. Omit to derive from the groups. */
     vaults?: VaultFilterEntry[];
     /** Deny-list of vault ids the user has hidden. App-owned, persisted. */
     hiddenVaultIds?: string[];
@@ -91,6 +98,8 @@
     onTreeAction?: (action: LocalTreeAction) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
+    /** Create a new vault (files-rail footer). The host collects a name. */
+    onNewVault?: () => void;
     /** Forward a raw (unclamped) rail width; the app-state setter clamps. */
     onResizeRail?: (next: number) => void;
     children?: import('svelte').Snippet;
@@ -120,6 +129,8 @@
     brandLabel = 'Notes',
     railCollapsed = false,
     tree,
+    vaultGroups,
+    activeVaultIdForPath,
     vaults,
     hiddenVaultIds = [],
     secondaryRailWidth = 282,
@@ -138,6 +149,7 @@
     onOpenVault,
     onTreeAction,
     onToggleVaultHidden,
+    onNewVault,
     onResizeRail,
     children,
   }: Props = $props();
@@ -169,10 +181,12 @@
       {vaultName}
       {vaultId}
       {vaultAccent}
+      {vaultGroups}
       {vaults}
       {hiddenVaultIds}
       {tree}
       activePath={documentPath}
+      {activeVaultIdForPath}
       {activeFolderId}
       {activeVaultId}
       {expandedFolderIds}
@@ -187,6 +201,7 @@
       {onOpenVault}
       {onTreeAction}
       {onToggleVaultHidden}
+      {onNewVault}
     />
   {/if}
 

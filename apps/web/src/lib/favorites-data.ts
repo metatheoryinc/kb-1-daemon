@@ -128,7 +128,9 @@ export function buildStarredViewData(args: BuildArgs): StarredViewData {
         colorHex: accentHex[accent],
         icon: index.folderIcon.get(entry.path) ?? null,
         path: entry.path,
-        href: available ? `/${encodeVaultPath(entry.path)}` : undefined,
+        href: available
+          ? `/${encodeURIComponent(vaultId)}/${encodeVaultPath(entry.path)}`
+          : undefined,
         available,
         addedAt: entry.addedAt,
       });
@@ -145,7 +147,9 @@ export function buildStarredViewData(args: BuildArgs): StarredViewData {
         colorHex: accentHex[accent],
         icon: null,
         path: entry.path,
-        href: available ? `/${encodeVaultPath(entry.path)}` : undefined,
+        href: available
+          ? `/${encodeURIComponent(vaultId)}/${encodeVaultPath(entry.path)}`
+          : undefined,
         available,
         addedAt: entry.addedAt,
       });

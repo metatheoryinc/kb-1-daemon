@@ -71,7 +71,7 @@ describe('buildStarredViewData', () => {
     });
     const available = view.notes.find((r) => r.path === 'projects/a.md');
     const missing = view.notes.find((r) => r.path === 'gone.md');
-    expect(available?.href).toBe('/projects/a.md');
+    expect(available?.href).toBe('/demo-vault/projects/a.md');
     expect(missing?.href).toBeUndefined();
   });
 

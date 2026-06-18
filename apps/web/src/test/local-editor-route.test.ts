@@ -67,15 +67,19 @@ describe('local editor route', () => {
     // The harness builds the app-state store against `localStorage`, which
     // persists tree expansion and vault filters. Clear it so each test
     // starts from the clean first-load defaults rather than inheriting a
-    // prior test's expanded folders or hidden vaults.
-    window.localStorage.clear();
-    window.history.pushState(null, '', '/hello-world.md');
+    // prior test's expanded folders or hidden vaults. happy-dom's
+    // `localStorage.clear` isn't always present, so guard it.
+    if (typeof window.localStorage?.clear === 'function') {
+      window.localStorage.clear();
+    }
+    // The route is now vault-segmented: `/<vaultId>/<path>`.
+    window.history.pushState(null, '', '/demo-vault/hello-world.md');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/vault') {
-        return json({ ok: true, rootName: 'demo-vault' });
+      if (url === '/api/vaults') {
+        return json({ ok: true, vaults: [{ id: 'demo-vault', displayName: 'demo-vault' }] });
       }
-      if (url === '/api/tree') {
+      if (url === '/api/vaults/demo-vault/tree') {
         return json({
           ok: true,
           entries: [
@@ -95,7 +99,7 @@ describe('local editor route', () => {
 
     expect((await screen.findAllByText('demo-vault')).length).toBeGreaterThan(0);
     expect(await screen.findByText('projects')).toBeTruthy();
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/tree')).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/vaults/demo-vault/tree')).toBe(true);
     const initialEditor = await screen.findByLabelText('Markdown editor') as HTMLTextAreaElement;
     expect(initialEditor.value).toBe('content:hello-world.md');
     const initialDocGuid = initialEditor.dataset.docGuid;
@@ -106,7 +110,7 @@ describe('local editor route', () => {
     await fireEvent.click(filesPanel.getByText('editor-shell.md'));
 
     await waitFor(() => {
-      expect(mocks.goto).toHaveBeenCalledWith('/projects/active/editor-shell.md', {
+      expect(mocks.goto).toHaveBeenCalledWith('/demo-vault/projects/active/editor-shell.md', {
         noScroll: true,
         keepFocus: true,
       });
@@ -141,7 +145,7 @@ describe('local editor route', () => {
   });
 
   it('renders an in-shell not-found state for missing document navigation without creating it', async () => {
-    window.history.pushState(null, '', '/projects/missing.md');
+    window.history.pushState(null, '', '/demo-vault/projects/missing.md');
 
     render(AppStateHarness);
 
@@ -168,20 +172,20 @@ describe('local editor route', () => {
     expect(initialEditor.value).toBe('content:hello-world.md');
     const initialDocGuid = initialEditor.dataset.docGuid;
 
-    await simulateNavigation('/projects/active/editor-shell.md');
+    await simulateNavigation('/demo-vault/projects/active/editor-shell.md');
     const nextEditor = await waitForBoundEditor('content:projects/active/editor-shell.md');
     expect(nextEditor.dataset.docGuid).not.toBe(initialDocGuid);
     await fireEvent.input(nextEditor, { target: { value: 'history marker for active doc' } });
     expect(mocks.providers.at(-1)?.path).toBe('projects/active/editor-shell.md');
     expect(mocks.providers.at(-1)?.text.toString()).toBe('history marker for active doc');
 
-    await simulateNavigation('/hello-world.md');
+    await simulateNavigation('/demo-vault/hello-world.md');
     const backEditor = await waitForBoundEditor('content:hello-world.md');
     expect(backEditor.dataset.docGuid).not.toBe(nextEditor.dataset.docGuid);
     expect(mocks.providers.find((provider) => provider.path === 'projects/active/editor-shell.md')?.text.toString())
       .toBe('history marker for active doc');
 
-    await simulateNavigation('/deleted-later.md');
+    await simulateNavigation('/demo-vault/deleted-later.md');
     expect(await screen.findByText('Document not found')).toBeTruthy();
     expect((await screen.findAllByText('deleted-later.md')).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText('Markdown editor')).toBeNull();

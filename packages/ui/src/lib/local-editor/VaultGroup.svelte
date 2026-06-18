@@ -89,14 +89,16 @@
     { mode: 'cursor'; x: number; y: number } | { mode: 'anchor'; rect: DOMRect } | null
   >(null);
 
+  // Vault-menu items stamp THIS group's `vaultId` onto every action, so a
+  // host listing more than one vault knows which one the menu acted on.
   const items = $derived<MenuItem[]>([
-    { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note' }) },
-    { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder' }) },
-    { label: 'Rename', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'rename' }) },
+    { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note', vaultId }) },
+    { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder', vaultId }) },
+    { label: 'Rename', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'rename', vaultId }) },
     {
       label: 'Delete',
       destructive: true,
-      onSelect: () => onTreeAction?.({ kind: 'vault', action: 'delete' })
+      onSelect: () => onTreeAction?.({ kind: 'vault', action: 'delete', vaultId })
     }
   ]);
 
