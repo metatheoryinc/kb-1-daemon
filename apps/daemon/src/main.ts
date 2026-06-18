@@ -150,21 +150,29 @@ export async function startDaemon(): Promise<StartedDaemon> {
       }
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-        void (async () => {
+        // Track the connection's whole lifecycle — handshake, session open (which
+        // writes the session-state snapshot), and the bound stream — in the drain
+        // set synchronously, before any await. Shutdown must wait for a connection
+        // that is still opening, or its in-flight state write can outlive teardown.
+        const lifecycle = (async () => {
           const bindingLease = target.manager.attachClientSession(target.documentPath);
           try {
             const binding = await bindYjsWebSocket(bindingLease.session, webSocket);
-            activeDocumentConnections.add(binding.closed);
-            binding.closed.finally(() => {
-              activeDocumentConnections.delete(binding.closed);
+            try {
+              await binding.closed;
+            } finally {
               bindingLease.release();
-            }).catch(() => undefined);
+            }
           } catch (error) {
             bindingLease.release();
             console.error(error);
             webSocket.close(1011, 'Document session failed to open');
           }
         })();
+        activeDocumentConnections.add(lifecycle);
+        lifecycle.finally(() => {
+          activeDocumentConnections.delete(lifecycle);
+        }).catch(() => undefined);
       });
     });
 
