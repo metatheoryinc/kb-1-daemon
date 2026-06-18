@@ -9,7 +9,7 @@ import { readVaultFile, validateVaultPath, writeVaultFile } from '@kb-2/vault-co
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createApp } from './app.js';
+import { createApp, mcpVaultProvider } from './app.js';
 import {
   createDaemonConfig,
   DEFAULT_VAULT_SLUG,
@@ -70,7 +70,12 @@ export async function startDaemon(): Promise<StartedDaemon> {
   const vaultService = defaultInstance.service;
   const demoDocumentSession = hasDemoDocument ? documentSessions.getSession(DEMO_DOCUMENT_PATH) : undefined;
   await demoDocumentSession?.open();
-  const mcpEndpoint = createLocalMcpEndpoint(vaultService);
+
+  // One MCP endpoint, every vault: vaultId resolution and vault enumeration both
+  // go through the SAME live registry the HTTP layer uses — no second vault map.
+  // Omitted vaultId targets the default vault, keeping the single-vault MCP
+  // surface backward compatible.
+  const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(vaultService, registry));
 
   const app = createApp({
     statusFile: config.statusFile,

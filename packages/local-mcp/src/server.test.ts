@@ -82,6 +82,7 @@ describe('local MCP server', () => {
       'edit_note',
       'get_folder_metadata',
       'list_files',
+      'list_vaults',
       'move_folder',
       'move_note',
       'prepend_note',
@@ -90,6 +91,12 @@ describe('local MCP server', () => {
       'set_folder_metadata',
       'vault_info'
     ]);
+
+    // Every vault-data tool advertises the optional vaultId; list_vaults does not.
+    const vaultInfoTool = tools.tools.find((tool) => tool.name === 'vault_info');
+    expect(vaultInfoTool?.inputSchema.properties).toHaveProperty('vaultId');
+    const listVaultsTool = tools.tools.find((tool) => tool.name === 'list_vaults');
+    expect(listVaultsTool?.inputSchema.properties ?? {}).not.toHaveProperty('vaultId');
 
     expect(await toolJson(client, 'vault_info', {})).toMatchObject({ ok: true, rootName: 'demo-vault' });
     expect(await toolJson(client, 'list_files', { under: 'notes', depth: 1 })).toMatchObject({ ok: true, entries: [{ path: 'notes', metadata: { color: 'coral' } }] });
@@ -106,6 +113,18 @@ describe('local MCP server', () => {
     expect(await toolJson(client, 'delete_folder', { path: 'folder', recursive: true })).toMatchObject({ ok: true, path: 'folder' });
     expect(await toolJson(client, 'move_folder', { from_path: 'old', to_path: 'new' })).toMatchObject({ ok: true, toPath: 'new' });
     expect(await toolJson(client, 'search', { query: 'alpha' })).toMatchObject({ ok: true, total: 1 });
+
+    // A bare service normalizes to a single synthetic 'default' vault: list_vaults
+    // reports it, an explicit vaultId: 'default' still routes, and an unknown
+    // vaultId is a clean tool error rather than a crash.
+    expect(await toolJson(client, 'list_vaults', {})).toMatchObject({
+      ok: true,
+      vaults: [{ id: 'default', displayName: 'default' }]
+    });
+    expect(await toolJson(client, 'vault_info', { vaultId: 'default' })).toMatchObject({ ok: true, rootName: 'demo-vault' });
+    const unknownVault = await client.callTool({ name: 'vault_info', arguments: { vaultId: 'missing' } });
+    expect(unknownVault.isError).toBe(true);
+    expect(textContent(unknownVault)).toBe('vault_info rejected: {"ok":false,"error":"not_found","message":"No vault with id \\"missing\\"."}');
 
     const stale = await client.callTool({
       name: 'edit_note',
