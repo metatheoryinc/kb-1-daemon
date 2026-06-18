@@ -162,6 +162,116 @@ describe('daemon startup', () => {
   });
 });
 
+describe('daemon boot migration', () => {
+  let kb2Home: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  const SEEDED_NOTES: ReadonlyArray<{ readonly path: string; readonly content: string }> = [
+    { path: 'welcome.md', content: '# Welcome\n\nThe first top-level note.\n' },
+    { path: 'ideas.md', content: '# Ideas\n\nA second top-level note with distinctive text.\n' },
+    { path: join('projects', 'roadmap.md'), content: '# Roadmap\n\nA nested note that must survive the move.\n' }
+  ];
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-migration-'));
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    await rm(kb2Home, { force: true, recursive: true });
+  });
+
+  async function seedLegacyLayout(): Promise<void> {
+    const legacyVault = join(kb2Home, 'demo-vault');
+    for (const note of SEEDED_NOTES) {
+      const absolute = join(legacyVault, note.path);
+      await mkdir(join(absolute, '..'), { recursive: true });
+      await writeFile(absolute, note.content, 'utf8');
+    }
+  }
+
+  it('migrates a legacy single-vault layout into the registry layout on boot, preserving every note', async () => {
+    await seedLegacyLayout();
+
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(port)
+    };
+
+    const started = await startDaemon();
+    const vaultRoot = started.config.vaultRoot;
+
+    // The migrated vault lives under <home>/vaults/<slug>/ and the legacy root is gone.
+    expect(vaultRoot).toBe(join(kb2Home, 'vaults', 'demo-vault'));
+    await expect(access(join(kb2Home, 'demo-vault'))).rejects.toBeTruthy();
+
+    // Data-safety: every seeded note, including the nested one, survives byte-for-byte.
+    for (const note of SEEDED_NOTES) {
+      await expect(readFile(join(vaultRoot, note.path), 'utf8')).resolves.toBe(note.content);
+    }
+
+    // A durable vault identity was minted with a non-empty slug and display name.
+    const identity = JSON.parse(await readFile(join(vaultRoot, '.kb2', 'vault.json'), 'utf8'));
+    expect(typeof identity).toBe('object');
+    expect(identity).not.toBeNull();
+    expect(identity.id).toBe('demo-vault');
+    expect(typeof identity.displayName).toBe('string');
+    expect(identity.displayName.length).toBeGreaterThan(0);
+
+    await started.close();
+  });
+
+  it('leaves the migrated tree and minted identity unchanged on a second boot (idempotent slug)', async () => {
+    await seedLegacyLayout();
+
+    const firstPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(firstPort)
+    };
+
+    const firstBoot = await startDaemon();
+    const vaultRoot = firstBoot.config.vaultRoot;
+    const identityFile = join(vaultRoot, '.kb2', 'vault.json');
+    const identityAfterFirstBoot = await readFile(identityFile, 'utf8');
+    const contentsAfterFirstBoot = await Promise.all(
+      SEEDED_NOTES.map((note) => readFile(join(vaultRoot, note.path), 'utf8'))
+    );
+    await firstBoot.close();
+
+    const secondPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB2_HOME: kb2Home,
+      KB2_HOST: '127.0.0.1',
+      KB2_PORT: String(secondPort)
+    };
+
+    const secondBoot = await startDaemon();
+    expect(secondBoot.config.vaultRoot).toBe(vaultRoot);
+
+    // The legacy root is not recreated, and the identity is byte-for-byte identical
+    // (the slug is read back, never recomputed).
+    await expect(access(join(kb2Home, 'demo-vault'))).rejects.toBeTruthy();
+    await expect(readFile(identityFile, 'utf8')).resolves.toBe(identityAfterFirstBoot);
+
+    // Every note is still present with its original content unchanged.
+    for (let index = 0; index < SEEDED_NOTES.length; index += 1) {
+      await expect(readFile(join(vaultRoot, SEEDED_NOTES[index].path), 'utf8')).resolves.toBe(
+        contentsAfterFirstBoot[index]
+      );
+    }
+
+    await secondBoot.close();
+  });
+});
+
 async function reservePort(): Promise<number> {
   const server = createServer();
   await listen(server);

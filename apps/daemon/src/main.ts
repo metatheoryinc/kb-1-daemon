@@ -1,18 +1,28 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { DocumentSessionManager, bindYjsWebSocket } from '@kb-2/doc-session';
+import { bindYjsWebSocket } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readVaultFile, validateVaultPath, writeVaultFile } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import { createApp } from './app.js';
-import { createDaemonConfig, type DaemonConfig } from './config.js';
+import {
+  createDaemonConfig,
+  DEFAULT_VAULT_SLUG,
+  LEGACY_VAULT_DIRNAME,
+  type DaemonConfig
+} from './config.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
-import { createVaultService } from '@kb-2/vault-service';
+import {
+  buildVaultInstances,
+  discoverVaults,
+  migrateLegacyVaultLayout,
+  type VaultInstance
+} from './vault-registry.js';
 
 const DEMO_DOCUMENT_PATH = 'hello-world.md';
 const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
@@ -31,14 +41,35 @@ export interface StartedDaemon {
 
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
-  const documentSessions = new DocumentSessionManager({ root: config.vaultRoot });
+
+  // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
+  await migrateLegacyVaultLayout({
+    legacyVaultDir: join(config.kb2Home, LEGACY_VAULT_DIRNAME),
+    vaultsHome: config.vaultsHome,
+    targetSlug: DEFAULT_VAULT_SLUG
+  });
+
+  // Fresh install: ensure the vaults directory and a default vault exist, then
+  // seed the demo document into the default vault.
+  await mkdir(config.vaultsHome, { recursive: true });
+  await mkdir(config.vaultRoot, { recursive: true });
   const hasDemoDocument = await seedDemoDocument(config.vaultRoot);
+
+  // Discover every vault and build one root-scoped instance per vault.
+  const entries = await discoverVaults(config.vaultsHome);
+  const vaultInstances = buildVaultInstances(entries);
+
+  const defaultInstance = vaultInstances.get(DEFAULT_VAULT_SLUG);
+  if (!defaultInstance) {
+    throw new Error(`Default vault "${DEFAULT_VAULT_SLUG}" was not discovered after boot.`);
+  }
+
+  // Backward compat: the existing single-vault HTTP/WS/MCP surface operates on
+  // the default vault's instance.
+  const documentSessions = defaultInstance.manager;
+  const vaultService = defaultInstance.service;
   const demoDocumentSession = hasDemoDocument ? documentSessions.getSession(DEMO_DOCUMENT_PATH) : undefined;
   await demoDocumentSession?.open();
-  const vaultService = createVaultService({
-    vaultRoot: config.vaultRoot,
-    documentSessions
-  });
   const mcpEndpoint = createLocalMcpEndpoint(vaultService);
 
   const app = createApp({
@@ -92,7 +123,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
               await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
-              await documentSessions.close();
+              await closeVaultInstances(vaultInstances);
             }
           });
         } catch (error) {
@@ -131,6 +162,10 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
+}
+
+async function closeVaultInstances(instances: Map<string, VaultInstance>): Promise<void> {
+  await Promise.all([...instances.values()].map((instance) => instance.manager.close()));
 }
 
 function createRelayTunnelClient(config: DaemonConfig): TunnelClient | undefined {
