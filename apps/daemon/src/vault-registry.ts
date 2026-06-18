@@ -4,6 +4,8 @@ import { join, relative } from 'node:path';
 import { DocumentSessionManager } from '@kb-2/doc-session';
 import { createVaultService, type VaultService } from '@kb-2/vault-service';
 
+import { seedVaultFromStarterKit } from './starter-kit.js';
+
 const VAULT_IDENTITY_DIR = '.kb2';
 const VAULT_IDENTITY_FILE = 'vault.json';
 
@@ -308,6 +310,11 @@ export class VaultRegistry {
     await mkdir(root, { recursive: true });
     const identity: VaultIdentity = { id: slug, displayName };
     await writeVaultIdentity(root, identity);
+
+    // Every newly created vault starts from the bundled starter kit. The seeder
+    // is a no-op on a vault that already has user content, so this is safe even
+    // though identity was just written above (`.kb2` does not count as content).
+    await seedVaultFromStarterKit(root);
 
     const entry: VaultRegistryEntry = { slug, displayName, root };
     this.instances.set(slug, buildVaultInstance(entry));
