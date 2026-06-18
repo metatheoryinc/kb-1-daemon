@@ -76,11 +76,25 @@ interface TemplateFile {
  * and so are not represented, which keeps the seeder driven purely by the files
  * present in the kit.
  */
-async function collectTemplateFiles(templateDir: string): Promise<TemplateFile[]> {
+export async function collectTemplateFiles(templateDir: string): Promise<TemplateFile[]> {
   const files: TemplateFile[] = [];
 
   async function walk(absoluteDir: string, relativeDir: string): Promise<void> {
-    const entries = await readdir(absoluteDir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(absoluteDir, { withFileTypes: true });
+    } catch (error) {
+      // A missing template at the root means the build did not bundle
+      // starter-kit-template/ into dist — fail loudly with an actionable
+      // message rather than a bare ENOENT.
+      if (relativeDir.length === 0 && isNodeErrorCode(error, 'ENOENT')) {
+        throw new Error(
+          `Starter-kit template not found at ${absoluteDir}. The build must copy ` +
+            `starter-kit-template/ into dist alongside the compiled module.`
+        );
+      }
+      throw error;
+    }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const absolute = join(absoluteDir, entry.name);
       const relative = relativeDir.length > 0 ? `${relativeDir}/${entry.name}` : entry.name;
