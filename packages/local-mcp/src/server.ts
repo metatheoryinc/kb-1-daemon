@@ -93,13 +93,10 @@ export function createLocalMcpServer(source: LocalMcpVaultSource): McpServer {
     return client ? { kind: 'mcp_client', client } : unknownActor;
   };
 
-  // Resolve the addressed vault's service. Omitted vaultId targets the default
-  // vault (single-vault backward compatibility); an unknown vaultId returns a
-  // clean tool-level failure rather than throwing.
-  const resolve = (vaultId: string | undefined): { ok: true; service: LocalMcpVaultService } | ServiceFailure => {
-    if (vaultId === undefined) {
-      return { ok: true, service: provider.default() };
-    }
+  // Resolve the addressed vault's service. vaultId is required on every data
+  // tool — there is no default vault. An unknown vaultId returns a clean
+  // tool-level failure rather than throwing.
+  const resolve = (vaultId: string): { ok: true; service: LocalMcpVaultService } | ServiceFailure => {
     const service = provider.resolve(vaultId);
     if (!service) {
       return { ok: false, error: 'not_found', message: `No vault with id "${vaultId}".` };
@@ -107,17 +104,16 @@ export function createLocalMcpServer(source: LocalMcpVaultSource): McpServer {
     return { ok: true, service };
   };
 
-  /** The optional `vaultId` field shared by every vault-data tool's input schema. */
+  /** The required `vaultId` field shared by every vault-data tool's input schema. */
   const vaultIdField = {
     vaultId: z
       .string()
-      .optional()
-      .describe('Vault slug to target. Omit to operate on the default vault. Discover ids with list_vaults.')
+      .describe('Vault slug to target (required). Discover ids with list_vaults.')
   };
 
-  registerTool<{ vaultId?: string }>(server, 'list_vaults', {
+  registerTool<{}>(server, 'list_vaults', {
     description:
-      'List every vault this daemon serves, each as { id, displayName }. Use a vault id as the vaultId parameter on any other tool to target that vault; omit vaultId to use the default vault. Read-only; writes no audit row.',
+      'List every vault this daemon serves, each as { id, displayName }. Use a vault id as the required vaultId parameter on any other tool to target that vault. Read-only; writes no audit row.',
     inputSchema: {}
   }, async () => ({ ok: true, vaults: provider.list() }));
 
@@ -283,18 +279,18 @@ export function createLocalMcpServer(source: LocalMcpVaultSource): McpServer {
   return server;
 
   /**
-   * Register a vault-data tool: its schema carries the optional `vaultId`, and
+   * Register a vault-data tool: its schema carries the required `vaultId`, and
    * the handler receives the resolved service. An unknown `vaultId` short-circuits
    * to a clean tool error before the service is ever touched.
    */
   function registerVaultTool<TInput extends object>(
     target: McpServer,
-    resolveVault: (vaultId: string | undefined) => { ok: true; service: LocalMcpVaultService } | ServiceFailure,
+    resolveVault: (vaultId: string) => { ok: true; service: LocalMcpVaultService } | ServiceFailure,
     name: string,
     config: { description: string; inputSchema: Record<string, z.ZodType> },
     handler: (service: LocalMcpVaultService, input: TInput) => Promise<unknown>
   ): void {
-    registerTool<TInput & { vaultId?: string }>(
+    registerTool<TInput & { vaultId: string }>(
       target,
       name,
       { description: config.description, inputSchema: { ...config.inputSchema, ...vaultIdField } },
@@ -313,20 +309,18 @@ function asProvider(source: LocalMcpVaultSource): LocalMcpVaultProvider {
   if (isProvider(source)) {
     return source;
   }
-  // Bare service: a single, always-default vault. `resolve` matches the synthetic
-  // id (or anything, treating the lone vault as the only target) so legacy callers
-  // and explicit `vaultId: 'default'` both land on it.
+  // Bare service: a single vault addressed by the synthetic 'default' id. There
+  // is no default-vault fallback — callers must pass vaultId: 'default' to reach
+  // it, the same as any other vault.
   const service = source;
   return {
-    default: () => service,
     resolve: (id) => (id === SINGLE_VAULT_ID ? service : undefined),
     list: () => [{ id: SINGLE_VAULT_ID, displayName: SINGLE_VAULT_ID }]
   };
 }
 
 function isProvider(source: LocalMcpVaultSource): source is LocalMcpVaultProvider {
-  return typeof (source as LocalMcpVaultProvider).default === 'function'
-    && typeof (source as LocalMcpVaultProvider).resolve === 'function'
+  return typeof (source as LocalMcpVaultProvider).resolve === 'function'
     && typeof (source as LocalMcpVaultProvider).list === 'function';
 }
 

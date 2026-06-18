@@ -22,6 +22,7 @@
     "@kb-2/tunnel-client": "workspace:*",
     "@kb-2/vault-core": "workspace:*",
     "@kb-2/vault-service": "workspace:*",
+    "github-slugger": "2.0.0",
     "hono": "4.12.25",
     "ws": "8.21.0"
   },

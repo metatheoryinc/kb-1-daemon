@@ -4,9 +4,10 @@ import { join } from 'node:path';
 
 import {
   discoverVaults,
+  isWellFormedSlug,
   migrateLegacyVaultLayout,
   readOrMintVaultIdentity,
-  slugFromFolderName,
+  slugify,
   VAULT_TRASH_DIRNAME,
   VaultRegistry
 } from './vault-registry.js';
@@ -22,15 +23,43 @@ describe('vault registry', () => {
     await rm(home, { force: true, recursive: true });
   });
 
-  describe('slugFromFolderName', () => {
-    it('lowercases and hyphenates', () => {
-      expect(slugFromFolderName('My Vault')).toBe('my-vault');
-      expect(slugFromFolderName('demo-vault')).toBe('demo-vault');
-      expect(slugFromFolderName('Notes & Stuff!!')).toBe('notes-stuff');
+  describe('slugify', () => {
+    it('normalizes a display name into a slug via github-slugger', () => {
+      expect(slugify('My Vault')).toBe('my-vault');
+      expect(slugify('demo-vault')).toBe('demo-vault');
     });
 
-    it('falls back to "vault" when nothing usable remains', () => {
-      expect(slugFromFolderName('***')).toBe('vault');
+    it('yields an empty slug when nothing usable remains (no silent fallback)', () => {
+      expect(slugify('***')).toBe('');
+    });
+
+    it('is idempotent on an already-normalized slug', () => {
+      expect(slugify('my-vault')).toBe('my-vault');
+      expect(slugify(slugify('Notes & Stuff!!'))).toBe(slugify('Notes & Stuff!!'));
+    });
+  });
+
+  describe('isWellFormedSlug', () => {
+    it('accepts non-empty, already-normalized slugs', () => {
+      expect(isWellFormedSlug('my-vault')).toBe(true);
+      expect(isWellFormedSlug('demo-vault')).toBe(true);
+      expect(isWellFormedSlug('field-notes-2')).toBe(true);
+    });
+
+    it('rejects empty or non-normalized slugs', () => {
+      expect(isWellFormedSlug('')).toBe(false);
+      expect(isWellFormedSlug('My Vault')).toBe(false);
+      expect(isWellFormedSlug('Notes!')).toBe(false);
+      expect(isWellFormedSlug('trailing ')).toBe(false);
+    });
+
+    it('agrees with slugify: a slugified value is always well-formed', () => {
+      for (const input of ['My Vault', 'demo-vault', 'Notes & Stuff!!', 'a_b_c']) {
+        const slug = slugify(input);
+        if (slug.length > 0) {
+          expect(isWellFormedSlug(slug)).toBe(true);
+        }
+      }
     });
   });
 
@@ -176,7 +205,7 @@ describe('vault registry', () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
 
-      const created = await registry.create({ displayName: 'My Notes' });
+      const created = await registry.create({ displayName: 'My Notes', slug: 'my-notes' });
       expect(created).toEqual({ ok: true, vault: { id: 'my-notes', displayName: 'My Notes' } });
 
       // Filesystem is the source of truth: the folder and minted identity exist.
@@ -200,12 +229,12 @@ describe('vault registry', () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
 
-      const first = await registry.create({ displayName: 'Project X' });
+      const first = await registry.create({ displayName: 'Project X', slug: 'project-x' });
       expect(first.ok).toBe(true);
 
-      // A different display name that normalizes to the same slug is a clean
-      // collision, not a crash, and does not disturb the first vault.
-      const collision = await registry.create({ displayName: 'project x' });
+      // A second create with the same explicit slug is a clean collision, not a
+      // crash, and does not disturb the first vault.
+      const collision = await registry.create({ displayName: 'Another Project', slug: 'project-x' });
       expect(collision).toEqual({
         ok: false,
         error: 'already_exists',
@@ -220,7 +249,7 @@ describe('vault registry', () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
 
-      const created = await registry.create({ displayName: '   ' });
+      const created = await registry.create({ displayName: '   ', slug: 'whatever' });
       expect(created).toEqual({
         ok: false,
         error: 'invalid_request',
@@ -230,10 +259,31 @@ describe('vault registry', () => {
       await registry.close();
     });
 
+    it('rejects a malformed slug on create (never infers it from the display name)', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+
+      // A non-normalized slug is a clean invalid_request; nothing lands on disk.
+      const created = await registry.create({ displayName: 'Field Notes', slug: 'Field Notes' });
+      expect(created).toEqual({
+        ok: false,
+        error: 'invalid_request',
+        message: expect.any(String)
+      });
+      expect(registry.list()).toHaveLength(0);
+      await expect(access(join(vaultsHome, 'Field Notes'))).rejects.toBeTruthy();
+
+      // An empty slug is rejected too.
+      const empty = await registry.create({ displayName: 'Field Notes', slug: '' });
+      expect(empty.ok).toBe(false);
+
+      await registry.close();
+    });
+
     it('renames a vault by display name only, leaving slug and folder unchanged', async () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
-      await registry.create({ displayName: 'Original' });
+      await registry.create({ displayName: 'Original', slug: 'original' });
 
       const renamed = await registry.rename('original', { displayName: 'Renamed' });
       expect(renamed).toEqual({ ok: true, vault: { id: 'original', displayName: 'Renamed' } });
@@ -261,7 +311,7 @@ describe('vault registry', () => {
     it('soft-deletes a vault: folder moves to trash with data intact, gone from the registry', async () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
-      await registry.create({ displayName: 'Disposable' });
+      await registry.create({ displayName: 'Disposable', slug: 'disposable' });
 
       // Drop a note in so we can prove the data survives the soft delete.
       await writeFile(join(vaultsHome, 'disposable', 'kept.md'), 'precious\n', 'utf8');
@@ -298,12 +348,12 @@ describe('vault registry', () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
 
-      await registry.create({ displayName: 'Recycle' });
+      await registry.create({ displayName: 'Recycle', slug: 'recycle' });
       await writeFile(join(vaultsHome, 'recycle', 'v1.md'), 'first\n', 'utf8');
       const firstDelete = await registry.softDelete('recycle');
       if (!firstDelete.ok) throw new Error('expected first soft delete to succeed');
 
-      await registry.create({ displayName: 'Recycle' });
+      await registry.create({ displayName: 'Recycle', slug: 'recycle' });
       await writeFile(join(vaultsHome, 'recycle', 'v2.md'), 'second\n', 'utf8');
       const secondDelete = await registry.softDelete('recycle');
       if (!secondDelete.ok) throw new Error('expected second soft delete to succeed');

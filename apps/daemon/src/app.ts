@@ -1,12 +1,10 @@
 import { Hono, type Context } from 'hono';
-import { DocumentSessionManager, type OneFileDocumentSession } from '@kb-2/doc-session';
 import {
   createLocalMcpEndpoint,
   type LocalMcpEndpoint,
   type LocalMcpVaultProvider
 } from '@kb-2/local-mcp';
 import {
-  createVaultService,
   type ServiceErrorCode,
   type ServiceResult,
   type VaultActor,
@@ -20,7 +18,6 @@ import {
   filePathParam,
   queryNumber,
   readJsonObject,
-  readOptionalJsonContent,
   readRequiredString,
   readSpliceRequest,
   requestTextContent
@@ -32,18 +29,13 @@ import type {
   VaultRegistryErrorCode
 } from './vault-registry.js';
 
-const DEMO_DOCUMENT_PATH = 'demo-vault/README.md';
 const ACTOR_HEADER = 'x-kb2-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
   statusFile: string;
-  vaultRoot?: string;
-  documentSessions?: DocumentSessionManager;
-  vaultService?: VaultService;
   /** Live multi-vault registry powering vault CRUD and the `:id`-scoped data routes. */
   registry?: VaultRegistry;
-  demoDocumentSession?: OneFileDocumentSession;
   mcpEndpoint?: LocalMcpEndpoint;
   webBuildDir?: string;
   webProxyTarget?: string;
@@ -52,9 +44,8 @@ export interface CreateAppOptions {
 
 /**
  * How a data route resolves the vault it operates on and the path prefixes used
- * to slice the vault-relative file/folder path out of the request URL. The flat
- * routes and the `:id`-scoped routes share the exact same handlers; only this
- * resolver differs.
+ * to slice the vault-relative file/folder path out of the request URL. Every
+ * vault-scoped route shares the exact same handlers; only this resolver differs.
  */
 interface VaultRouteScope {
   /** Resolve the addressed vault service, or a clean failure for an unknown id. */
@@ -79,77 +70,21 @@ export function createApp(options: CreateAppOptions): Hono {
     });
   });
 
-  if (options.demoDocumentSession) {
-    api.get('/demo-document', async (context) => {
-      const content = await options.demoDocumentSession!.getContent();
-
-      return context.json({
-        ok: true,
-        document: DEMO_DOCUMENT_PATH,
-        content
-      });
-    });
-
-    api.post('/demo-document/reset', async (context) => {
-      const requestedContent = await readOptionalJsonContent(context.req.raw);
-      const content = await options.demoDocumentSession!.reset(requestedContent);
-
-      return context.json({
-        ok: true,
-        document: DEMO_DOCUMENT_PATH,
-        content
-      });
-    });
-  }
-
-  if (options.vaultRoot) {
-    const vaultService = options.vaultService ?? createVaultService({
-      vaultRoot: options.vaultRoot,
-      documentSessions: options.documentSessions ?? new DocumentSessionManager({ root: options.vaultRoot })
-    });
-    // One MCP endpoint addresses every vault. When a registry is present, vaultId
-    // resolution and vault enumeration go through it (the same source of truth as
-    // the HTTP layer); omitted vaultId still targets the default vault. Without a
-    // registry, the endpoint is the legacy single (default-vault) surface.
-    const mcpEndpoint = options.mcpEndpoint
-      ?? createLocalMcpEndpoint(
-        options.registry
-          ? mcpVaultProvider(vaultService, options.registry)
-          : vaultService
-      );
-    const actorDefault = options.actorDefault ?? 'user';
-
-    // Default-vault-only surface: flush and the SSE event stream. The local MCP
-    // endpoint above addresses any vault via its optional vaultId parameter.
-    api.post('/ops/flush', async (context) => {
-      return mapServiceResult(context, await vaultService.flushDirtySessions());
-    });
-
-    api.get('/events', () => {
-      return eventStreamResponse(vaultService);
-    });
-
-    app.all('/mcp', async (context) => {
-      return mcpEndpoint.handleRequest(context.req.raw);
-    });
-
-    // Backward-compat flat data routes, mapped to the default vault. They are
-    // retired in a later slice; until then they share the exact handlers used by
-    // the `:id`-scoped routes below — no parallel implementation.
-    const flatScope: VaultRouteScope = {
-      resolve: () => ({ ok: true, service: vaultService }),
-      filesPrefix: () => '/api/files/',
-      foldersPrefix: () => '/api/folders/'
-    };
-    registerVaultDataRoutes(api, flatScope, actorDefault);
-  }
-
   if (options.registry) {
     const registry = options.registry;
     const actorDefault = options.actorDefault ?? 'user';
 
+    // One MCP endpoint addresses every vault. vaultId resolution and vault
+    // enumeration go through the registry — the same source of truth as the HTTP
+    // layer. Every data tool requires a vaultId; there is no default vault.
+    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(mcpVaultProvider(registry));
+    app.all('/mcp', async (context) => {
+      return mcpEndpoint.handleRequest(context.req.raw);
+    });
+
     // Vault management: list, create (live, no restart), rename (displayName
     // only), and soft-delete (folder to trash, removed from the live registry).
+    // Zero vaults is a valid state: `list` simply returns an empty array.
     api.get('/vaults', (context) => {
       return context.json({ ok: true, vaults: registry.list() });
     });
@@ -159,7 +94,9 @@ export function createApp(options: CreateAppOptions): Hono {
       if (!body.ok) return mapServiceResult(context, body);
       const displayName = readRequiredString(body.body, 'displayName');
       if (!displayName.ok) return mapServiceResult(context, displayName);
-      const created = await registry.create({ displayName: displayName.value });
+      const slug = readRequiredString(body.body, 'slug');
+      if (!slug.ok) return mapServiceResult(context, slug);
+      const created = await registry.create({ displayName: displayName.value, slug: slug.value });
       return mapRegistryResult(context, created, created.ok ? { vault: created.vault } : undefined, 201);
     });
 
@@ -177,9 +114,9 @@ export function createApp(options: CreateAppOptions): Hono {
       return mapRegistryResult(context, deleted, deleted.ok ? {} : undefined);
     });
 
-    // `:id`-scoped data routes. `:id` resolves to that vault's instance from the
-    // registry; an unknown id is a clean 404. Otherwise these are the identical
-    // handlers used by the flat routes, just against the addressed vault.
+    // `:id`-scoped data routes — the only way to reach vault content. `:id`
+    // resolves to that vault's instance from the registry; an unknown id is a
+    // clean 404 (never a crash), which keeps zero-vaults a valid runtime state.
     const scopedScope: VaultRouteScope = {
       resolve: (context) => {
         const id = vaultIdParam(context);
@@ -225,10 +162,9 @@ export function createApp(options: CreateAppOptions): Hono {
 
 /**
  * Register the per-vault data routes (vault info, tree, search, files, folders)
- * on `router` under `basePath`. The `scope` decides which vault service each
+ * on `router` under `basePath`. The `scope` resolves which vault service each
  * request hits and which URL prefixes to strip when extracting vault-relative
- * paths. The flat routes and the `:id`-scoped routes both call this with
- * different scopes, so the file/folder/tree/search logic is written once.
+ * paths, keeping the file/folder/tree/search logic in exactly one place.
  */
 function registerVaultDataRoutes(
   router: Hono,
@@ -236,6 +172,18 @@ function registerVaultDataRoutes(
   actorDefault: ActorDefault,
   basePath = ''
 ): void {
+  router.post(`${basePath}/ops/flush`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    return mapServiceResult(context, await resolved.service.flushDirtySessions());
+  });
+
+  router.get(`${basePath}/events`, (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    return eventStreamResponse(resolved.service);
+  });
+
   router.get(`${basePath}/vault`, async (context) => {
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
@@ -503,12 +451,11 @@ function mapServiceResult(
 /**
  * Adapt the live registry to the MCP layer's vault provider. vaultId resolution
  * and vault enumeration both read from the same registry the HTTP routes use, so
- * the MCP endpoint never holds a second vault map. Omitted vaultId resolves to
- * the supplied default-vault service.
+ * the MCP endpoint never holds a second vault map. There is no default vault:
+ * every data tool must address a vault by id.
  */
-export function mcpVaultProvider(defaultService: VaultService, registry: VaultRegistry): LocalMcpVaultProvider {
+export function mcpVaultProvider(registry: VaultRegistry): LocalMcpVaultProvider {
   return {
-    default: () => defaultService,
     resolve: (id) => registry.get(id)?.service,
     list: () => registry.list()
   };

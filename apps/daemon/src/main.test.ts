@@ -42,7 +42,7 @@ describe('daemon startup', () => {
     await close(blocker);
   });
 
-  it('creates and serves the demo document on startup', async () => {
+  it('seeds and serves the first-boot starter vault through its scoped route', async () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
@@ -52,17 +52,26 @@ describe('daemon startup', () => {
     };
 
     const started = await startDaemon();
-    const response = await fetch(`http://127.0.0.1:${port}/api/demo-document`);
-    const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(body).toMatchObject({
+    // The first-boot starter vault is listed and reachable only via its scoped
+    // route — there is no flat default-vault surface.
+    const list = await fetch(`http://127.0.0.1:${port}/api/vaults`);
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
       ok: true,
-      document: 'demo-vault/README.md'
+      vaults: [{ id: 'demo-vault' }]
     });
-    expect(typeof body.content).toBe('string');
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/vaults/demo-vault/files/README.md`);
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ ok: true, path: 'README.md' });
     expect(body.content).toContain('Welcome to your vault');
     await expect(readFile(join(started.config.vaultRoot, 'README.md'), 'utf8')).resolves.toBe(body.content);
+
+    // The retired flat surface is gone.
+    const flat = await fetch(`http://127.0.0.1:${port}/api/demo-document`);
+    expect(flat.status).toBe(404);
 
     await started.close();
   });
@@ -82,7 +91,7 @@ describe('daemon startup', () => {
     await expect(readFile(join(firstBoot.config.vaultRoot, 'README.md'), 'utf8')).resolves.toContain('Welcome to your vault');
     await expect(readFile(join(firstBoot.config.vaultRoot, 'notes', 'getting-started.md'), 'utf8')).resolves.toContain('Getting started');
 
-    const deleted = await fetch(`http://127.0.0.1:${port}/api/files/README.md`, { method: 'DELETE' });
+    const deleted = await fetch(`http://127.0.0.1:${port}/api/vaults/demo-vault/files/README.md`, { method: 'DELETE' });
     expect(deleted.status).toBe(200);
     await expect(access(join(firstBoot.config.vaultRoot, 'README.md'))).rejects.toBeTruthy();
     await firstBoot.close();
@@ -121,7 +130,7 @@ describe('daemon startup', () => {
     };
 
     const started = await startDaemon();
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/files/typo/missing.md/yjs`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/demo-vault/files/typo/missing.md/yjs`);
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
     });
@@ -146,7 +155,7 @@ describe('daemon startup', () => {
     };
 
     const started = await startDaemon();
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/files/typo/missing.md/yjs`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/demo-vault/files/typo/missing.md/yjs`);
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
     });
@@ -156,7 +165,7 @@ describe('daemon startup', () => {
       reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
     });
 
-    const created = await fetch(`http://127.0.0.1:${port}/api/files/typo/missing.md`, {
+    const created = await fetch(`http://127.0.0.1:${port}/api/vaults/demo-vault/files/typo/missing.md`, {
       method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: 'created immediately\n'
@@ -314,14 +323,14 @@ describe('daemon vault management API', () => {
   }
 
   it('drives the full create -> list -> rename -> delete lifecycle live, with no restart', async () => {
-    // The default vault is present from boot.
+    // The first-boot starter vault is present from boot.
     expect(await listVaults()).toContainEqual({ id: 'demo-vault', displayName: 'demo-vault' });
 
-    // CREATE: caller supplies only a display name; the daemon owns the slug.
+    // CREATE: caller supplies BOTH display name and an explicit, valid slug.
     const createResponse = await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'Field Notes' })
+      body: JSON.stringify({ displayName: 'Field Notes', slug: 'field-notes' })
     });
     expect(createResponse.status).toBe(201);
     await expect(createResponse.json()).resolves.toEqual({
@@ -383,7 +392,7 @@ describe('daemon vault management API', () => {
     await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'Scoped' })
+      body: JSON.stringify({ displayName: 'Scoped', slug: 'scoped' })
     });
 
     // Write a note into the scoped vault only.
@@ -405,9 +414,13 @@ describe('daemon vault management API', () => {
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({ ok: true, content: 'scoped content\n' });
 
-    // The default (flat) vault does not see the scoped vault's note.
+    // The retired flat route does not exist: it falls through to a clean 404.
     const flatRead = await fetch(`${base()}/api/files/only-here.md`);
     expect(flatRead.status).toBe(404);
+
+    // A different vault does not see the scoped vault's note either.
+    const otherRead = await fetch(`${base()}/api/vaults/demo-vault/files/only-here.md`);
+    expect(otherRead.status).toBe(404);
   });
 
   it('returns a clean 404 for data routes addressing an unknown vault, without crashing', async () => {
@@ -424,24 +437,73 @@ describe('daemon vault management API', () => {
     const first = await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'Dup' })
+      body: JSON.stringify({ displayName: 'Dup', slug: 'dup' })
     });
     expect(first.status).toBe(201);
 
     const collision = await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'dup' })
+      body: JSON.stringify({ displayName: 'Another Dup', slug: 'dup' })
     });
     expect(collision.status).toBe(409);
     await expect(collision.json()).resolves.toMatchObject({ ok: false, error: 'already_exists' });
+  });
+
+  it('rejects a create with an invalid or missing slug as a clean 400', async () => {
+    // A non-normalized slug is never inferred from the display name; it is a 400.
+    const invalid = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Field Notes', slug: 'Field Notes' })
+    });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({ ok: false, error: 'invalid_request' });
+
+    // A missing slug is also a clean 400 (the server never infers it).
+    const missing = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Field Notes' })
+    });
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'invalid_request' });
+
+    // Nothing landed on disk for the rejected slug.
+    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
+  });
+
+  it('treats zero vaults as a valid state: deleting the last vault still serves', async () => {
+    // Delete the only (starter) vault, leaving the daemon with no vaults.
+    const deleted = await fetch(`${base()}/api/vaults/demo-vault`, { method: 'DELETE' });
+    expect(deleted.status).toBe(200);
+
+    // Listing returns an empty array, not an error.
+    await expect(listVaults()).resolves.toEqual([]);
+
+    // Scoped routes for the now-missing vault return a clean 404 (no crash).
+    const goneTree = await fetch(`${base()}/api/vaults/demo-vault/tree`);
+    expect(goneTree.status).toBe(404);
+
+    // The daemon is still healthy and the web bundle path still serves.
+    const health = await fetch(`${base()}/api/health`);
+    expect(health.status).toBe(200);
+
+    // A fresh vault can still be created from the empty state.
+    const recreated = await fetch(`${base()}/api/vaults`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Fresh Start', slug: 'fresh-start' })
+    });
+    expect(recreated.status).toBe(201);
+    expect(await listVaults()).toContainEqual({ id: 'fresh-start', displayName: 'Fresh Start' });
   });
 
   it('edits a live document over the scoped Yjs WebSocket and persists to the scoped vault', async () => {
     await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: 'WS Vault' })
+      body: JSON.stringify({ displayName: 'WS Vault', slug: 'ws-vault' })
     });
     await fetch(`${base()}/api/vaults/ws-vault/files/doc.md`, {
       method: 'PUT',
@@ -504,11 +566,11 @@ describe('daemon multi-vault MCP surface', () => {
 
   const base = () => `http://127.0.0.1:${port}`;
 
-  async function createVault(displayName: string): Promise<string> {
+  async function createVault(displayName: string, slug: string): Promise<string> {
     const response = await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName })
+      body: JSON.stringify({ displayName, slug })
     });
     expect(response.status).toBe(201);
     const body = await response.json();
@@ -516,7 +578,7 @@ describe('daemon multi-vault MCP surface', () => {
   }
 
   it('lists every vault through the list_vaults tool, mirroring the registry', async () => {
-    const created = await createVault('Field Notes');
+    const created = await createVault('Field Notes', 'field-notes');
     expect(created).toBe('field-notes');
 
     const listed = await mcpToolJson(client, 'list_vaults', {}) as {
@@ -524,36 +586,39 @@ describe('daemon multi-vault MCP surface', () => {
       vaults: Array<{ id: string; displayName: string }>;
     };
     expect(listed.ok).toBe(true);
-    // The default vault plus the freshly created one — same shape the HTTP API returns.
+    // The starter vault plus the freshly created one — same shape the HTTP API returns.
     expect(listed.vaults).toContainEqual({ id: 'demo-vault', displayName: 'demo-vault' });
     expect(listed.vaults).toContainEqual({ id: 'field-notes', displayName: 'Field Notes' });
   });
 
-  it('advertises the optional vaultId param on data tools but not on list_vaults', async () => {
+  it('requires the vaultId param on data tools but not on list_vaults', async () => {
     const tools = await client.listTools();
     const vaultInfo = tools.tools.find((tool) => tool.name === 'vault_info');
     expect(vaultInfo?.inputSchema.properties).toHaveProperty('vaultId');
+    expect(vaultInfo?.inputSchema.required ?? []).toContain('vaultId');
     const createNote = tools.tools.find((tool) => tool.name === 'create_note');
     expect(createNote?.inputSchema.properties).toHaveProperty('vaultId');
+    expect(createNote?.inputSchema.required ?? []).toContain('vaultId');
     const listVaults = tools.tools.find((tool) => tool.name === 'list_vaults');
     expect(listVaults?.inputSchema.properties ?? {}).not.toHaveProperty('vaultId');
   });
 
-  it('operates on the default vault when vaultId is omitted (backward compatible)', async () => {
-    await expect(mcpToolJson(client, 'create_note', { path: 'in-default.md', content: 'default body\n' }))
-      .resolves.toMatchObject({ ok: true, path: 'in-default.md' });
+  it('rejects a data-tool call that omits vaultId (no default vault)', async () => {
+    const missing = await client.callTool({ name: 'create_note', arguments: { path: 'nope.md', content: 'x\n' } });
+    expect(missing.isError).toBe(true);
 
-    // It landed in the default vault's folder on disk.
-    await expect(readFile(join(kb2Home, 'vaults', 'demo-vault', 'in-default.md'), 'utf8'))
-      .resolves.toBe('default body\n');
+    // Nothing was written into any vault.
+    await expect(access(join(kb2Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
 
-    // And reads back with no vaultId.
-    await expect(mcpToolJson(client, 'read_note', { path: 'in-default.md' }))
-      .resolves.toMatchObject({ ok: true, content: 'default body\n' });
+    // The same call WITH a valid vaultId succeeds.
+    await expect(mcpToolJson(client, 'create_note', { vaultId: 'demo-vault', path: 'in-starter.md', content: 'body\n' }))
+      .resolves.toMatchObject({ ok: true, path: 'in-starter.md' });
+    await expect(readFile(join(kb2Home, 'vaults', 'demo-vault', 'in-starter.md'), 'utf8'))
+      .resolves.toBe('body\n');
   });
 
-  it('addresses a second vault by vaultId and keeps it isolated from the default vault', async () => {
-    const vaultId = await createVault('Second');
+  it('addresses a second vault by vaultId and keeps it isolated from the starter vault', async () => {
+    const vaultId = await createVault('Second', 'second');
     expect(vaultId).toBe('second');
 
     // Write a note into the second vault via MCP using its vaultId.
@@ -571,13 +636,13 @@ describe('daemon multi-vault MCP surface', () => {
     await expect(mcpToolJson(client, 'read_note', { vaultId, path: 'only-in-second.md' }))
       .resolves.toMatchObject({ ok: true, content: 'second body\n' });
 
-    // Cross-vault isolation: the default vault does not see it (MCP and HTTP both miss).
-    const defaultRead = await client.callTool({ name: 'read_note', arguments: { path: 'only-in-second.md' } });
-    expect(defaultRead.isError).toBe(true);
-    expect(mcpText(defaultRead)).toContain('"error":"not_found"');
+    // Cross-vault isolation: the starter vault does not see it (MCP and HTTP both miss).
+    const starterRead = await client.callTool({ name: 'read_note', arguments: { vaultId: 'demo-vault', path: 'only-in-second.md' } });
+    expect(starterRead.isError).toBe(true);
+    expect(mcpText(starterRead)).toContain('"error":"not_found"');
 
-    const httpFlatRead = await fetch(`${base()}/api/files/only-in-second.md`);
-    expect(httpFlatRead.status).toBe(404);
+    const httpStarterRead = await fetch(`${base()}/api/vaults/demo-vault/files/only-in-second.md`);
+    expect(httpStarterRead.status).toBe(404);
 
     // And the HTTP scoped route for the second vault DOES see it — same content.
     const httpScopedRead = await fetch(`${base()}/api/vaults/second/files/only-in-second.md`);
