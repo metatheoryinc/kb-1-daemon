@@ -2,8 +2,9 @@
   import { afterNavigate, goto } from '$app/navigation';
   import {
     createDemoDocumentProvider,
-    encodeVaultPath,
     isDemoDocumentProviderOpenError,
+    parseVaultRoute,
+    vaultRoute,
   } from '$lib/yjs/demo-document-provider';
   import type {
     DemoDocumentProvider,
@@ -33,8 +34,9 @@
     type LocalTreeNode,
     type RailNavId,
     type VaultFilterEntry,
+    type VaultGroupData,
   } from '@kb-2/ui';
-  import { kbService } from '$lib/kb-service';
+  import { kbService, type VaultSummary } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import {
     useAppState,
@@ -65,6 +67,9 @@
         fields: DialogField[];
         submitLabel: string;
         run: (values: string[]) => Promise<void>;
+        /** Follow-up after a successful run. Defaults to an active-tree
+            refresh; vault-level ops own their own follow-up via `run`. */
+        afterSuccess?: () => Promise<void>;
         busy: boolean;
         error: string | null;
       }
@@ -75,6 +80,7 @@
         confirmLabel: string;
         destructive: boolean;
         run: () => Promise<void>;
+        afterSuccess?: () => Promise<void>;
         busy: boolean;
         error: string | null;
       }
@@ -102,17 +108,40 @@
   let persistRecoveredVisible = $state(false);
   let docDeleted = $state(false);
   let notFoundPath = $state<string | null>(null);
-  let documentPath = $state('hello-world.md');
-  let vaultName = $state('Vault');
-  let tree = $state<LocalTreeNode[]>([]);
-  // Stable id seeding the tree's expansion keys. The single local vault
-  // has no durable id of its own, so the vault name stands in.
-  const vaultId = $derived(vaultName);
-  // The filter lists the single local vault. The deny-list lives in the
-  // app-state store; toggling here hides/shows the lone vault's tree.
-  const vaults = $derived<VaultFilterEntry[]>([
-    { id: vaultId, name: vaultName, accent: 'slate' },
-  ]);
+  let documentPath = $state('');
+  // The vaults the daemon serves (id = stable slug, displayName = label),
+  // and the active vault's slug — the URL's first segment. The active id
+  // keys every data call and the collaborative socket.
+  let knownVaults = $state<VaultSummary[]>([]);
+  let activeVaultId = $state<string>('');
+  // Each vault's file tree, fetched lazily over the scoped tree route and
+  // cached by vault id. The rail groups by vault, so it needs all trees;
+  // the active vault's tree also drives the canvas + wikilink resolution.
+  let vaultTrees = $state<Record<string, LocalTreeNode[]>>({});
+
+  // The active vault's display name (header + breadcrumb root) and its
+  // tree (the canvas + folder resolution operate on the active vault).
+  const activeVault = $derived(knownVaults.find((v) => v.id === activeVaultId));
+  const vaultName = $derived(activeVault?.displayName ?? activeVaultId);
+  const vaultId = $derived(activeVaultId);
+  const tree = $derived<LocalTreeNode[]>(vaultTrees[activeVaultId] ?? []);
+
+  // The filter lists every vault. The deny-list lives in the app-state
+  // store; toggling hides/shows a vault's group in the rail.
+  const vaults = $derived<VaultFilterEntry[]>(
+    knownVaults.map((v) => ({ id: v.id, name: v.displayName, accent: 'slate' })),
+  );
+  // One render-ready group per vault, each carrying its own tree. The
+  // rail renders a VaultGroup per entry; trees not yet fetched render
+  // empty until their fetch lands.
+  const vaultGroups = $derived<VaultGroupData[]>(
+    knownVaults.map((v) => ({
+      id: v.id,
+      name: v.displayName,
+      accent: 'slate',
+      tree: vaultTrees[v.id] ?? [],
+    })),
+  );
   let mounted = $state(false);
   // Which secondary panel the rail has selected. 'files' shows the tree;
   // 'starred' shows the (currently empty) starred view.
@@ -242,12 +271,18 @@
       : undefined,
   );
 
-  // Pull the vault-relative folder path back out of an opaque folder key
+  // Pull `{ vaultId, path }` back out of an opaque folder key
   // (`folder:<vaultId>:<path>`). The shell's three-state click hands us
-  // the key; navigation needs the path.
-  function folderPathFromKey(key: string): string {
-    const prefix = `folder:${vaultId}:`;
-    return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+  // the key; navigation needs both the vault and the path. The vault id
+  // is a slug (no colon); the path is whatever follows the second colon.
+  function folderKeyParts(key: string): { vaultId: string; path: string } {
+    const withoutKind = key.startsWith('folder:') ? key.slice('folder:'.length) : key;
+    const colon = withoutKind.indexOf(':');
+    if (colon === -1) return { vaultId: activeVaultId, path: withoutKind };
+    return {
+      vaultId: withoutKind.slice(0, colon),
+      path: withoutKind.slice(colon + 1),
+    };
   }
 
   const editorSaveNotificationCopy = {
@@ -388,7 +423,7 @@
       const nextPath = event.toPath ?? event.path;
       documentPath = nextPath;
       docDeleted = false;
-      void goto(`/${encodeVaultPath(nextPath)}`, { replaceState: true, noScroll: true, keepFocus: true });
+      void goto(vaultRoute(activeVaultId, nextPath), { replaceState: true, noScroll: true, keepFocus: true });
       void refreshTree();
       return;
     }
@@ -455,6 +490,7 @@
     notFoundPath = null;
     docDeleted = false;
     const nextProvider = createDemoDocumentProvider({
+      vaultId: activeVaultId,
       path,
       onStatus: (nextStatus) => {
         if (generation !== providerGeneration) return;
@@ -485,7 +521,35 @@
   async function openDocument(path: string): Promise<void> {
     if (path === documentPath && notFoundPath !== path) return;
     rebindDocument(path);
-    await goto(`/${encodeVaultPath(path)}`, { noScroll: true, keepFocus: true });
+    await goto(vaultRoute(activeVaultId, path), { noScroll: true, keepFocus: true });
+  }
+
+  // Switch the active vault: navigate to its root. The afterNavigate hook
+  // rebinds state (active id, document, tree) off the new URL.
+  async function openVault(vaultId: string): Promise<void> {
+    if (vaultId === activeVaultId) return;
+    await goto(vaultRoute(vaultId, ''), { noScroll: true });
+  }
+
+  // A file row reports only its path; the rail shows every vault's tree,
+  // so resolve which vault owns the path before routing. The active vault
+  // wins ties (the common case); otherwise the first vault whose tree
+  // carries the path. Routes there, switching the active vault if needed.
+  function openFileFromRow(path: string): void {
+    if (findNode(tree, path)) {
+      void openDocument(path);
+      return;
+    }
+    const owner = knownVaults.find(
+      (v) => v.id !== activeVaultId && findNode(vaultTrees[v.id] ?? [], path),
+    );
+    if (owner) {
+      void goto(vaultRoute(owner.id, path), { noScroll: true, keepFocus: true });
+      return;
+    }
+    // Not found in any loaded tree (e.g. a brand-new note) — open it in
+    // the active vault.
+    void openDocument(path);
   }
 
   // Wikilink navigation. The editor fires with the URL-encoded target;
@@ -542,13 +606,30 @@
   // renders and the row goes active. (Closed → expand and open + active
   // → collapse are handled inside the row itself via onToggleFolder.)
   function openFolder(key: string): void {
-    void openDocument(folderPathFromKey(key));
+    const { vaultId: keyVaultId, path } = folderKeyParts(key);
+    if (keyVaultId !== activeVaultId) {
+      void goto(vaultRoute(keyVaultId, path), { noScroll: true, keepFocus: true });
+      return;
+    }
+    void openDocument(path);
+  }
+
+  // Pull the vault id back out of an opaque vault key (`vault:<id>`).
+  function vaultIdFromKey(key: string): string {
+    return key.startsWith('vault:') ? key.slice('vault:'.length) : key;
   }
 
   function toggleVault(key: string): void {
-    // The vault key encodes the id (`vault:<id>`); the deny-list is
-    // keyed by raw id, so collapse iff the vault is currently expanded.
-    appState.setVaultCollapsed(vaultId, expandedVaultIds.has(key));
+    // The vault key encodes the id (`vault:<id>`); the deny-list is keyed
+    // by raw id, so collapse iff that vault is currently expanded.
+    appState.setVaultCollapsed(vaultIdFromKey(key), expandedVaultIds.has(key));
+  }
+
+  // A vault header click navigates to that vault's root (switching the
+  // active vault when it differs). The header also toggles expansion via
+  // `onToggleVault`, so this only owns the navigate.
+  function openVaultFromKey(key: string): void {
+    void openVault(vaultIdFromKey(key));
   }
 
   function toggleColorMode(): void {
@@ -567,22 +648,40 @@
     appState.setSecondaryRailWidth(next);
   }
 
-  async function refreshVaultInfo(): Promise<void> {
+  // Load the vault list. The display names drive the rail + breadcrumb;
+  // the ids drive every scoped route. Returns the loaded list so the
+  // caller can pick a default vault on first load.
+  async function refreshVaults(): Promise<VaultSummary[]> {
     try {
-      const info = await kbService.vaultInfo();
-      vaultName = info.rootName;
+      knownVaults = await kbService.listVaults();
+      return knownVaults;
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+      return knownVaults;
+    }
+  }
+
+  // Fetch one vault's tree into the per-vault cache. The rail groups by
+  // vault, so every known vault's tree is fetched; the active vault's
+  // also feeds the canvas + wikilink resolution.
+  async function loadVaultTree(vaultId: string): Promise<void> {
+    if (!vaultId) return;
+    try {
+      const entries = await kbService.tree(vaultId);
+      vaultTrees = { ...vaultTrees, [vaultId]: buildTree(entries as TreeEntry[]) };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
   }
 
+  // Refresh every known vault's tree (rail grouping needs them all).
+  async function loadAllTrees(): Promise<void> {
+    await Promise.all(knownVaults.map((v) => loadVaultTree(v.id)));
+  }
+
+  // Refresh the ACTIVE vault's tree — used after a file/folder mutation.
   async function refreshTree(): Promise<void> {
-    try {
-      const entries = await kbService.tree();
-      tree = buildTree(entries as TreeEntry[]);
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    }
+    await loadVaultTree(activeVaultId);
   }
 
   // ---- Path helpers for the file-management operations ----------------
@@ -635,13 +734,19 @@
   }
 
   // Run a dialog's operation, keeping the dialog open with a busy/error
-  // state so a failure surfaces in-place rather than being swallowed.
+  // state so a failure surfaces in-place rather than being swallowed. By
+  // default a success refreshes the active vault's tree; vault-level ops
+  // (create/rename/delete) pass their own follow-up via `afterSuccess`.
   async function runDialogOperation(operation: () => Promise<void>): Promise<void> {
     if (dialog.kind === 'none') return;
+    const afterSuccess =
+      (dialog.kind === 'text' || dialog.kind === 'confirm') && dialog.afterSuccess
+        ? dialog.afterSuccess
+        : refreshTree;
     patchDialog({ busy: true, error: null });
     try {
       await operation();
-      await refreshTree();
+      await afterSuccess();
       closeDialog();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -678,7 +783,7 @@
         busy: false,
         error: null,
         run: async () => {
-          await kbService.deleteNote(action.path);
+          await kbService.deleteNote(vaultId, action.path);
           appState.favoritesOnNoteDeleted(vaultId, action.path);
         },
       };
@@ -696,7 +801,7 @@
         run: async ([nextName]) => {
           const target = joinPath(parent, withMarkdownExtension(nextName));
           if (target === action.path) return;
-          await kbService.moveNote(action.path, target);
+          await kbService.moveNote(vaultId, action.path, target);
           appState.favoritesOnNoteRenamed(vaultId, action.path, target);
         },
       };
@@ -715,7 +820,7 @@
       run: async (destination) => {
         const target = joinPath(destination, name);
         if (target === action.path) return;
-        await kbService.moveNote(action.path, target);
+        await kbService.moveNote(vaultId, action.path, target);
         appState.favoritesOnNoteRenamed(vaultId, action.path, target);
       },
     };
@@ -750,7 +855,7 @@
         busy: false,
         error: null,
         run: async () => {
-          await kbService.deleteFolder(action.path);
+          await kbService.deleteFolder(vaultId, action.path);
           appState.favoritesOnFolderDeleted(vaultId, action.path);
         },
       };
@@ -768,7 +873,7 @@
         run: async ([nextName]) => {
           const target = joinPath(parent, nextName);
           if (target === action.path) return;
-          await kbService.moveFolder(action.path, target);
+          await kbService.moveFolder(vaultId, action.path, target);
           appState.favoritesOnFolderRenamed(vaultId, action.path, target);
         },
       };
@@ -790,49 +895,103 @@
       run: async (destination) => {
         const target = joinPath(destination, name);
         if (target === action.path) return;
-        await kbService.moveFolder(action.path, target);
+        await kbService.moveFolder(vaultId, action.path, target);
         appState.favoritesOnFolderRenamed(vaultId, action.path, target);
       },
     };
   }
 
   function openVaultDialog(action: Extract<LocalTreeAction, { kind: 'vault' }>): void {
+    // `new-vault` is vault-list-level (no target vault).
+    if (action.action === 'new-vault') {
+      openNewVaultDialog();
+      return;
+    }
+
+    // Every other vault action targets the group whose menu was used. The
+    // group stamps its id; fall back to the active vault for safety.
+    const targetVaultId = action.vaultId ?? activeVaultId;
+    const target = knownVaults.find((v) => v.id === targetVaultId);
+    const targetName = target?.displayName ?? targetVaultId;
+
     if (action.action === 'new-note') {
-      openNewNoteDialog('');
+      // Act in the targeted vault: switch to it first so the create +
+      // open land in the right vault, then open the dialog.
+      void openVault(targetVaultId).then(() => openNewNoteDialog(''));
       return;
     }
     if (action.action === 'new-folder') {
-      openNewFolderDialog('');
+      void openVault(targetVaultId).then(() => openNewFolderDialog(''));
       return;
     }
     if (action.action === 'rename') {
-      // The local vault has no rename endpoint — its display name is the
-      // on-disk root folder's basename, which the daemon does not expose
-      // for mutation. Surface that clearly rather than silently failing.
       dialog = {
-        kind: 'confirm',
+        kind: 'text',
         title: 'Rename vault',
-        description:
-          'Renaming the vault is not supported from the web UI yet. Rename the vault folder on disk instead.',
-        confirmLabel: 'OK',
-        destructive: false,
+        description: `Rename “${targetName}”. The vault’s folder on disk is unchanged.`,
+        fields: [{ type: 'text', label: 'Name', initialValue: targetName, required: true }],
+        submitLabel: 'Rename',
         busy: false,
         error: null,
-        run: async () => undefined,
+        run: async ([nextName]) => {
+          const trimmed = nextName.trim();
+          if (!trimmed || trimmed === targetName) return;
+          await kbService.renameVault(targetVaultId, trimmed);
+        },
+        // A rename only changes display names — refresh the list.
+        afterSuccess: async () => {
+          await refreshVaults();
+        },
       };
       return;
     }
-    // delete
+    // delete (soft-delete; the daemon moves the folder to trash)
     dialog = {
       kind: 'confirm',
       title: 'Delete vault',
-      description:
-        'Deleting the whole vault is not supported from the web UI. Remove the vault folder on disk instead.',
-      confirmLabel: 'OK',
-      destructive: false,
+      description: `Delete “${targetName}”? Its folder moves to the trash and the vault leaves the rail.`,
+      confirmLabel: 'Delete',
+      destructive: true,
       busy: false,
       error: null,
-      run: async () => undefined,
+      run: async () => {
+        await kbService.deleteVault(targetVaultId);
+      },
+      // Drop the vault from the list; if it was active, land in a survivor.
+      afterSuccess: async () => {
+        await refreshVaults();
+        if (targetVaultId === activeVaultId) {
+          const survivor = knownVaults[0];
+          if (survivor) await openVault(survivor.id);
+        }
+      },
+    };
+  }
+
+  // The footer "New vault" affordance. Collects a display name (matching
+  // the new-note/new-folder naming UX) and creates the vault; the daemon
+  // infers the slug. A slug collision surfaces the daemon's 409 cleanly
+  // in the dialog's error slot. On success the new vault appears in the
+  // rail and becomes active.
+  function openNewVaultDialog(): void {
+    dialog = {
+      kind: 'text',
+      title: 'New vault',
+      description: 'Create a new vault. A folder is created on disk from the name.',
+      fields: [{ type: 'text', label: 'Name', placeholder: 'untitled', required: true }],
+      submitLabel: 'Create',
+      busy: false,
+      error: null,
+      run: async ([nextName]) => {
+        const trimmed = nextName.trim();
+        if (!trimmed) return;
+        const created = await kbService.createVault(trimmed);
+        // Reflect the new vault and switch to it.
+        await refreshVaults();
+        await openVault(created.id);
+      },
+      // `run` already refreshed the list + navigated; no tree refresh.
+      afterSuccess: async () => undefined,
     };
   }
 
@@ -847,7 +1006,7 @@
       error: null,
       run: async ([nextName]) => {
         const target = joinPath(parent, withMarkdownExtension(nextName));
-        await kbService.createNote(target);
+        await kbService.createNote(vaultId, target);
         if (parent) appState.expandFolders([expansionKey('folder', vaultId, parent)]);
         await openDocument(target);
       },
@@ -865,7 +1024,7 @@
       error: null,
       run: async ([nextName]) => {
         const target = joinPath(parent, nextName);
-        await kbService.createFolder(target);
+        await kbService.createFolder(vaultId, target);
         // Unfurl the parent and the new folder so the addition is visible.
         const keys = [expansionKey('folder', vaultId, target)];
         if (parent) keys.push(expansionKey('folder', vaultId, parent));
@@ -934,11 +1093,10 @@
   }
 
 
-  function documentPathFromUrl(url: URL): string {
-    if (url.pathname === '/') {
-      return 'hello-world.md';
-    }
-    return decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  // Parse the route into `{ vaultId, path }`. A root URL (`/`) yields a
+  // null vaultId, signalling "land in the default vault".
+  function routeFromUrl(url: URL): { vaultId: string | null; path: string } {
+    return parseVaultRoute(url.pathname);
   }
 
   // Mirror the store's persisted choice so the toggle icon reflects the
@@ -997,26 +1155,59 @@
     });
   });
 
+  // First-load bootstrap. Load the vault list, resolve the active vault
+  // from the URL (or fall back to the default = first vault), normalize
+  // the URL to `/<vaultId>/<path>`, then open the document + load the
+  // rail's trees. Visiting `/` lands in the default vault.
+  async function bootstrap(): Promise<void> {
+    const loaded = await refreshVaults();
+    if (loaded.length === 0) {
+      // No vaults to serve — nothing to open. The rail shows its empty
+      // state; an explicit error (if any) already surfaced.
+      return;
+    }
+
+    const route = routeFromUrl(new URL(window.location.href));
+    const known = route.vaultId && loaded.some((v) => v.id === route.vaultId);
+    const targetVaultId = known ? (route.vaultId as string) : loaded[0].id;
+    const targetPath = known ? route.path : '';
+
+    activeVaultId = targetVaultId;
+    documentPath = targetPath;
+
+    // Normalize the URL when we redirected (root, or an unknown vault).
+    if (!known) {
+      await goto(vaultRoute(targetVaultId, targetPath), {
+        replaceState: true,
+        noScroll: true,
+        keepFocus: true,
+      });
+    }
+
+    rebindDocument(targetPath);
+    void loadAllTrees();
+  }
+
   afterNavigate((navigation) => {
     if (!mounted || !navigation.to?.url) return;
-    const nextPath = documentPathFromUrl(navigation.to.url);
-    if (nextPath === documentPath) return;
-    rebindDocument(nextPath);
+    const route = routeFromUrl(navigation.to.url);
+    // A root URL or an unknown vault redirects to the default vault; the
+    // bootstrap + this same hook handle that, so ignore until resolved.
+    if (!route.vaultId) return;
+
+    const vaultChanged = route.vaultId !== activeVaultId;
+    if (vaultChanged) {
+      activeVaultId = route.vaultId;
+      // Ensure the now-active vault's tree is loaded for the canvas.
+      if (!vaultTrees[route.vaultId]) void loadVaultTree(route.vaultId);
+    }
+    if (route.path === documentPath && !vaultChanged) return;
+    rebindDocument(route.path);
   });
 
   onMount(() => {
     mounted = true;
-    const initialPath = documentPathFromUrl(new URL(window.location.href));
-    if (window.location.pathname === '/') {
-      documentPath = 'hello-world.md';
-      void goto('/hello-world.md', { replaceState: true, noScroll: true, keepFocus: true });
-    } else {
-      documentPath = initialPath;
-    }
-
-    openProvider(documentPath);
-    void refreshVaultInfo();
-    void refreshTree();
+    void bootstrap();
 
     return () => {
       mounted = false;
@@ -1138,6 +1329,8 @@
     colorModeChoice={colorModePref}
     {activeNav}
     {tree}
+    {vaultGroups}
+    activeVaultIdForPath={activeVaultId}
     {vaults}
     {hiddenVaultIds}
     {expandedFolderIds}
@@ -1154,11 +1347,11 @@
     onToggleColorMode={toggleColorMode}
     onToggleFolder={toggleFolder}
     onToggleVault={toggleVault}
-    onOpenFile={(path) => {
-      void openDocument(path);
-    }}
+    onOpenFile={openFileFromRow}
     onOpenFolder={openFolder}
+    onOpenVault={openVaultFromKey}
     onTreeAction={handleTreeAction}
+    onNewVault={openNewVaultDialog}
   >
     {@render canvasBody()}
   </LocalEditorMobileShell>
@@ -1180,6 +1373,8 @@
     {activeNav}
     {railCollapsed}
     {tree}
+    {vaultGroups}
+    activeVaultIdForPath={activeVaultId}
     {vaults}
     {hiddenVaultIds}
     {secondaryRailWidth}
@@ -1199,11 +1394,11 @@
     onToggleRailCollapsed={toggleRailCollapsed}
     onToggleFolder={toggleFolder}
     onToggleVault={toggleVault}
-    onOpenFile={(path) => {
-      void openDocument(path);
-    }}
+    onOpenFile={openFileFromRow}
     onOpenFolder={openFolder}
+    onOpenVault={openVaultFromKey}
     onTreeAction={handleTreeAction}
+    onNewVault={openNewVaultDialog}
   >
     {@render canvasBody()}
   </LocalEditorShell>

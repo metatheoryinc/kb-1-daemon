@@ -2,8 +2,14 @@
   import VaultGroup from './VaultGroup.svelte';
   import VaultFilterButton from './VaultFilterButton.svelte';
   import VaultFilterPopover from './VaultFilterPopover.svelte';
+  import FilesPanelFooter from './FilesPanelFooter.svelte';
   import type { AccentName } from '../primitives/accent';
-  import type { LocalTreeAction, LocalTreeNode, VaultFilterEntry } from './types';
+  import type {
+    LocalTreeAction,
+    LocalTreeNode,
+    VaultFilterEntry,
+    VaultGroupData,
+  } from './types';
 
   interface Props {
     vaultName: string;
@@ -12,14 +18,24 @@
     vaultId?: string;
     /** Accent for the vault group's folder token. */
     vaultAccent?: AccentName;
-    /** Full set of vaults the filter lists. Defaults to a single entry
-        built from this panel's own vault so a caller that only wires the
-        tree still gets a working filter. */
+    /** The vaults the rail groups by, each with its own tree. When given,
+        the panel renders one group per vault (the multi-vault rail). When
+        omitted, the panel synthesizes a single group from the
+        `vaultName`/`vaultId`/`vaultAccent`/`tree` props — the
+        backward-compatible single-vault shape. */
+    vaultGroups?: VaultGroupData[];
+    /** Full set of vaults the filter lists. Defaults to the set derived
+        from `vaultGroups` (or this panel's own single vault) so a caller
+        that only wires the tree still gets a working filter. */
     vaults?: VaultFilterEntry[];
     /** Deny-list of vault ids the user has hidden. Owned by the app. */
     hiddenVaultIds?: string[];
-    tree: LocalTreeNode[];
+    tree?: LocalTreeNode[];
     activePath?: string;
+    /** Which vault the active path belongs to — scopes the active-row
+        highlight + favorite menus to that vault's group. Defaults to the
+        single vault when there's only one. */
+    activeVaultIdForPath?: string;
     /** Active folder row key when a folder is the active canvas. */
     activeFolderId?: string;
     /** Active vault key when the vault root is the active canvas. */
@@ -45,16 +61,20 @@
     onTreeAction?: (action: LocalTreeAction) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
+    /** Create a new vault (footer affordance). The host collects a name. */
+    onNewVault?: () => void;
   }
 
   let {
     vaultName,
     vaultId = vaultName,
     vaultAccent = 'slate',
+    vaultGroups,
     vaults,
     hiddenVaultIds = [],
     tree,
     activePath = '',
+    activeVaultIdForPath,
     activeFolderId,
     activeVaultId,
     expandedFolderIds = new Set<string>(),
@@ -69,13 +89,28 @@
     onOpenVault,
     onTreeAction,
     onToggleVaultHidden,
+    onNewVault,
   }: Props = $props();
 
   let filterOpen = $state(false);
 
-  // The filter lists the panel's own vault when no explicit set is given.
+  // The vault groups the rail renders. When the host supplies an explicit
+  // set, use it (the multi-vault rail); otherwise synthesize a single
+  // group from the single-vault props (the backward-compatible shape).
+  const groups = $derived<VaultGroupData[]>(
+    vaultGroups ?? [
+      { id: vaultId, name: vaultName, accent: vaultAccent, tree: tree ?? [] },
+    ],
+  );
+  // Which vault owns the active path. Defaults to the lone group when the
+  // host hasn't said (single-vault callers don't need to).
+  const activePathVaultId = $derived(
+    activeVaultIdForPath ?? (groups.length === 1 ? groups[0].id : undefined),
+  );
+
+  // The filter lists every group unless the host overrides the set.
   const allVaults = $derived<VaultFilterEntry[]>(
-    vaults ?? [{ id: vaultId, name: vaultName, accent: vaultAccent }],
+    vaults ?? groups.map((g) => ({ id: g.id, name: g.name, accent: g.accent })),
   );
   const totalVaults = $derived(allVaults.length);
   const hidden = $derived(new Set(hiddenVaultIds));
@@ -89,10 +124,9 @@
       : `${visibleCount} vault${visibleCount === 1 ? '' : 's'}`,
   );
 
-  // The tree only renders vaults the user hasn't hidden. The local shell
-  // has one vault, so hiding it empties the tree; the filter stays
-  // available to bring it back.
-  const vaultHidden = $derived(hidden.has(vaultId));
+  // The rail renders only the groups the user hasn't hidden. Hiding every
+  // vault empties the body; the filter stays available to bring them back.
+  const visibleGroups = $derived(groups.filter((g) => !hidden.has(g.id)));
 </script>
 
 <aside class="files-panel" aria-label="Vault files">
@@ -121,39 +155,44 @@
   </header>
 
   <div class="panel-body">
-    {#if vaultHidden || tree.length === 0}
-      <p class="loading">No notes yet.</p>
+    {#if visibleGroups.length === 0}
+      <p class="loading">No vaults to show.</p>
     {:else}
       <nav class="tree" aria-label="Files">
-        <VaultGroup
-          {vaultId}
-          {vaultName}
-          accent={vaultAccent}
-          {tree}
-          {activePath}
-          {activeFolderId}
-          {activeVaultId}
-          {expandedFolderIds}
-          {expandedVaultIds}
-          {favoritedFolderPaths}
-          {favoritedNotePaths}
-          {kebabAlwaysVisible}
-          {onToggleFolder}
-          {onToggleVault}
-          {onOpenFile}
-          {onOpenFolder}
-          {onOpenVault}
-          {onTreeAction}
-        />
+        {#each visibleGroups as group (group.id)}
+          <VaultGroup
+            vaultId={group.id}
+            vaultName={group.name}
+            accent={group.accent}
+            tree={group.tree}
+            activePath={group.id === activePathVaultId ? activePath : ''}
+            activeFolderId={group.id === activePathVaultId ? activeFolderId : undefined}
+            activeVaultId={group.id === activePathVaultId ? activeVaultId : undefined}
+            {expandedFolderIds}
+            {expandedVaultIds}
+            {favoritedFolderPaths}
+            {favoritedNotePaths}
+            {kebabAlwaysVisible}
+            {onToggleFolder}
+            {onToggleVault}
+            {onOpenFile}
+            {onOpenFolder}
+            {onOpenVault}
+            {onTreeAction}
+          />
+        {/each}
       </nav>
     {/if}
   </div>
+
+  <FilesPanelFooter {onNewVault} />
 </aside>
 
 <style>
   .files-panel {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    /* header | scrollable tree | footer (New vault). */
+    grid-template-rows: auto minmax(0, 1fr) auto;
     /* Self-sizing secondary panel: holds the resize-handle width and
        refuses to shrink, so the flex-row workspace absorbs the slack. */
     flex-shrink: 0;

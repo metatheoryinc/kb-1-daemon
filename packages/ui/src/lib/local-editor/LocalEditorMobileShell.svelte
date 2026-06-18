@@ -25,6 +25,7 @@
     LocalTreeNode,
     StarredRowData,
     VaultFilterEntry,
+    VaultGroupData,
   } from './types';
 
   interface Props {
@@ -54,7 +55,9 @@
     favoritedNotePaths?: Set<string>;
     userLabel?: string;
     brandLabel?: string;
-    tree: LocalTreeNode[];
+    tree?: LocalTreeNode[];
+    vaultGroups?: VaultGroupData[];
+    activeVaultIdForPath?: string;
     vaults?: VaultFilterEntry[];
     hiddenVaultIds?: string[];
     activeFolderId?: string;
@@ -70,6 +73,8 @@
     onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
     onToggleVaultHidden?: (vaultId: string) => void;
+    /** Create a new vault (files-rail footer). The host collects a name. */
+    onNewVault?: () => void;
     /** Open/closed state of the left-nav flyout. Bindable so the app can
         hoist it and close it on canvas-side navigation. */
     navOpen?: boolean;
@@ -97,6 +102,8 @@
     userLabel = 'Local user',
     brandLabel = 'Notes',
     tree,
+    vaultGroups,
+    activeVaultIdForPath,
     vaults,
     hiddenVaultIds = [],
     activeFolderId,
@@ -112,6 +119,7 @@
     onOpenVault,
     onTreeAction,
     onToggleVaultHidden,
+    onNewVault,
     navOpen = $bindable(false),
     children,
   }: Props = $props();
@@ -216,10 +224,12 @@
             {vaultName}
             {vaultId}
             {vaultAccent}
+            {vaultGroups}
             {vaults}
             {hiddenVaultIds}
             {tree}
             activePath={documentPath}
+            {activeVaultIdForPath}
             {activeFolderId}
             {activeVaultId}
             {expandedFolderIds}
@@ -234,6 +244,7 @@
             {onToggleVault}
             {onTreeAction}
             {onToggleVaultHidden}
+            {onNewVault}
           />
         {/if}
       </div>

@@ -34,6 +34,20 @@ export interface VaultFilterEntry {
   accent: AccentName;
 }
 
+/**
+ * One vault group the files rail renders: its identity, display name,
+ * accent, and its own file tree. The host builds one of these per vault
+ * (the tree is fetched per-vault over the scoped data routes) and the
+ * panel renders a `VaultGroup` for each. The panel stays prop-driven —
+ * it never fetches a tree itself.
+ */
+export interface VaultGroupData {
+  id: string;
+  name: string;
+  accent: AccentName;
+  tree: LocalTreeNode[];
+}
+
 export interface LocalSearchResult {
   path: string;
   line: number;
@@ -85,7 +99,15 @@ export interface StarredRowData {
 
 export interface LocalVaultAction {
   kind: 'vault';
-  action: 'new-note' | 'new-folder' | 'rename' | 'delete';
+  /**
+   * `new-vault` creates a brand-new vault and is vault-list-level, so it
+   * carries no `vaultId`. Every other action targets an existing vault
+   * group and stamps that group's `vaultId` so the host knows which vault
+   * the menu acted on (the rail now lists more than one).
+   */
+  action: 'new-note' | 'new-folder' | 'rename' | 'delete' | 'new-vault';
+  /** The vault the action targets. Absent for `new-vault`. */
+  vaultId?: string;
 }
 
 export type LocalTreeAction = LocalFileAction | LocalFolderAction | LocalVaultAction;

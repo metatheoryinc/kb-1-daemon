@@ -60,6 +60,7 @@ export type {
   LocalVaultAction,
   StarredRowData,
   VaultFilterEntry,
+  VaultGroupData,
 } from './local-editor/types';
 export type {
   DocumentSaveBannerProps,
