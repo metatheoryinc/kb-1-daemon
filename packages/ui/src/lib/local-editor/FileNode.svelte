@@ -1,11 +1,16 @@
 <script lang="ts">
   import Icon from '../primitives/Icon.svelte';
   import ContextMenu from '../menus/ContextMenu.svelte';
+  import { noteKey } from './expansion';
   import type { LocalFileNode, LocalTreeAction } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
 
   interface Props {
     node: LocalFileNode;
+    /** Vault id the row belongs to. Used to mint the opaque row id
+        (`note:<vaultId>:<path>`) the host decodes to route to the owning
+        vault — never the active one. Mirrors FolderNode. */
+    vaultId: string;
     /** Nesting depth — drives indentation so a file aligns under its
         folder's label rather than its caret. */
     depth?: number;
@@ -16,12 +21,17 @@
         right-click isn't available). When false (desktop), it only appears
         on row hover / keyboard focus. */
     kebabAlwaysVisible?: boolean;
-    onOpen?: (path: string) => void;
+    /** Open this file. Called with the opaque row id
+        (`note:<vaultId>:<path>`) — the same vault-bearing identity folder
+        rows use — so the host routes to the owning vault, not the active
+        one. */
+    onOpen?: (key: string) => void;
     onAction?: (action: LocalTreeAction) => void;
   }
 
   let {
     node,
+    vaultId,
     depth = 0,
     activePath = '',
     favoritedNotePaths,
@@ -77,7 +87,7 @@
       type="button"
       class="activate"
       aria-current={active ? 'page' : undefined}
-      onclick={() => onOpen?.(node.path)}
+      onclick={() => onOpen?.(noteKey(vaultId, node.path))}
     >
       <span class="spacer" aria-hidden="true"></span>
       <span class="file-icon" aria-hidden="true">

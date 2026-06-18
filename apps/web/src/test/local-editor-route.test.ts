@@ -2,23 +2,36 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import AppStateHarness from './AppStateHarness.svelte';
+import { setPageUrl } from './page-state.svelte';
 
 const mocks = vi.hoisted(() => ({
   goto: vi.fn(),
-  afterNavigateCallbacks: [] as Array<(navigation: { to: { url: URL } | null; type: string }) => void>,
   destroyProvider: vi.fn(),
   providers: [] as Array<{ path: string; doc: Y.Doc; text: Y.Text }>,
 }));
 
-vi.mock('$app/navigation', () => ({
-  goto: mocks.goto,
-  afterNavigate: vi.fn((callback) => {
-    mocks.afterNavigateCallbacks.push(callback);
-    return () => {
-      mocks.afterNavigateCallbacks = mocks.afterNavigateCallbacks.filter((candidate) => candidate !== callback);
-    };
-  }),
-}));
+// The route derives the active vault + open document from the URL, so the
+// `goto` mock NAVIGATES the reactive `page` mock (just like real SvelteKit:
+// a `goto` lands a new URL, the page's `$derived`s recompute). It still
+// records the call so navigation assertions hold. The helper is imported
+// inside the factory (not the hoisted top scope) so the mock stays valid.
+vi.mock('$app/navigation', async () => {
+  const { setPageUrl: navigate } = await import('./page-state.svelte');
+  return {
+    goto: vi.fn((url: string, opts?: unknown) => {
+      mocks.goto(url, opts);
+      navigate(url);
+      return Promise.resolve();
+    }),
+  };
+});
+
+// Reactive `page` stand-in (see page-state.svelte.ts) so `page.url` is the
+// single source of truth for the route under test.
+vi.mock('$app/state', async () => {
+  const { page } = await import('./page-state.svelte');
+  return { page };
+});
 
 vi.mock('@kb-2/editor', async () => {
   const { default: PlaintextEditor } = await import('./FakePlaintextEditor.svelte');
@@ -61,7 +74,6 @@ vi.mock('$lib/yjs/demo-document-provider', async () => {
 describe('local editor route', () => {
   beforeEach(() => {
     mocks.goto.mockReset();
-    mocks.afterNavigateCallbacks = [];
     mocks.destroyProvider.mockReset();
     mocks.providers = [];
     // The harness builds the app-state store against `localStorage`, which
@@ -72,7 +84,10 @@ describe('local editor route', () => {
     if (typeof window.localStorage?.clear === 'function') {
       window.localStorage.clear();
     }
-    // The route is now vault-segmented: `/<vaultId>/<path>`.
+    // The route is now vault-segmented: `/<vaultId>/<path>`. The page mock
+    // is the source of truth the route derives from; keep `window.history`
+    // in sync too so bootstrap's `window.location.pathname` read agrees.
+    setPageUrl('/demo-vault/hello-world.md');
     window.history.pushState(null, '', '/demo-vault/hello-world.md');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -148,6 +163,7 @@ describe('local editor route', () => {
   });
 
   it('renders an in-shell not-found state for missing document navigation without creating it', async () => {
+    setPageUrl('/demo-vault/projects/missing.md');
     window.history.pushState(null, '', '/demo-vault/projects/missing.md');
 
     render(AppStateHarness);
@@ -211,13 +227,13 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// History navigation (back/forward, deep-link) lands a new URL. The route
+// derives everything from `page.url`, so point the page mock at the new
+// pathname — the component's `$derived`s recompute exactly as they would
+// under a real popstate. Keep `window.history` in sync for any direct
+// `window.location` reads.
 async function simulateNavigation(pathname: string): Promise<void> {
+  setPageUrl(pathname);
   window.history.pushState(null, '', pathname);
-  for (const callback of mocks.afterNavigateCallbacks) {
-    callback({
-      to: { url: new URL(window.location.href) },
-      type: 'popstate',
-    });
-  }
   await Promise.resolve();
 }

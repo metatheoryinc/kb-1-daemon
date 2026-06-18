@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { afterNavigate, goto } from '$app/navigation';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import {
     createDemoDocumentProvider,
     isDemoDocumentProviderOpenError,
@@ -120,16 +121,26 @@
   let persistRecoveredVisible = $state(false);
   let docDeleted = $state(false);
   let notFoundPath = $state<string | null>(null);
-  let documentPath = $state('');
-  // The vaults the daemon serves (id = stable slug, displayName = label),
-  // and the active vault's slug — the URL's first segment. The active id
-  // keys every data call and the collaborative socket.
+  // The vaults the daemon serves (id = stable slug, displayName = label).
+  // The active id keys every data call and the collaborative socket.
   let knownVaults = $state<VaultSummary[]>([]);
-  let activeVaultId = $state<string>('');
   // Each vault's file tree, fetched lazily over the scoped tree route and
   // cached by vault id. The rail groups by vault, so it needs all trees;
   // the active vault's tree also drives the canvas + wikilink resolution.
   let vaultTrees = $state<Record<string, LocalTreeNode[]>>({});
+
+  // The URL is the single source of truth for the active vault and the
+  // open document. Mirroring KB-1's derive-from-route pattern, both are
+  // DERIVED from `page.url` via the catch-all route parser, never
+  // imperatively assigned. Every navigation (a tree pick, a vault switch,
+  // a delete that lands in a survivor, a bootstrap redirect) happens by
+  // `goto`-ing the URL; these values then follow. A root or unknown-vault
+  // URL yields a null vaultId, which bootstrap normalizes to a real
+  // vault. Until that redirect lands the derived id is empty (zero-vault
+  // empty state, or the pre-redirect tick).
+  const route = $derived(parseVaultRoute(page.url.pathname));
+  const activeVaultId = $derived<string>(route.vaultId ?? '');
+  const documentPath = $derived<string>(route.vaultId ? route.path : '');
 
   // The active vault's display name (header + breadcrumb root) and its
   // tree (the canvas + folder resolution operate on the active vault).
@@ -210,10 +221,14 @@
     new Set(favorites.filter((e) => e.kind === 'folder' && e.vaultId === vaultId).map((e) => e.path)),
   );
   // Vaults default open: the persisted shape is a collapse deny-list, so
-  // the expanded set is its complement over the one local vault.
+  // the expanded set is its complement over every known vault. Deriving it
+  // across all vaults (not just the active one) keeps each vault's
+  // expansion independent, so opening one never collapses another.
   const expandedVaultIds = $derived.by<Set<string>>(() => {
     const out = new Set<string>();
-    if (!collapsedVaultIds.has(vaultId)) out.add(expansionKey('vault', vaultId));
+    for (const v of knownVaults) {
+      if (!collapsedVaultIds.has(v.id)) out.add(expansionKey('vault', v.id));
+    }
     return out;
   });
   let externalMergeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -294,6 +309,18 @@
   // is a slug (no colon); the path is whatever follows the second colon.
   function folderKeyParts(key: string): { vaultId: string; path: string } {
     const withoutKind = key.startsWith('folder:') ? key.slice('folder:'.length) : key;
+    const colon = withoutKind.indexOf(':');
+    if (colon === -1) return { vaultId: activeVaultId, path: withoutKind };
+    return {
+      vaultId: withoutKind.slice(0, colon),
+      path: withoutKind.slice(colon + 1),
+    };
+  }
+
+  // Pull `{ vaultId, path }` back out of an opaque file-row id
+  // (`note:<vaultId>:<path>`) — the file twin of folderKeyParts.
+  function noteKeyParts(key: string): { vaultId: string; path: string } {
+    const withoutKind = key.startsWith('note:') ? key.slice('note:'.length) : key;
     const colon = withoutKind.indexOf(':');
     if (colon === -1) return { vaultId: activeVaultId, path: withoutKind };
     return {
@@ -438,8 +465,9 @@
   function handleSessionEvent(event: DocumentSessionEvent): void {
     if (event.kind === 'doc-moved') {
       const nextPath = event.toPath ?? event.path;
-      documentPath = nextPath;
       docDeleted = false;
+      // Navigate to the moved path; the derived document path follows and
+      // the provider effect rebinds onto the new location.
       void goto(vaultRoute(activeVaultId, nextPath), { replaceState: true, noScroll: true, keepFocus: true });
       void refreshTree();
       return;
@@ -535,39 +563,33 @@
     provider = nextProvider;
   }
 
+  // Open a document by navigating to its URL. The derived document path
+  // follows, and the provider effect rebinds the Yjs provider (or tears
+  // it down for a folder/root). No state is mutated here.
   async function openDocument(path: string): Promise<void> {
     if (path === documentPath && notFoundPath !== path) return;
-    rebindDocument(path);
     await goto(vaultRoute(activeVaultId, path), { noScroll: true, keepFocus: true });
   }
 
-  // Switch the active vault: navigate to its root. The afterNavigate hook
-  // rebinds state (active id, document, tree) off the new URL. Remember it
-  // as the last-opened so the next cold load reopens here.
+  // Switch the active vault: navigate to its root. The derived active id
+  // follows the new URL; the active-vault effect remembers it as the
+  // last-opened and loads its tree if uncached.
   async function openVault(vaultId: string): Promise<void> {
     if (vaultId === activeVaultId) return;
-    appState.setLastOpenedVaultId(vaultId);
     await goto(vaultRoute(vaultId, ''), { noScroll: true });
   }
 
-  // A file row reports only its path; the rail shows every vault's tree,
-  // so resolve which vault owns the path before routing. The active vault
-  // wins ties (the common case); otherwise the first vault whose tree
-  // carries the path. Routes there, switching the active vault if needed.
-  function openFileFromRow(path: string): void {
-    if (findNode(tree, path)) {
-      void openDocument(path);
+  // The file row hands its opaque id (`note:<vaultId>:<path>`), the same
+  // vault-bearing identity folder rows use. Decode the owning vault and
+  // route there, switching the active vault when it differs — so a note
+  // never opens in the wrong vault just because another vault is active.
+  // Mirrors openFolder.
+  function openFileFromRow(key: string): void {
+    const { vaultId: keyVaultId, path } = noteKeyParts(key);
+    if (keyVaultId !== activeVaultId) {
+      void goto(vaultRoute(keyVaultId, path), { noScroll: true, keepFocus: true });
       return;
     }
-    const owner = knownVaults.find(
-      (v) => v.id !== activeVaultId && findNode(vaultTrees[v.id] ?? [], path),
-    );
-    if (owner) {
-      void goto(vaultRoute(owner.id, path), { noScroll: true, keepFocus: true });
-      return;
-    }
-    // Not found in any loaded tree (e.g. a brand-new note) — open it in
-    // the active vault.
     void openDocument(path);
   }
 
@@ -595,25 +617,16 @@
     void openDocument(targetPath);
   }
 
-  function rebindDocument(path: string): void {
-    documentPath = path;
-    // A folder (or the vault root) renders the folder canvas, which
-    // needs no Yjs document. Tear down any open provider and skip
-    // opening a new one — mirrors KB-1's selector picking FolderCanvas
-    // over DocumentCanvas. The folder/file split is decided against the
-    // live tree; a path the tree doesn't carry falls through as a
-    // document so deep-linked notes still open.
-    const node = findNode(tree, path);
-    if (path === '' || node?.kind === 'folder') {
-      provider?.destroy();
-      provider = null;
-      providerSynced = false;
-      status = 'connecting';
-      notFoundPath = null;
-      docDeleted = false;
-      return;
-    }
-    openProvider(path);
+  // Tear down any open provider and reset the document-canvas state. Used
+  // when the derived path resolves to a folder (or vault root), which
+  // renders the folder canvas and needs no Yjs document.
+  function teardownProvider(): void {
+    provider?.destroy();
+    provider = null;
+    providerSynced = false;
+    status = 'connecting';
+    notFoundPath = null;
+    docDeleted = false;
   }
 
   function toggleFolder(key: string): void {
@@ -995,21 +1008,18 @@
       },
       // Drop the vault from the list. If it was the active one, land in a
       // survivor — or, when it was the LAST vault, in the empty state
-      // (zero vaults is valid). Deleting the active vault also clears its
-      // last-opened so a stale slug isn't reopened next cold load.
+      // (zero vaults is valid). Both land by NAVIGATING; the derived
+      // active vault + document follow, and the provider effect tears
+      // down the editor. Deleting the last vault also clears last-opened
+      // so a stale slug isn't reopened next cold load.
       afterSuccess: async () => {
         await refreshVaults();
         if (targetVaultId === activeVaultId) {
           const survivor = knownVaults[0];
           if (survivor) {
-            await openVault(survivor.id);
+            await goto(vaultRoute(survivor.id, ''), { noScroll: true });
           } else {
-            // No vaults left — fall to the empty state cleanly.
-            activeVaultId = '';
-            documentPath = '';
-            provider?.destroy();
-            provider = null;
-            providerSynced = false;
+            // No vaults left — navigate to the root empty state cleanly.
             appState.setLastOpenedVaultId(null);
             await goto('/', { replaceState: true, noScroll: true });
           }
@@ -1137,14 +1147,6 @@
     return path.split('/').filter(Boolean).at(-1) ?? path;
   }
 
-
-  // Parse the route into `{ vaultId, path }`. A root URL (`/`) yields a
-  // null vaultId, signalling "resolve a target on bootstrap" (last-opened
-  // else first vault — there is no default vault).
-  function routeFromUrl(url: URL): { vaultId: string | null; path: string } {
-    return parseVaultRoute(url.pathname);
-  }
-
   // Mirror the store's persisted choice so the toggle icon reflects the
   // live preference. The root layout owns applying the mode to the DOM.
   $effect(() => {
@@ -1178,13 +1180,55 @@
   // into the expanded set so a deep-linked note's row is visible. The
   // vault un-collapse keeps a refresh-into-a-collapsed-vault honest.
   // `untrack` keeps the store writes from re-triggering this effect.
+  // Keyed on the derived path + vault, so it tracks the URL.
   $effect(() => {
     const path = documentPath;
     const id = vaultId;
+    if (!id) return;
     untrack(() => {
       appState.setVaultCollapsed(id, false);
       const keys = ancestorKeysForPath(path, id);
       if (keys.length > 0) appState.expandFolders(keys);
+    });
+  });
+
+  // URL → active vault. Whenever the derived active vault changes (a
+  // vault-header click, a cross-vault file/folder open, a bootstrap
+  // redirect, a delete landing in a survivor), remember it as the
+  // last-opened so the next cold load reopens here, and load its tree if
+  // it isn't cached yet. Replaces the old `afterNavigate` vault branch;
+  // it fires for EVERY active-vault change, including cross-vault opens
+  // that never went through `openVault`.
+  $effect(() => {
+    const id = activeVaultId;
+    if (!id) return;
+    untrack(() => {
+      appState.setLastOpenedVaultId(id);
+      if (!vaultTrees[id]) void loadVaultTree(id);
+    });
+  });
+
+  // URL → Yjs provider. The derived document path owns the provider
+  // lifecycle: a file opens a provider; a folder (or the vault root)
+  // tears it down and renders the folder canvas — mirroring KB-1's
+  // selector picking FolderCanvas over DocumentCanvas. Keyed on the
+  // active vault + path so it reacts to navigation, NOT to tree
+  // refreshes (which would needlessly reopen the live provider); the
+  // folder/file split is read against the live tree via `untrack`. A
+  // path the tree doesn't carry yet falls through as a document so
+  // deep-linked notes still open; the folder-canvas teardown effect
+  // below corrects a stray provider once the tree resolves it to a
+  // folder.
+  $effect(() => {
+    const id = activeVaultId;
+    const path = documentPath;
+    if (!id) return;
+    untrack(() => {
+      if (path === '' || findNode(tree, path)?.kind === 'folder') {
+        teardownProvider();
+        return;
+      }
+      openProvider(path);
     });
   });
 
@@ -1201,10 +1245,13 @@
     });
   });
 
-  // First-load bootstrap. Load the vault list, resolve the active vault
-  // from the URL (or fall back to the last-opened vault, else the first in
-  // the list — there is NO default vault), normalize the URL to
-  // `/<vaultId>/<path>`, then open the document + load the rail's trees.
+  // First-load bootstrap. Load the vault list, then — when the URL is the
+  // root or an unknown vault — RESOLVE a target (last-opened vault if it
+  // still exists, else the first in the list; there is NO default vault)
+  // and REDIRECT to `/<vaultId>/<path>` via `goto`. The derived active
+  // vault + document follow the corrected URL; the active-vault and
+  // provider effects then persist last-opened, load trees, and bind the
+  // document. Bootstrap mutates no routing state — it only nudges the URL.
   // Zero vaults is a valid state: nothing to open, the empty state renders.
   async function bootstrap(): Promise<void> {
     const loaded = await refreshVaults();
@@ -1212,62 +1259,36 @@
       // No vaults to serve — a fresh daemon or every vault deleted. This
       // is normal, not an error; the empty "create your first vault" state
       // renders. Forget any stale last-opened so we don't reopen a gone
-      // vault when one is created.
-      activeVaultId = '';
+      // vault when one is created. The URL stays at the root, which the
+      // derived values read as the empty state.
       appState.setLastOpenedVaultId(null);
       return;
     }
 
-    const route = routeFromUrl(new URL(window.location.href));
-    const known = route.vaultId && loaded.some((v) => v.id === route.vaultId);
-    // Fall back to the last-opened vault if it still exists, else the
-    // first in the list. No "default vault" — just the remembered choice.
+    const current = parseVaultRoute(window.location.pathname);
+    const known = current.vaultId && loaded.some((v) => v.id === current.vaultId);
+    if (known) {
+      // The URL already names a real vault; the derived values already
+      // point at it. Just load the rail's trees (the active vault's tree
+      // load is also covered by the active-vault effect).
+      void loadAllTrees();
+      return;
+    }
+
+    // Root or unknown vault — resolve the fallback and redirect. The
+    // derived active vault + document follow the corrected URL.
     const remembered = appState.getState().lastOpenedVaultId;
     const fallbackId =
       remembered && loaded.some((v) => v.id === remembered)
         ? remembered
         : loaded[0].id;
-    const targetVaultId = known ? (route.vaultId as string) : fallbackId;
-    const targetPath = known ? route.path : '';
-
-    activeVaultId = targetVaultId;
-    documentPath = targetPath;
-    appState.setLastOpenedVaultId(targetVaultId);
-
-    // Normalize the URL when we redirected (root, or an unknown vault).
-    if (!known) {
-      await goto(vaultRoute(targetVaultId, targetPath), {
-        replaceState: true,
-        noScroll: true,
-        keepFocus: true,
-      });
-    }
-
-    rebindDocument(targetPath);
+    await goto(vaultRoute(fallbackId, ''), {
+      replaceState: true,
+      noScroll: true,
+      keepFocus: true,
+    });
     void loadAllTrees();
   }
-
-  afterNavigate((navigation) => {
-    if (!mounted || !navigation.to?.url) return;
-    const route = routeFromUrl(navigation.to.url);
-    // A root URL (no vault segment) means "resolve a target on bootstrap"
-    // or, with zero vaults, the empty state. Either way there's nothing to
-    // rebind off the URL here, so ignore it.
-    if (!route.vaultId) return;
-
-    const vaultChanged = route.vaultId !== activeVaultId;
-    if (vaultChanged) {
-      activeVaultId = route.vaultId;
-      // Remember the now-active vault (covers cross-vault navigation that
-      // doesn't go through `openVault`, e.g. opening a file in another
-      // vault's group). The next cold load reopens here.
-      appState.setLastOpenedVaultId(route.vaultId);
-      // Ensure the now-active vault's tree is loaded for the canvas.
-      if (!vaultTrees[route.vaultId]) void loadVaultTree(route.vaultId);
-    }
-    if (route.path === documentPath && !vaultChanged) return;
-    rebindDocument(route.path);
-  });
 
   onMount(() => {
     mounted = true;

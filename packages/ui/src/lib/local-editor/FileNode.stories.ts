@@ -6,6 +6,7 @@ const meta = {
   component: FileNode,
   args: {
     node: { kind: 'file', path: 'projects/active/editor-shell.md', name: 'editor-shell.md' },
+    vaultId: 'demo-vault',
     depth: 0,
     activePath: 'projects/active/editor-shell.md'
   }
