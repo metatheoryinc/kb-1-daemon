@@ -13,16 +13,16 @@ function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { dump: () => s
 }
 
 describe('railCollapsed slice', () => {
-  it('defaults to expanded (false)', () => {
-    expect(createAppState().getState().railCollapsed).toBe(false);
+  it('defaults to collapsed (true)', () => {
+    expect(createAppState().getState().railCollapsed).toBe(true);
   });
 
   it('toggleRailCollapsed flips the flag', () => {
     const store = createAppState();
     store.toggleRailCollapsed();
-    expect(store.getState().railCollapsed).toBe(true);
-    store.toggleRailCollapsed();
     expect(store.getState().railCollapsed).toBe(false);
+    store.toggleRailCollapsed();
+    expect(store.getState().railCollapsed).toBe(true);
   });
 
   it('setRailCollapsed sets directly and is a no-op when unchanged', () => {
@@ -31,24 +31,24 @@ describe('railCollapsed slice', () => {
     store.subscribe(() => {
       notified += 1;
     });
-    store.setRailCollapsed(false);
-    expect(notified).toBe(0);
     store.setRailCollapsed(true);
-    expect(store.getState().railCollapsed).toBe(true);
+    expect(notified).toBe(0);
+    store.setRailCollapsed(false);
+    expect(store.getState().railCollapsed).toBe(false);
     expect(notified).toBe(1);
   });
 
   it('persists and rehydrates the flag', () => {
     const storage = memoryStorage();
     const a = createAppState({ storage });
-    a.setRailCollapsed(true);
+    a.setRailCollapsed(false);
     const b = createAppState({ storage });
-    expect(b.getState().railCollapsed).toBe(true);
+    expect(b.getState().railCollapsed).toBe(false);
   });
 
   it('ignores a non-boolean persisted value', () => {
     const storage = memoryStorage();
     storage.setItem('kb2:app-state', JSON.stringify({ railCollapsed: 'yes' }));
-    expect(createAppState({ storage }).getState().railCollapsed).toBe(false);
+    expect(createAppState({ storage }).getState().railCollapsed).toBe(true);
   });
 });
