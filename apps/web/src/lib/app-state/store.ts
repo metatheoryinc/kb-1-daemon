@@ -200,7 +200,7 @@ const DEFAULT_STATE: AppState = {
   collapsedVaultIds: new Set<string>(),
   hiddenVaultIds: [],
   secondaryRailWidth: SECONDARY_RAIL_WIDTH_DEFAULT,
-  railCollapsed: false,
+  railCollapsed: true,
   favorites: [],
   lastOpenedVaultId: null,
 };
