@@ -1,8 +1,15 @@
-# Daemon Packaging Paths
+# KB-1 Local Packaging Paths
 
 Chunk 001 keeps release automation intentionally light, but the scaffold is
-structured so the same daemon can run from pnpm, Docker, or a future npm CLI
-package.
+structured so the same local service can run from pnpm, Docker, or a future npm
+CLI package.
+
+## Public Naming
+
+The product is **KB-1 Local**. This repo still exposes `KB2_HOME`, `KB2_PORT`,
+`kb2d`, and `@kb-2/*` while the implementation rename is deferred. Public docs
+should explain that mismatch once, then use KB-1 Local for the product and
+`kb2d` only where a literal command or environment variable requires it.
 
 ## Local Development
 
@@ -115,7 +122,8 @@ The daemon package reserves the future CLI binary name:
 }
 ```
 
-Publishing is deferred. A future release chunk can make `@kb-2/daemon`
-publishable, add provenance/signing rules, and decide whether the open-source
-daemon package is published from this package directly or from a dedicated
-release wrapper.
+Publishing is deferred. The first public path can be `git clone` plus the setup
+skill while packaging is hardened. A future release chunk can make
+`@kb-2/daemon` publishable, add provenance/signing rules, decide whether the
+open-source package publishes from this package directly or from a dedicated
+release wrapper, and choose the public binary/package names.

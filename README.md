@@ -1,8 +1,13 @@
-# KB-2
+# KB-1 Local
 
-A local-first, agent-ready knowledge base where the user's filesystem is the
-durable source of truth. See `VISION.md` and `docs/architecture/` for the full
-picture; execution sequence lives in `docs/plans/local-first-roadmap.md`.
+The open-source local half of KB-1: a local-first, agent-ready knowledge base
+where the user's filesystem is the durable source of truth. The repo still uses
+some `KB2_*`, `kb2d`, and `@kb-2/*` implementation names while the product
+rename finishes; public copy should call the product **KB-1 Local** or simply
+**KB-1**.
+
+See `VISION.md` and `docs/architecture/` for the full picture; execution
+sequence lives in `docs/plans/local-first-roadmap.md`.
 
 ## Quick Start
 
@@ -20,6 +25,22 @@ pnpm dev     # one command: web UI + API behind one daemon port
 
 Port/env overrides: `KB2_PORT` (daemon), `KB2_WEB_PORT` (internal Vite dev
 server), `KB2_HOME` (daemon state directory, defaults to `~/.kb2`).
+
+## Public Launch Story
+
+KB-1 Local is the free, open-source foundation. It runs on a machine the user
+controls, serves the web UI/API/MCP from one local service, and keeps Markdown,
+assets, metadata, and audit state in inspectable local storage.
+
+The recommended remote-access path starts private: local network first, then a
+tailnet such as Tailscale for devices and agents the user already trusts. KB-1
+Cloud is the separate paid layer: relay for self-hosters who want authenticated
+remote reach without exposing ports, and Hosted for people who want KB-1 to
+operate the same vault engine for them.
+
+The public website should not describe the old hosted KB-1 app as an open beta.
+Public launch waits on this local release path, then Cloud opens as an optional
+paid convenience layer.
 
 ## Local API Primitives
 

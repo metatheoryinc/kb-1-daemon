@@ -1,6 +1,9 @@
-# KB-1 Comparison
+# KB-1 Local Comparison
 
-KB-2 preserves KB-1's ambition while changing the custody and authority model.
+KB-1 Local preserves the original hosted KB-1 ambition while changing the
+custody and authority model. Some implementation/package names still say KB-2
+while the product rename is in progress; public-facing language should say
+KB-1 Local, KB-1 Cloud relay, and KB-1 Cloud Hosted.
 
 ## KB-1 Summary
 
@@ -29,9 +32,9 @@ Organization -> Vault -> Folder -> Markdown file
 Its key product idea is cloud Obsidian for humans and agents, with reduced sync
 friction and a first-class MCP/tooling surface.
 
-## What KB-2 Preserves
+## What KB-1 Local Preserves
 
-KB-2 should preserve:
+KB-1 Local should preserve:
 
 - Markdown-centered knowledge work
 - a rich web UI
@@ -48,16 +51,16 @@ KB-2 should preserve:
 - one canonical write path for browsers and agents
 - strong architecture docs and substrate invariants
 
-## What KB-2 Changes
+## What KB-1 Local Changes
 
 The central change is custody.
 
-| Concern | KB-1 | KB-2 |
+| Concern | Hosted KB-1 | KB-1 Local |
 |---|---|---|
 | Durable content | Hosted D1/R2/DO substrate | User filesystem |
-| Cloud role | Source of truth and app backend | Later auth, relay, hosted web, policy, presence |
+| Cloud role | Source of truth and app backend | Optional paid relay, Hosted, auth, policy, presence |
 | Local role | Optional desktop wrapper | Authoritative vault server and local app host |
-| Open source surface | Optional/unclear | Local server and local UI should be open source |
+| Open source surface | Optional/unclear | Local server and local UI are the public open-source foundation |
 | Multi-tenancy | Shared hosted storage substrate | Tenant content outside hosted storage |
 | Document identity | Migrated toward stable note IDs | Path-keyed initially because files are canonical |
 | Awareness | Cloud/realtime substrate | Cloud presence plane can remain separate |
@@ -66,8 +69,8 @@ The central change is custody.
 ## Why Path Identity Is Acceptable Again
 
 KB-1 moved from path identity to stable note IDs because path became metadata.
-KB-2 makes the filesystem canonical, so path is once again a meaningful durable
-address.
+KB-1 Local makes the filesystem canonical, so path is once again a meaningful
+durable address.
 
 This does not mean moves are casual. Move and rename must be explicit operations
 with invalidation and client rebinding. External moves can be detected
@@ -79,8 +82,8 @@ Git is valuable for backup, diffs, rollback, and user-owned remotes. It is not
 ideal as the only source of product history because product events and Git
 commits have different cadence and semantics.
 
-KB-2 should maintain an append-only local audit log and optionally summarize that
-history into Git commits.
+KB-1 Local should maintain an append-only local audit log and optionally
+summarize that history into Git commits.
 
 ## Better Multi-Tenant Posture
 
@@ -88,28 +91,29 @@ KB-1 placed all tenants into one hosted data substrate. Even with correct
 authorization, that means the SaaS operator owns more data custody, backup,
 isolation, migration, and breach surface.
 
-KB-2 removes customer knowledge content from the hosted substrate. The cloud
-still needs account and routing metadata, but the user's actual vault content
-lives with the user.
+KB-1 Local removes customer knowledge content from the hosted substrate. KB-1
+Cloud still needs account and routing metadata for relay, and Hosted stores a
+tenant's vault because managed hosting is the point. The default path keeps the
+user's actual vault content with the user.
 
 ## Local Product Before Cloud Relay
 
 KB-1's primary useful experience depended on the hosted app and hosted substrate.
-KB-2 should become useful earlier: the open-source local server should host a
-minimal local UI for file-tree browsing and Markdown editing, while local agents
+KB-1 Local should become useful earlier: the open-source local server should
+host a local UI for file-tree browsing and Markdown editing, while local agents
 use local MCP/API tools against the same service.
 
 This changes execution order, not the long-term cloud ambition. Cloud relay,
-auth, org management, billing, and presence can arrive later as remote and
-multi-user layers on top of the same local authority.
+auth, org management, billing, presence, and Hosted vaults arrive as remote and
+multi-user layers around the same service contract.
 
 ## Open Questions
 
 - Which KB-1 MCP tools should be carried over exactly, and which should change
   because the filesystem is canonical?
-- Which KB-1 collaboration affordances are essential for the first KB-2 demo?
+- Which KB-1 collaboration affordances are essential for the first KB-1 Local demo?
 - Which local UI affordances should replace hosted collaboration affordances in
   the first local-only demo?
 - Which KB-1 architectural docs should be treated as source inspiration versus
   migration cautionary tales?
-- How much KB-1 import/migration support should KB-2 plan for?
+- How much KB-1 import/migration support should KB-1 Local plan for?

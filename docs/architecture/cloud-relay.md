@@ -1,12 +1,14 @@
-# Cloud Relay
+# KB-1 Cloud Relay
 
-The cloud relay is the later remote-access and collaboration layer for KB-2. It
-keeps the KB-1-style hosted web, API, and MCP experience while durable content
-storage stays on the user's local server.
+Cloud relay is the paid remote-access and collaboration layer for KB-1 Local. It
+keeps the KB-1-style web, API, and MCP experience while durable content storage
+stays on the user's local server.
 
-Cloud relay is not required for the first useful local KB-2 product. The
-open-source daemon/server can host a local web UI and local MCP/API tools before
-remote relay exists.
+Cloud relay is not required for the first useful local KB-1 product. The
+open-source local service can host a local web UI and local MCP/API tools before
+remote relay is enabled. The public launch story is: local first, tailnet/local
+network for private access, KB-1 Cloud relay when authenticated reach is worth a
+paid service.
 
 ## Responsibilities
 
@@ -59,9 +61,10 @@ Every edge should check permissions:
 - tunnel authority for the target vault
 - request envelope validity at the local server
 
-Free users may still use the cloud relay for their own vaults, web UI, and own
-agents. Paid or organization plans can enable other users to read, write, or
-collaborate in shared vaults.
+The open-source local app should remain useful without a cloud account. Relay
+access is the paid convenience path unless a later business decision introduces
+trials or a free single-user relay tier. Organization plans can enable other
+users to read, write, or collaborate in shared vaults.
 
 ## Content Plane
 
