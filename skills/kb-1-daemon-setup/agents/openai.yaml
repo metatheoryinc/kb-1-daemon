@@ -1,0 +1,4 @@
+interface:
+  display_name: "KB-1 Daemon Setup"
+  short_description: "Install and verify the local KB-1 daemon"
+  default_prompt: "Use $kb-1-daemon-setup to install the KB-1 local daemon and verify local web/API/MCP access."
