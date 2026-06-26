@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { encodeTunnelMessage } from '@kb-2/tunnel-protocol';
+import { TUNNEL_FEATURES, encodeTunnelMessage } from '@kb-2/tunnel-protocol';
 
 class MockWebSocket extends EventEmitter {
   static readonly OPEN = 1;
@@ -76,6 +76,7 @@ describe('TunnelClient control heartbeat', () => {
       type: 'control.hello',
       version: 2,
       token: 'token-1',
+      features: [TUNNEL_FEATURES.RELAY_FRAMES_V1],
     }));
 
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_INTERVAL_MS);
