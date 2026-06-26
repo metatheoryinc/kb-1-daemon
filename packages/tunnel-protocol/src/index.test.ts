@@ -93,6 +93,16 @@ it("round-trips chunked HTTP request envelopes", () => {
   expect(decodeTunnelMessage(encodeTunnelMessage(end))).toEqual(end);
 });
 
+it("round-trips HTTP cancellation envelopes", () => {
+  const cancel = {
+    type: "http.cancel",
+    id: "req-1",
+    reason: "browser timeout"
+  } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(cancel))).toEqual(cancel);
+});
+
 it("round-trips chunked HTTP response envelopes", () => {
   const start = {
     type: "http.response.start",

@@ -6,6 +6,7 @@ import {
   TUNNEL_CLOSE_CODES,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
+  encodeTunnelMessage,
 } from '@kb-2/tunnel-protocol';
 import {
   ChunkedHttpRequestAssembler,
@@ -234,6 +235,57 @@ describe('TunnelClient typed relay RPC', () => {
       ok: false,
       error: { code: RELAY_ERROR_CODES.UNKNOWN_CAPABILITY },
     });
+  });
+});
+
+describe('TunnelClient HTTP proxy cancellation', () => {
+  it('aborts an in-flight daemon HTTP fetch when the relay sends http.cancel', async () => {
+    let observedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal as AbortSignal | undefined;
+      await new Promise((_resolve, reject) => {
+        observedSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+      return new Response('late');
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    const handleControlMessage = (
+      client as unknown as {
+        handleControlMessage(control: unknown, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage.bind(client);
+
+    const request = handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'http.request',
+        id: 'req-1',
+        method: 'POST',
+        path: '/api/vaults/ledger/tree',
+        headers: {},
+        bodyB64: null,
+      })),
+    );
+    await vi.waitFor(() => expect(observedSignal).toBeDefined());
+
+    await handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'http.cancel',
+        id: 'req-1',
+        reason: 'browser timeout',
+      })),
+    );
+
+    await request;
+    expect(observedSignal?.aborted).toBe(true);
+    expect(control.sent).toEqual([]);
   });
 });
 

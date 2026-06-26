@@ -404,6 +404,12 @@ export type TunnelHttpRequestEndEnvelope = {
   chunks: number;
 };
 
+export type TunnelHttpCancelEnvelope = {
+  type: "http.cancel";
+  id: string;
+  reason?: string;
+};
+
 export type TunnelHttpResponseEnvelope = {
   type: "http.response";
   id: string;
@@ -478,6 +484,7 @@ export type TunnelControlServerMessage =
   | TunnelHttpRequestStartEnvelope
   | TunnelHttpRequestChunkEnvelope
   | TunnelHttpRequestEndEnvelope
+  | TunnelHttpCancelEnvelope
   | TunnelWebSocketOpenEnvelope;
 
 export type TunnelDialbackClientMessage = TunnelWebSocketDialbackHello;

@@ -42,6 +42,7 @@ export async function bindYjsWebSocket(
   let cleanupStarted = false;
   let sessionReady = false;
   const pendingMessages: unknown[] = [];
+  let syncedMessageSent = false;
   let resolveClosed!: () => void;
   let rejectClosed!: (error: unknown) => void;
   const closed = new Promise<void>((resolve, reject) => {
@@ -87,6 +88,14 @@ export async function bindYjsWebSocket(
     processSyncMessage(data);
   };
 
+  const sendSyncedOnce = () => {
+    if (syncedMessageSent) {
+      return;
+    }
+    syncedMessageSent = true;
+    sendBytes(socket, encodeSyncedMessage());
+  };
+
   const processSyncMessage = (data: unknown) => {
     try {
       const message = toUint8Array(data);
@@ -125,12 +134,16 @@ export async function bindYjsWebSocket(
       }
 
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      if (!processYjsSyncPayload(session, socket, decoder, encoder)) {
+      const syncResult = processYjsSyncPayload(session, socket, decoder, encoder);
+      if (syncResult === 'closed') {
         return;
       }
 
       if (encoding.length(encoder) > 1) {
         sendEncoded(socket, encoder);
+      }
+      if (syncResult === 'answered-sync-step1') {
+        sendSyncedOnce();
       }
     } catch {
       socket.close(1003, 'Invalid Yjs sync message');
@@ -176,7 +189,6 @@ export async function bindYjsWebSocket(
   sendSync(socket, (encoder) => {
     syncProtocol.writeSyncStep1(encoder, session.ydoc);
   });
-  sendBytes(socket, encodeSyncedMessage());
 
   return { closed };
 }
@@ -200,27 +212,29 @@ function sendBytes(socket: YjsWebSocketLike, bytes: Uint8Array): void {
   socket.send(bytes);
 }
 
+type SyncMessageResult = 'answered-sync-step1' | 'processed' | 'closed';
+
 function processYjsSyncPayload(
   session: OneFileDocumentSession,
   socket: YjsWebSocketLike,
   decoder: decoding.Decoder,
   encoder: encoding.Encoder
-): boolean {
+): SyncMessageResult {
   const syncMessageType = decoding.readVarUint(decoder);
   if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
     const remoteStateVector = decoding.readVarUint8Array(decoder);
     syncProtocol.writeSyncStep2(encoder, session.ydoc, remoteStateVector);
-    return true;
+    return 'answered-sync-step1';
   }
 
   if (syncMessageType === syncProtocol.messageYjsSyncStep2 || syncMessageType === syncProtocol.messageYjsUpdate) {
     const update = decoding.readVarUint8Array(decoder);
     if (hasUnsafeIndependentUpdate(session, update)) {
       closeUnsafeDivergence(socket);
-      return false;
+      return 'closed';
     }
     Y.applyUpdate(session.ydoc, update, socket);
-    return true;
+    return 'processed';
   }
 
   throw new Error('Unknown Yjs sync message type');

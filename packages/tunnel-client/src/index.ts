@@ -18,6 +18,7 @@ import {
   type RelayRpcRequestFrame,
   type RelayRpcResponseFrame,
   type TunnelControlServerMessage,
+  type TunnelHttpCancelEnvelope,
   type TunnelHttpRequestChunkEnvelope,
   type TunnelHttpRequestEndEnvelope,
   type TunnelHttpRequestEnvelope,
@@ -79,6 +80,11 @@ const responseBodyTransformHeaders = new Set([
   'content-encoding',
 ]);
 
+type PendingDaemonHttpRequest = {
+  abort: AbortController;
+  canceled: boolean;
+};
+
 /* v8 ignore start -- Live relay socket orchestration is covered by Stage A wrangler/daemon/browser drills; unit tests cover the deterministic backoff, close-code, URL, and dial-back bridge logic below. */
 export class TunnelClient {
   private readonly logger: TunnelClientLogger;
@@ -89,6 +95,7 @@ export class TunnelClient {
   private controlHeartbeatInterval: ReturnType<typeof setInterval> | undefined;
   private controlHeartbeatDeadline: ReturnType<typeof setTimeout> | undefined;
   private readonly httpAssembler = new ChunkedHttpRequestAssembler();
+  private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
   private stopped = true;
   private reconnectAttempt = 0;
 
@@ -113,6 +120,7 @@ export class TunnelClient {
       this.reconnectTimer = undefined;
     }
     this.clearControlHeartbeat();
+    this.abortPendingHttpRequests();
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
   }
@@ -156,6 +164,7 @@ export class TunnelClient {
       if (this.control === control) {
         this.control = undefined;
         this.clearControlHeartbeat();
+        this.abortPendingHttpRequests();
       }
 
       if (this.stopped) return;
@@ -204,7 +213,10 @@ export class TunnelClient {
         await this.handleRelayFrame(control, parseRelayFrame(message.frame));
         return;
       case 'http.request':
-        this.sendHttpResponse(control, await this.proxyHttp(message));
+        {
+          const response = await this.proxyHttp(message);
+          if (response) this.sendHttpResponse(control, response);
+        }
         return;
       case 'http.request.start':
         this.httpAssembler.start(message);
@@ -215,10 +227,14 @@ export class TunnelClient {
       case 'http.request.end': {
         const assembled = this.httpAssembler.end(message);
         if (assembled) {
-          this.sendHttpResponse(control, await this.proxyHttp(assembled));
+          const response = await this.proxyHttp(assembled);
+          if (response) this.sendHttpResponse(control, response);
         }
         return;
       }
+      case 'http.cancel':
+        this.cancelHttpRequest(message);
+        return;
       case 'ws.open':
         this.openDialback(message);
         return;
@@ -314,10 +330,12 @@ export class TunnelClient {
     }
   }
 
-  private async proxyHttp(envelope: TunnelHttpRequestEnvelope): Promise<TunnelHttpResponseEnvelope> {
+  private async proxyHttp(envelope: TunnelHttpRequestEnvelope): Promise<TunnelHttpResponseEnvelope | null> {
     const upstreamUrl = new URL(envelope.path, this.config.daemonUrl);
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), TUNNEL_HTTP_REQUEST_TIMEOUT_MS);
+    const pending: PendingDaemonHttpRequest = { abort, canceled: false };
+    this.pendingHttpRequests.set(envelope.id, pending);
 
     try {
       const response = await this.fetchImpl(upstreamUrl, {
@@ -335,6 +353,9 @@ export class TunnelClient {
         bodyB64: (await materializedResponseBody(response)).toString('base64'),
       };
     } catch (error) {
+      if (pending.canceled) {
+        return null;
+      }
       return {
         type: 'http.response',
         id: envelope.id,
@@ -344,7 +365,25 @@ export class TunnelClient {
       };
     } finally {
       clearTimeout(timeout);
+      this.pendingHttpRequests.delete(envelope.id);
     }
+  }
+
+  private cancelHttpRequest(message: TunnelHttpCancelEnvelope): void {
+    this.httpAssembler.cancel(message.id);
+    const pending = this.pendingHttpRequests.get(message.id);
+    if (!pending) return;
+
+    pending.canceled = true;
+    pending.abort.abort(message.reason ?? 'relay cancelled HTTP request');
+  }
+
+  private abortPendingHttpRequests(): void {
+    for (const pending of this.pendingHttpRequests.values()) {
+      pending.canceled = true;
+      pending.abort.abort('relay control closed');
+    }
+    this.pendingHttpRequests.clear();
   }
 
   private sendHttpResponse(control: WebSocket, envelope: TunnelHttpResponseEnvelope): void {
