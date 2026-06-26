@@ -504,6 +504,40 @@ it("validates relay JSON payload edges before serialization", () => {
   ).toThrow("Relay payload.value must be JSON-compatible");
   expect(() =>
     parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "bad.date",
+      payload: {
+        encoding: "json",
+        value: new Date("2026-06-25T00:00:00.000Z")
+      }
+    })
+  ).toThrow("Relay payload.value must be JSON-compatible");
+  expect(() =>
+    parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "bad.map",
+      resource: new Map([["vaultSlug", "demo-vault"]])
+    })
+  ).toThrow("Relay resource must be a JSON object");
+  expect(
+    parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "null.prototype",
+      resource: Object.assign(Object.create(null), {
+        vaultSlug: "demo-vault"
+      })
+    })
+  ).toEqual({
+    type: "event",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    topic: "null.prototype",
+    resource: { vaultSlug: "demo-vault" }
+  });
+  expect(() =>
+    parseRelayFrame({
       type: "rpc.response",
       version: RELAY_TRANSPORT_PROTOCOL_VERSION,
       id: "req-1",

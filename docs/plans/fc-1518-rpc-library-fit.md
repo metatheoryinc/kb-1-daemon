@@ -113,4 +113,3 @@ boring proven parts:
 This keeps the package small and testable while avoiding a square-peg framework
 fit. Revisit this decision if a later slice finds a library that can provide
 the transport core without taking over product capability routing.
-

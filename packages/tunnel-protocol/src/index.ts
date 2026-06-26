@@ -741,7 +741,7 @@ function expectRelayJsonObject(
   value: unknown,
   field: string
 ): RelayJsonObject {
-  if (!isRecord(value) || !isRelayJsonValue(value)) {
+  if (!isPlainRecord(value) || !isRelayJsonValue(value)) {
     throw new Error(`Relay ${field} must be a JSON object`);
   }
   return value as RelayJsonObject;
@@ -820,6 +820,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function isRelayJsonValue(value: unknown): value is RelayJsonValue {
   if (
     value === null ||
@@ -837,7 +846,7 @@ function isRelayJsonValue(value: unknown): value is RelayJsonValue {
     return value.every(isRelayJsonValue);
   }
 
-  if (isRecord(value)) {
+  if (isPlainRecord(value)) {
     return Object.values(value).every(isRelayJsonValue);
   }
 
