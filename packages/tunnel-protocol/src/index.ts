@@ -21,6 +21,12 @@ export const RELAY_FRAME_BYTE_LIMIT = 256 * 1024;
 export const RELAY_PENDING_REQUEST_LIMIT = 128 as const;
 export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
 
+export const TUNNEL_FEATURES = {
+  RELAY_FRAMES_V1: "relay.frame.v1"
+} as const;
+
+export type TunnelFeature = (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
+
 export const RELAY_ERROR_CODES = {
   BAD_MESSAGE: "bad-message",
   UNSUPPORTED_VERSION: "unsupported-version",
@@ -345,6 +351,7 @@ export type TunnelControlClientHello = {
   type: "control.hello";
   version: TunnelProtocolVersion;
   token: string;
+  features?: readonly TunnelFeature[];
 };
 
 export type TunnelControlServerReady = {
@@ -447,10 +454,16 @@ export type TunnelWebSocketCloseEnvelope = {
   reason: string;
 };
 
+export type TunnelRelayFrameEnvelope = {
+  type: "relay.frame";
+  frame: RelayFrame;
+};
+
 export type TunnelControlClientMessage =
   | TunnelControlClientHello
   | TunnelControlPing
   | TunnelWebSocketCloseEnvelope
+  | TunnelRelayFrameEnvelope
   | TunnelHttpResponseEnvelope
   | TunnelHttpResponseStartEnvelope
   | TunnelHttpResponseChunkEnvelope
@@ -460,6 +473,7 @@ export type TunnelControlServerMessage =
   | TunnelControlServerReady
   | TunnelControlPong
   | TunnelControlServerError
+  | TunnelRelayFrameEnvelope
   | TunnelHttpRequestEnvelope
   | TunnelHttpRequestStartEnvelope
   | TunnelHttpRequestChunkEnvelope

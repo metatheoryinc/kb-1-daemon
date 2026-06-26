@@ -1,6 +1,9 @@
 import {
   PendingFrameBuffer,
+  RELAY_ERROR_CODES,
+  RELAY_TRANSPORT_PROTOCOL_VERSION,
   TUNNEL_CLOSE_CODES,
+  TUNNEL_FEATURES,
   TUNNEL_HTTP_BODY_CHUNK_BYTES,
   TUNNEL_HTTP_PENDING_BYTE_LIMIT,
   TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
@@ -9,6 +12,11 @@ import {
   TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS,
   decodeTunnelMessage,
   encodeTunnelMessage,
+  parseRelayFrame,
+  type RelayFrame,
+  type RelayJsonValue,
+  type RelayRpcRequestFrame,
+  type RelayRpcResponseFrame,
   type TunnelControlServerMessage,
   type TunnelHttpRequestChunkEnvelope,
   type TunnelHttpRequestEndEnvelope,
@@ -129,6 +137,7 @@ export class TunnelClient {
         type: 'control.hello',
         version: TUNNEL_PROTOCOL_VERSION,
         token: this.config.token,
+        features: [TUNNEL_FEATURES.RELAY_FRAMES_V1],
       }));
       this.startControlHeartbeat(control);
       this.logger.log('info', 'relay control connected', {
@@ -191,6 +200,9 @@ export class TunnelClient {
           relayMessage: message.message,
         });
         return;
+      case 'relay.frame':
+        await this.handleRelayFrame(control, parseRelayFrame(message.frame));
+        return;
       case 'http.request':
         this.sendHttpResponse(control, await this.proxyHttp(message));
         return;
@@ -210,6 +222,62 @@ export class TunnelClient {
       case 'ws.open':
         this.openDialback(message);
         return;
+    }
+  }
+
+  private async handleRelayFrame(control: WebSocket, frame: RelayFrame): Promise<void> {
+    if (frame.type !== 'rpc.request') {
+      this.logger.log('warn', 'relay frame type is not handled by tunnel client', { frameType: frame.type });
+      return;
+    }
+
+    control.send(encodeJsonBytes({
+      type: 'relay.frame',
+      frame: await this.handleRelayRpcRequest(frame),
+    }));
+  }
+
+  private async handleRelayRpcRequest(request: RelayRpcRequestFrame): Promise<RelayRpcResponseFrame> {
+    switch (request.capability) {
+      case 'vault.list':
+        return this.handleVaultListRpc(request);
+      default:
+        return relayRpcError(request.id, RELAY_ERROR_CODES.UNKNOWN_CAPABILITY, `Unknown relay capability: ${request.capability}`);
+    }
+  }
+
+  private async handleVaultListRpc(request: RelayRpcRequestFrame): Promise<RelayRpcResponseFrame> {
+    const abort = new AbortController();
+    const timeout = setTimeout(
+      () => abort.abort(),
+      request.deadlineMs ?? TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
+    );
+
+    try {
+      const response = await this.fetchImpl(new URL('/api/vaults', this.config.daemonUrl), {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal: abort.signal,
+      });
+      if (!response.ok) {
+        return relayRpcError(request.id, RELAY_ERROR_CODES.INTERNAL, `Daemon vault list failed with status ${response.status}`);
+      }
+
+      return {
+        type: 'rpc.response',
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: request.id,
+        ok: true,
+        payload: { encoding: 'json', value: await response.json() as RelayJsonValue },
+      };
+    } catch (error) {
+      return relayRpcError(
+        request.id,
+        abort.signal.aborted ? RELAY_ERROR_CODES.DEADLINE_EXCEEDED : RELAY_ERROR_CODES.INTERNAL,
+        `Daemon vault list RPC failed: ${String(error)}`,
+      );
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -663,6 +731,20 @@ export function sendableCloseCode(code: number): number {
   return code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006
     ? code
     : 1011;
+}
+
+function relayRpcError(
+  id: string,
+  code: (typeof RELAY_ERROR_CODES)[keyof typeof RELAY_ERROR_CODES],
+  message: string,
+): RelayRpcResponseFrame {
+  return {
+    type: 'rpc.response',
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    id,
+    ok: false,
+    error: { code, message },
+  };
 }
 
 export function relayInternalUrl(relayUrl: URL, internalPath: string): URL {

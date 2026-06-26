@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import {
+  RELAY_ERROR_CODES,
+  RELAY_TRANSPORT_PROTOCOL_VERSION,
   TUNNEL_CLOSE_CODES,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
@@ -8,6 +10,7 @@ import {
 import {
   ChunkedHttpRequestAssembler,
   DialbackBridge,
+  TunnelClient,
   createBackoffDelay,
   materializedResponseBody,
   relayInternalUrl,
@@ -153,6 +156,84 @@ describe('ChunkedHttpRequestAssembler', () => {
     });
     assembler.chunk({ type: 'http.request.chunk', id: 'req-2', sequence: 0, bodyB64: Buffer.from([1]).toString('base64') });
     expect(assembler.end({ type: 'http.request.end', id: 'req-2', chunks: 2 })).toBeUndefined();
+  });
+});
+
+describe('TunnelClient typed relay RPC', () => {
+  it('handles the vault.list capability through the daemon vault API', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://daemon.test/api/vaults');
+      expect(init?.method).toBe('GET');
+      return Response.json({ ok: true, vaults: [{ id: 'ledger', displayName: 'Ledger' }] });
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-1',
+      capability: 'vault.list',
+    });
+
+    expect(response).toEqual({
+      type: 'rpc.response',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-1',
+      ok: true,
+      payload: {
+        encoding: 'json',
+        value: { ok: true, vaults: [{ id: 'ledger', displayName: 'Ledger' }] },
+      },
+    });
+  });
+
+  it('rejects unknown typed relay RPC capabilities without proxying arbitrary paths', async () => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-2',
+      capability: 'admin.disconnect',
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      type: 'rpc.response',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-2',
+      ok: false,
+      error: { code: RELAY_ERROR_CODES.UNKNOWN_CAPABILITY },
+    });
   });
 });
 

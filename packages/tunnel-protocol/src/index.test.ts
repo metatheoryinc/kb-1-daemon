@@ -11,6 +11,7 @@ import {
   parseRelayFrame,
   relayFrameByteLength,
   TUNNEL_CLOSE_CODES,
+  TUNNEL_FEATURES,
   TUNNEL_PENDING_STREAM_BYTE_LIMIT,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
@@ -38,6 +39,32 @@ it("round-trips control heartbeat envelopes", () => {
 
   expect(decodeTunnelMessage(encodeTunnelMessage(ping))).toEqual(ping);
   expect(decodeTunnelMessage(encodeTunnelMessage(pong))).toEqual(pong);
+});
+
+it("round-trips control hello feature advertisement", () => {
+  const hello = {
+    type: "control.hello",
+    version: TUNNEL_PROTOCOL_VERSION,
+    token: "test-token",
+    features: [TUNNEL_FEATURES.RELAY_FRAMES_V1]
+  } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
+});
+
+it("round-trips typed relay frames over the tunnel control socket", () => {
+  const message = {
+    type: "relay.frame",
+    frame: {
+      type: "rpc.request",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: "rpc-1",
+      capability: "vault.list",
+      deadlineMs: 1_000
+    }
+  } as const;
+
+  expect(decodeTunnelMessage(encodeTunnelMessage(message))).toEqual(message);
 });
 
 it("round-trips chunked HTTP request envelopes", () => {
