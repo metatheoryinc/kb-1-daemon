@@ -18,6 +18,7 @@ import {
   type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketOpenEnvelope,
 } from '@kb-2/tunnel-protocol';
+import { gunzipSync } from 'node:zlib';
 import { WebSocket } from 'ws';
 
 export type TunnelClientLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -33,6 +34,12 @@ export type TunnelClientConfig = {
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
+};
+
+export type TunnelClientStatus = {
+  started: boolean;
+  controlConnected: boolean;
+  reconnectScheduled: boolean;
 };
 
 export type BackoffOptions = {
@@ -59,6 +66,9 @@ const hopByHopHeaders = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+]);
+const responseBodyTransformHeaders = new Set([
+  'content-encoding',
 ]);
 
 /* v8 ignore start -- Live relay socket orchestration is covered by Stage A wrangler/daemon/browser drills; unit tests cover the deterministic backoff, close-code, URL, and dial-back bridge logic below. */
@@ -97,6 +107,14 @@ export class TunnelClient {
     this.clearControlHeartbeat();
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
+  }
+
+  status(): TunnelClientStatus {
+    return {
+      started: !this.stopped,
+      controlConnected: this.control?.readyState === WebSocket.OPEN,
+      reconnectScheduled: this.reconnectTimer !== undefined,
+    };
   }
 
   private connectControl(): void {
@@ -245,8 +263,8 @@ export class TunnelClient {
         type: 'http.response',
         id: envelope.id,
         status: response.status,
-        headers: serializableHeaders(response.headers),
-        bodyB64: Buffer.from(await response.arrayBuffer()).toString('base64'),
+        headers: serializableResponseHeaders(response.headers),
+        bodyB64: (await materializedResponseBody(response)).toString('base64'),
       };
     } catch (error) {
       return {
@@ -674,16 +692,28 @@ function rawDataToBytes(data: WebSocket.RawData): Uint8Array {
 }
 
 /* v8 ignore start -- Only used by the live TunnelClient HTTP response proxy path covered in Stage A drills. */
-function serializableHeaders(headers: Headers): Record<string, string> {
+export function serializableResponseHeaders(headers: Headers): Record<string, string> {
   const output: Record<string, string> = {};
   for (const [name, value] of headers) {
-    if (!hopByHopHeaders.has(name.toLowerCase())) {
+    const lowerName = name.toLowerCase();
+    if (
+      !hopByHopHeaders.has(lowerName) &&
+      !responseBodyTransformHeaders.has(lowerName)
+    ) {
       output[name] = value;
     }
   }
   return output;
 }
 /* v8 ignore stop */
+
+export async function materializedResponseBody(response: Response): Promise<Buffer> {
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b) {
+    return gunzipSync(body);
+  }
+  return body;
+}
 
 export function withoutHopByHop(headers: Record<string, string>): Record<string, string> {
   const output: Record<string, string> = {};
@@ -692,6 +722,7 @@ export function withoutHopByHop(headers: Record<string, string>): Record<string,
       output[name] = value;
     }
   }
+  output['accept-encoding'] = 'identity';
   return output;
 }
 

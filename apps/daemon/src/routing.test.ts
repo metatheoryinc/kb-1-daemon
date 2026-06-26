@@ -12,7 +12,7 @@ import * as Y from 'yjs';
 
 import { anchoredSpliceContractCases } from '@kb-2/vault-core';
 import type { VaultChangeEvent, VaultService } from '@kb-2/vault-service';
-import { createApp } from './app.js';
+import { createApp, type RelayLifecycleController, type RelayLifecycleStatus } from './app.js';
 import { createDaemonConfig } from './config.js';
 import { writeDaemonStatus } from './status.js';
 import { VAULT_TRASH_DIRNAME, VaultRegistry } from './vault-registry.js';
@@ -90,6 +90,91 @@ describe('daemon routing', () => {
       }
     });
     expect(statusFileContents).toMatchObject(body.status);
+  });
+
+  it('exposes daemon relay lifecycle controls when relay is configured', async () => {
+    const relay = fakeRelayLifecycleController();
+    const config = createDaemonConfig({
+      env: {
+        KB2_HOME: kb2Home
+      }
+    });
+    const app = createApp({ statusFile: config.statusFile, relay });
+
+    const initial = await app.request('/api/relay/status');
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toEqual({
+      ok: true,
+      relay: {
+        configured: true,
+        started: false,
+        controlConnected: false,
+        reconnectScheduled: false
+      }
+    });
+
+    const connected = await app.request('/api/relay/connect', { method: 'POST' });
+    const connectedAgain = await app.request('/api/relay/connect', { method: 'POST' });
+    expect(connected.status).toBe(200);
+    expect(connectedAgain.status).toBe(200);
+    expect(relay.connectCalls).toBe(2);
+    await expect(connectedAgain.json()).resolves.toEqual({
+      ok: true,
+      relay: {
+        configured: true,
+        started: true,
+        controlConnected: true,
+        reconnectScheduled: false
+      }
+    });
+
+    const disconnected = await app.request('/api/relay/disconnect', { method: 'POST' });
+    expect(disconnected.status).toBe(200);
+    expect(relay.disconnectCalls).toBe(1);
+    await expect(disconnected.json()).resolves.toEqual({
+      ok: true,
+      relay: {
+        configured: true,
+        started: false,
+        controlConnected: false,
+        reconnectScheduled: false
+      }
+    });
+  });
+
+  it('keeps relay status readable and connect explicit when relay is not configured', async () => {
+    const config = createDaemonConfig({
+      env: {
+        KB2_HOME: kb2Home
+      }
+    });
+    const app = createApp({ statusFile: config.statusFile });
+
+    const status = await app.request('/api/relay/status');
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual({
+      ok: true,
+      relay: {
+        configured: false,
+        started: false,
+        controlConnected: false,
+        reconnectScheduled: false
+      }
+    });
+
+    const connect = await app.request('/api/relay/connect', { method: 'POST' });
+    expect(connect.status).toBe(409);
+    await expect(connect.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'relay_not_configured'
+    });
+
+    const disconnect = await app.request('/api/relay/disconnect', { method: 'POST' });
+    expect(disconnect.status).toBe(200);
+    await expect(disconnect.json()).resolves.toMatchObject({
+      ok: true,
+      relay: { configured: false }
+    });
   });
 
   it('serves the UI shell for root and client route requests', async () => {
@@ -1209,6 +1294,31 @@ describe('daemon routing', () => {
     await rm(webBuildDir, { force: true, recursive: true });
   });
 });
+
+function fakeRelayLifecycleController(): RelayLifecycleController & { connectCalls: number; disconnectCalls: number } {
+  let connected = false;
+  const status = (): RelayLifecycleStatus => ({
+    configured: true,
+    started: connected,
+    controlConnected: connected,
+    reconnectScheduled: false
+  });
+  return {
+    connectCalls: 0,
+    disconnectCalls: 0,
+    status,
+    connect() {
+      this.connectCalls += 1;
+      connected = true;
+      return status();
+    },
+    disconnect() {
+      this.disconnectCalls += 1;
+      connected = false;
+      return status();
+    }
+  };
+}
 
 interface StartedHttpApp {
   origin: string;
