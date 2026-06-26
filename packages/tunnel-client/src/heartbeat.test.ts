@@ -95,4 +95,46 @@ describe('TunnelClient control heartbeat', () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(MockWebSocket.instances).toHaveLength(2);
   });
+
+  it('keeps connect and disconnect idempotent for lifecycle callers', async () => {
+    const { TunnelClient } = await import('./index.js');
+    const client = new TunnelClient({
+      relayUrl: new URL('http://relay.example/t/dev1'),
+      daemonUrl: new URL('http://127.0.0.1:9891'),
+      token: 'token-1',
+      logger: { log: vi.fn() },
+    });
+
+    expect(client.status()).toEqual({
+      started: false,
+      controlConnected: false,
+      reconnectScheduled: false,
+    });
+
+    client.start();
+    client.start();
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(client.status()).toEqual({
+      started: true,
+      controlConnected: false,
+      reconnectScheduled: false,
+    });
+
+    MockWebSocket.instances[0].open();
+    expect(client.status()).toEqual({
+      started: true,
+      controlConnected: true,
+      reconnectScheduled: false,
+    });
+
+    client.stop();
+    client.stop();
+    expect(client.status()).toEqual({
+      started: false,
+      controlConnected: false,
+      reconnectScheduled: false,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
 });

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { gzipSync } from 'node:zlib';
 import {
   TUNNEL_CLOSE_CODES,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
@@ -8,7 +9,9 @@ import {
   ChunkedHttpRequestAssembler,
   DialbackBridge,
   createBackoffDelay,
+  materializedResponseBody,
   relayInternalUrl,
+  serializableResponseHeaders,
   sendableCloseCode,
   withoutHopByHop,
   type BridgeSocket,
@@ -72,11 +75,34 @@ describe('tunnel-client helpers', () => {
 
   it('strips hop-by-hop headers before proxying to daemon endpoints', () => {
     expect(withoutHopByHop({
+      'accept-encoding': 'gzip, deflate',
       connection: 'keep-alive',
       Expect: '100-continue',
       host: 'relay.example',
       'x-request-id': 'req-1',
-    })).toEqual({ 'x-request-id': 'req-1' });
+    })).toEqual({
+      'accept-encoding': 'identity',
+      'x-request-id': 'req-1',
+    });
+  });
+
+  it('strips response transform headers after fetch materializes body bytes', () => {
+    expect(serializableResponseHeaders(new Headers({
+      'content-encoding': 'gzip',
+      'content-type': 'application/json',
+      'x-request-id': 'req-1',
+    }))).toEqual({
+      'content-type': 'application/json',
+      'x-request-id': 'req-1',
+    });
+  });
+
+  it('normalizes gzipped materialized response bodies before serializing them over the tunnel', async () => {
+    const body = await materializedResponseBody(new Response(gzipSync(Buffer.from('{"ok":true}')), {
+      headers: { 'content-encoding': 'gzip' },
+    }));
+
+    expect(body.toString('utf8')).toBe('{"ok":true}');
   });
 });
 

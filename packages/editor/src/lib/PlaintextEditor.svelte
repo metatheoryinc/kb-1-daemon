@@ -32,6 +32,14 @@
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
+  // Remote-cursor layer (cloud-014 part-6). Mounted only when the host supplies
+  // both `awareness` and `noteId` — the daemon UI, which has no presence,
+  // passes neither and the producer/consumer are skipped entirely.
+  import type { Awareness } from 'y-protocols/awareness';
+  import {
+    plaintextCursorProducer,
+    plaintextCursorConsumer,
+  } from './plaintext-awareness';
 
   interface Props {
     /** Shared Y.Doc supplied by the host app/provider. */
@@ -90,6 +98,17 @@
      *  and routing stay unified. Omit when there's no navigation context
      *  (Storybook, no-vault tests) — clicks on wikilinks no-op then. */
     onWikilinkClick?: (encodedTarget: string, event: MouseEvent) => void;
+    /** Vault-scoped awareness handle (cloud-014 part-6). When supplied
+     *  (together with `noteId`), the editor publishes the local caret /
+     *  selection to `awareness.cursor` and renders remote peers' carets +
+     *  selections. Optional and backward-compatible: the daemon UI has no
+     *  presence and omits it, so the cursor producer/consumer never mount. */
+    awareness?: Awareness;
+    /** Stable noteId of the note this editor is bound to. Used by the cursor
+     *  layer to (a) tag the local cursor payload and (b) filter remote peers
+     *  whose cursor targets a different note. Required only when `awareness`
+     *  is supplied. */
+    noteId?: string;
   }
 
   let {
@@ -103,6 +122,8 @@
     livePaths = [],
     orgPeople = [],
     onWikilinkClick,
+    awareness,
+    noteId,
   }: Props = $props();
 
   let host = $state<HTMLDivElement | null>(null);
@@ -159,6 +180,11 @@
       handler(encoded, event);
     };
     const stableText = ytext;
+    // Capture the awareness handle + noteId once at mount, mirroring KB-1's
+    // `stableAwareness`/`stableNoteId` — survives Svelte 5 props-getter aliasing
+    // for the cursor producer/consumer closures.
+    const stableAwareness = awareness;
+    const stableNoteId = noteId;
 
     // --- Sync plugin (replaces y-codemirror.next's `ySync`) ---------
     //
@@ -368,6 +394,19 @@
       editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
+      // Remote-cursor producer + consumer (cloud-014 part-6). LIFTED from
+      // kb-1/apps/@kb-1/web/src/lib/components/app/editor/PlaintextEditor.svelte.
+      // Mounted only when the host supplied both an `awareness` handle and a
+      // `noteId`; the daemon UI omits both, so this is a no-op there. The
+      // producer writes the local caret to `awareness.cursor`; the consumer
+      // renders remote peers' carets/selections. Must sit AFTER `plaintextSync`
+      // so the CM doc and Y.Text are in sync before RelPos are built.
+      ...(stableAwareness && stableNoteId !== undefined
+        ? [
+            plaintextCursorProducer(stableAwareness, stableText, stableNoteId),
+            plaintextCursorConsumer(stableAwareness, stableText, stableNoteId),
+          ]
+        : []),
       // Live-preview-style markdown decorations. They are document +
       // selection driven and compose through EditorView.decorations:
       // line decos wrap the line element, mark decos wrap their range,

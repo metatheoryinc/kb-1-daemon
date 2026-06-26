@@ -40,6 +40,20 @@ export interface CreateAppOptions {
   webBuildDir?: string;
   webProxyTarget?: string;
   actorDefault?: ActorDefault;
+  relay?: RelayLifecycleController;
+}
+
+export interface RelayLifecycleStatus {
+  configured: boolean;
+  started: boolean;
+  controlConnected: boolean;
+  reconnectScheduled: boolean;
+}
+
+export interface RelayLifecycleController {
+  status(): RelayLifecycleStatus;
+  connect(): RelayLifecycleStatus;
+  disconnect(): RelayLifecycleStatus;
 }
 
 /**
@@ -68,6 +82,26 @@ export function createApp(options: CreateAppOptions): Hono {
       service: SERVICE_NAME,
       status
     });
+  });
+
+  api.get('/relay/status', (context) => {
+    return context.json({ ok: true, relay: relayStatus(options.relay) });
+  });
+
+  api.post('/relay/connect', (context) => {
+    if (!options.relay) {
+      return context.json({
+        ok: false,
+        error: 'relay_not_configured',
+        message: 'Relay is not configured. Set KB2_RELAY_URL and KB2_RELAY_TOKEN before connecting.'
+      }, 409);
+    }
+
+    return context.json({ ok: true, relay: options.relay.connect() });
+  });
+
+  api.post('/relay/disconnect', (context) => {
+    return context.json({ ok: true, relay: options.relay?.disconnect() ?? relayStatus(undefined) });
   });
 
   if (options.registry) {
@@ -158,6 +192,15 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   return app;
+}
+
+function relayStatus(relay: RelayLifecycleController | undefined): RelayLifecycleStatus {
+  return relay?.status() ?? {
+    configured: false,
+    started: false,
+    controlConnected: false,
+    reconnectScheduled: false
+  };
 }
 
 /**

@@ -9,7 +9,7 @@ import { validateVaultPath } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createApp, mcpVaultProvider } from './app.js';
+import { createApp, mcpVaultProvider, type RelayLifecycleController } from './app.js';
 import {
   createDaemonConfig,
   DEFAULT_VAULT_SLUG,
@@ -60,6 +60,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // go through the SAME live registry the HTTP layer uses — no second vault map.
   // Every data tool requires a vaultId; there is no default vault.
   const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry));
+  const relay = createRelayLifecycleController(config);
 
   const app = createApp({
     statusFile: config.statusFile,
@@ -67,7 +68,8 @@ export async function startDaemon(): Promise<StartedDaemon> {
     mcpEndpoint,
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget,
-    actorDefault: config.actorDefault
+    actorDefault: config.actorDefault,
+    relay
   });
 
   return new Promise((resolve, reject) => {
@@ -98,14 +100,13 @@ export async function startDaemon(): Promise<StartedDaemon> {
             console.log(`KB2_WEB_PROXY_TARGET=${config.webProxyTarget}`);
           }
           console.log(`status=${config.statusFile}`);
-          const tunnelClient = createRelayTunnelClient(config);
-          tunnelClient?.start();
+          relay?.connect();
 
           resolve({
             config,
             status,
             close: async () => {
-              tunnelClient?.stop();
+              relay?.disconnect();
               await mcpEndpoint.close();
               await closeWebSocketServer(webSocketServer, activeDocumentConnections);
               await closeServer(server);
@@ -161,18 +162,31 @@ export async function startDaemon(): Promise<StartedDaemon> {
   });
 }
 
-function createRelayTunnelClient(config: DaemonConfig): TunnelClient | undefined {
+function createRelayLifecycleController(config: DaemonConfig): RelayLifecycleController | undefined {
   if (!config.relay) {
     return undefined;
   }
 
   const daemonUrl = new URL(`http://${config.host}:${config.port}`);
-  return new TunnelClient({
+  const client = new TunnelClient({
     relayUrl: new URL(config.relay.relayUrl),
     daemonUrl,
     token: config.relay.token,
     logger: daemonRelayLogger,
   });
+  return {
+    status() {
+      return { configured: true, ...client.status() };
+    },
+    connect() {
+      client.start();
+      return { configured: true, ...client.status() };
+    },
+    disconnect() {
+      client.stop();
+      return { configured: true, ...client.status() };
+    },
+  };
 }
 
 const daemonRelayLogger: TunnelClientLogger = {
