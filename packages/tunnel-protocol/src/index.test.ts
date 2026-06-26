@@ -1,10 +1,22 @@
 import {
   PendingFrameBuffer,
+  RELAY_DEFAULT_REQUEST_TIMEOUT_MS,
+  RELAY_ERROR_CODES,
+  RELAY_FRAME_BYTE_LIMIT,
+  RELAY_PENDING_REQUEST_LIMIT,
+  RELAY_STREAM_CLOSE_CODES,
+  RELAY_TRANSPORT_PROTOCOL_VERSION,
+  RelayPendingRequestTable,
+  assertRelayFrameSize,
+  parseRelayFrame,
+  relayFrameByteLength,
   TUNNEL_CLOSE_CODES,
   TUNNEL_PENDING_STREAM_BYTE_LIMIT,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
+  decodeRelayFrame,
   decodeTunnelMessage,
+  encodeRelayFrame,
   encodeTunnelMessage
 } from "./index.js";
 
@@ -178,4 +190,392 @@ it("clears pending stream frames without draining them", () => {
   expect(buffer.frameCount).toBe(0);
   expect(buffer.byteCount).toBe(0);
   expect(buffer.drain()).toEqual([]);
+});
+
+it("round-trips relay rpc request and response frames", () => {
+  const request = {
+    type: "rpc.request",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    id: "req-1",
+    capability: "vault.file.read",
+    deadlineMs: 5000,
+    payload: {
+      encoding: "json",
+      value: { vaultSlug: "demo-vault", path: "README.md" }
+    },
+    context: {
+      actorId: "user-1",
+      orgId: "org-1"
+    }
+  } as const;
+  const success = {
+    type: "rpc.response",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    id: "req-1",
+    ok: true,
+    payload: {
+      encoding: "base64",
+      dataB64: "b2s="
+    }
+  } as const;
+  const failure = {
+    type: "rpc.response",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    id: "req-2",
+    ok: false,
+    error: {
+      code: RELAY_ERROR_CODES.DEADLINE_EXCEEDED,
+      message: "Request timed out",
+      data: { deadlineMs: 5000 }
+    }
+  } as const;
+
+  expect(decodeRelayFrame(encodeRelayFrame(request))).toEqual(request);
+  expect(decodeRelayFrame(encodeRelayFrame(success))).toEqual(success);
+  expect(decodeRelayFrame(encodeRelayFrame(failure))).toEqual(failure);
+});
+
+it("round-trips relay stream, event, cancel, and error frames", () => {
+  const open = {
+    type: "stream.open",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    streamId: "stream-1",
+    capability: "doc.sync",
+    payload: {
+      encoding: "json",
+      value: { path: "README.md" }
+    }
+  } as const;
+  const data = {
+    type: "stream.data",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    streamId: "stream-1",
+    sequence: 0,
+    payload: {
+      encoding: "base64",
+      dataB64: "AQI="
+    }
+  } as const;
+  const close = {
+    type: "stream.close",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    streamId: "stream-1",
+    code: RELAY_STREAM_CLOSE_CODES.NORMAL,
+    reason: "done"
+  } as const;
+  const event = {
+    type: "event",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    id: "event-1",
+    topic: "vault.tree.changed",
+    resource: { vaultSlug: "demo-vault" },
+    payload: {
+      encoding: "json",
+      value: { cursor: "cursor-1" }
+    }
+  } as const;
+  const cancel = {
+    type: "cancel",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    target: { kind: "stream", streamId: "stream-1" },
+    reason: "navigated away"
+  } as const;
+  const error = {
+    type: "error",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    target: { kind: "rpc", id: "req-1" },
+    error: {
+      code: RELAY_ERROR_CODES.UNAUTHORIZED,
+      message: "Not authorized"
+    }
+  } as const;
+
+  for (const frame of [open, data, close, event, cancel, error]) {
+    expect(decodeRelayFrame(encodeRelayFrame(frame))).toEqual(frame);
+  }
+});
+
+it("rejects malformed relay frames", () => {
+  expect(() => decodeRelayFrame("null")).toThrow(
+    "Relay frame must be an object"
+  );
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.request",
+        version: 999,
+        id: "req-1",
+        capability: "vault.file.read"
+      })
+    )
+  ).toThrow("Unsupported relay protocol version");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "unknown",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION
+      })
+    )
+  ).toThrow("Unsupported relay frame type: unknown");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.request",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "",
+        capability: "vault.file.read"
+      })
+    )
+  ).toThrow("Relay id must not be empty");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.request",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "req-1",
+        capability: "vault.file.read",
+        payload: { encoding: "xml", value: "<nope />" }
+      })
+    )
+  ).toThrow("Relay payload.encoding must be json or base64");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "stream.data",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        streamId: "stream-1",
+        sequence: -1,
+        payload: { encoding: "base64", dataB64: "AQI=" }
+      })
+    )
+  ).toThrow("Relay sequence must be a non-negative integer");
+});
+
+it("rejects relay frames above the configured byte limit", () => {
+  const frame = encodeRelayFrame({
+    type: "event",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    topic: "large",
+    payload: {
+      encoding: "json",
+      value: { text: "hello" }
+    }
+  });
+
+  expect(relayFrameByteLength(frame)).toBeLessThan(RELAY_FRAME_BYTE_LIMIT);
+  expect(() => decodeRelayFrame(frame, { maxBytes: 10 })).toThrow(
+    "Relay frame exceeds byte limit"
+  );
+  expect(() => assertRelayFrameSize(frame, { maxBytes: 10 })).toThrow(
+    "Relay frame exceeds byte limit"
+  );
+});
+
+it("counts relay frame bytes as UTF-8, not string code units", () => {
+  expect(relayFrameByteLength("é")).toBe(2);
+});
+
+it("rejects malformed relay error, target, and payload details", () => {
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.response",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "req-1",
+        ok: "yes"
+      })
+    )
+  ).toThrow("Relay rpc.response ok must be boolean");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.response",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "req-1",
+        ok: false,
+        error: { code: "made-up", message: "Bad" }
+      })
+    )
+  ).toThrow("Relay error.code is not a known error code");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "stream.close",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        streamId: "stream-1",
+        code: "made-up"
+      })
+    )
+  ).toThrow("Relay code is not a known stream close code");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "cancel",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        target: { kind: "other", id: "req-1" }
+      })
+    )
+  ).toThrow("Relay target.kind must be rpc or stream");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "stream.data",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        streamId: "stream-1",
+        sequence: 0,
+        payload: { encoding: "base64", dataB64: "not base64" }
+      })
+    )
+  ).toThrow("Relay payload.dataB64 must be base64");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: 1,
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION
+      })
+    )
+  ).toThrow("Relay type must be a string");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.request",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "req-1",
+        capability: "vault.file.read",
+        deadlineMs: 0
+      })
+    )
+  ).toThrow("Relay deadlineMs must be a positive integer");
+  expect(() =>
+    decodeRelayFrame(
+      JSON.stringify({
+        type: "rpc.request",
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: "req-1",
+        capability: "vault.file.read",
+        context: []
+      })
+    )
+  ).toThrow("Relay context must be a JSON object");
+});
+
+it("validates relay JSON payload edges before serialization", () => {
+  expect(
+    parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "array.payload",
+      payload: {
+        encoding: "json",
+        value: ["ok", 1, null, { nested: true }]
+      }
+    })
+  ).toEqual({
+    type: "event",
+    version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+    topic: "array.payload",
+    payload: {
+      encoding: "json",
+      value: ["ok", 1, null, { nested: true }]
+    }
+  });
+
+  expect(() =>
+    parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "bad.array",
+      payload: {
+        encoding: "json",
+        value: ["ok", undefined]
+      }
+    })
+  ).toThrow("Relay payload.value must be JSON-compatible");
+  expect(() =>
+    parseRelayFrame({
+      type: "event",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      topic: "bad.symbol",
+      payload: {
+        encoding: "json",
+        value: Symbol("nope")
+      }
+    })
+  ).toThrow("Relay payload.value must be JSON-compatible");
+  expect(() =>
+    parseRelayFrame({
+      type: "rpc.response",
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: "req-1",
+      ok: false,
+      error: {
+        code: RELAY_ERROR_CODES.INTERNAL,
+        message: "Internal",
+        data: { value: Number.NaN }
+      }
+    })
+  ).toThrow("Relay error.data must be JSON-compatible");
+});
+
+it("tracks relay pending rpc requests with deadlines", () => {
+  let now = 1000;
+  const pending = new RelayPendingRequestTable({
+    maxPending: 2,
+    defaultTimeoutMs: 100,
+    now: () => now
+  });
+
+  expect(pending.add("req-1")).toEqual({
+    ok: true,
+    pending: 1,
+    deadlineAt: 1100
+  });
+  expect(pending.add("req-2", { timeoutMs: 250 })).toEqual({
+    ok: true,
+    pending: 2,
+    deadlineAt: 1250
+  });
+  expect(pending.size).toBe(2);
+  expect(pending.has("req-1")).toBe(true);
+  expect(pending.deadlineFor("req-2")).toBe(1250);
+  expect(pending.add("req-1")).toEqual({
+    ok: false,
+    reason: "duplicate",
+    pending: 2
+  });
+  expect(pending.add("req-3")).toEqual({
+    ok: false,
+    reason: "limit",
+    pending: 2
+  });
+  expect(pending.resolve("req-2")).toBe(true);
+  expect(pending.add("req-3")).toEqual({
+    ok: true,
+    pending: 2,
+    deadlineAt: 1100
+  });
+
+  now = 1100;
+  expect(pending.expire()).toEqual(["req-1", "req-3"]);
+  expect(pending.has("req-1")).toBe(false);
+  expect(pending.resolve("req-2")).toBe(false);
+  expect(pending.size).toBe(0);
+});
+
+it("cancels and clears relay pending rpc requests", () => {
+  const pending = new RelayPendingRequestTable();
+
+  expect(pending.maxPending).toBe(RELAY_PENDING_REQUEST_LIMIT);
+  expect(pending.defaultTimeoutMs).toBe(RELAY_DEFAULT_REQUEST_TIMEOUT_MS);
+  expect(pending.add("req-1", { deadlineAt: 123 })).toEqual({
+    ok: true,
+    pending: 1,
+    deadlineAt: 123
+  });
+  expect(pending.deadlineFor("missing")).toBeNull();
+  expect(pending.cancel("missing")).toBe(false);
+  expect(pending.cancel("req-1")).toBe(true);
+  expect(pending.add("req-2")).toMatchObject({ ok: true, pending: 1 });
+  pending.clear();
+  expect(pending.size).toBe(0);
 });
