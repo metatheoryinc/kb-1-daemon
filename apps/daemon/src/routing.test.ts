@@ -291,7 +291,7 @@ describe('daemon routing', () => {
     await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'not_found' });
   });
 
-  it('attributes REST writes from the x-kb2-actor header in responses and audit JSONL', async () => {
+  it('attributes REST writes from the x-kb1-actor header in responses and audit JSONL', async () => {
     const { app, vaultRoot } = await setupScopedVault();
     const suppliedActor = {
       kind: 'integration',
@@ -304,7 +304,7 @@ describe('daemon routing', () => {
       method: 'PUT',
       headers: {
         'content-type': 'text/plain',
-        'x-kb2-actor': JSON.stringify(suppliedActor)
+        'x-kb1-actor': JSON.stringify(suppliedActor)
       },
       body: 'attributed\n'
     });
@@ -374,7 +374,7 @@ describe('daemon routing', () => {
       method: 'PUT',
       headers: {
         'content-type': 'text/plain',
-        'x-kb2-actor': header
+        'x-kb1-actor': header
       },
       body: 'must not write\n'
     });
