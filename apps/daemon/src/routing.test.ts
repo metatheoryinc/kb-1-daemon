@@ -328,7 +328,7 @@ describe('daemon routing', () => {
   });
 
   it.each([
-    { name: 'default user mode', env: {}, expectedActor: { kind: 'user' } },
+    { name: 'default user mode', env: {}, expectedActor: { kind: 'user', id: 'local user', name: 'local user' } },
     { name: 'configured unknown mode', env: { KB2_ACTOR_DEFAULT: 'unknown' }, expectedActor: { kind: 'unknown' } }
   ])('uses $name for REST writes without an actor header', async ({ env, expectedActor }) => {
     const config = createDaemonConfig({ env: { KB2_HOME: kb2Home, ...env } });
@@ -844,8 +844,11 @@ describe('daemon routing', () => {
       'delete'
     ]);
     expect(audit.every((row) => {
-      const actor = row.actor as { kind?: string; client?: string };
-      return actor.kind === 'mcp_client' && actor.client === 'daemon-sdk-test';
+      const actor = row.actor as { kind?: string; id?: string; name?: string; client?: string };
+      return actor.kind === 'mcp_client' &&
+        actor.id === 'local agent' &&
+        actor.name === 'local agent' &&
+        actor.client === 'daemon-sdk-test';
     })).toBe(true);
 
     await transport.terminateSession();

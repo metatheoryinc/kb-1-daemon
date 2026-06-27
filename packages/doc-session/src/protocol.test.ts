@@ -2,13 +2,16 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 
 import {
+  MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC_UPDATE_ACK,
   decodeAckedSyncUpdate,
+  decodeAttributedSyncUpdate,
   decodeSessionEvent,
   decodeSyncUpdateAck,
   encodeAckedSyncUpdate,
+  encodeAttributedSyncUpdate,
   encodeSessionEvent,
   encodeSyncUpdateAck,
   type DocumentSessionEvent,
@@ -83,5 +86,31 @@ describe('document session protocol events', () => {
     encoding.writeVarString(encoder, JSON.stringify(payload));
 
     expect(decodeSyncUpdateAck(decoding.createDecoder(encoding.toUint8Array(encoder)))).toBeUndefined();
+  });
+
+  it('round-trips attributed sync update frames', () => {
+    const update = new Uint8Array([7, 8, 9]);
+    const attribution = {
+      actor: { kind: 'integration', id: 'agent-1', name: 'Agent One' },
+      operation: 'splice',
+      path: 'notes/demo.md'
+    };
+    const decoder = decoding.createDecoder(encodeAttributedSyncUpdate({ attribution, update }));
+
+    expect(decoding.readVarUint(decoder)).toBe(MESSAGE_ATTRIBUTED_SYNC_UPDATE);
+    expect(decodeAttributedSyncUpdate(decoder)).toEqual({ attribution, update });
+  });
+
+  it.each([
+    { attribution: null },
+    { attribution: ['not', 'an', 'object'] },
+    { attribution: 42 },
+    { attribution: 'actor' }
+  ])('rejects malformed attributed sync update frames %#', (payload) => {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarString(encoder, JSON.stringify(payload));
+    encoding.writeVarUint8Array(encoder, new Uint8Array([1]));
+
+    expect(decodeAttributedSyncUpdate(decoding.createDecoder(encoding.toUint8Array(encoder)))).toBeUndefined();
   });
 });

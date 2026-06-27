@@ -11,7 +11,13 @@ import type {
   ServiceFailure
 } from './types.js';
 
-const unknownActor: LocalMcpActor = { kind: 'mcp_client', client: 'unknown local caller' };
+const localAgentActor = (client: string): LocalMcpActor => ({
+  kind: 'mcp_client',
+  id: 'local agent',
+  name: 'local agent',
+  client
+});
+const unknownActor: LocalMcpActor = localAgentActor('unknown local caller');
 
 /** The single synthetic vault id used when the endpoint is built from a bare service. */
 const SINGLE_VAULT_ID = 'default';
@@ -19,6 +25,14 @@ const SINGLE_VAULT_ID = 'default';
 export interface LocalMcpEndpoint {
   handleRequest(request: Request): Promise<Response>;
   close(): Promise<void>;
+}
+
+export interface LocalMcpEndpointOptions {
+  actorFromRequest?: (request: Request) => LocalMcpActor | ServiceFailure | undefined;
+}
+
+export interface LocalMcpServerOptions {
+  actor?: LocalMcpActor;
 }
 
 interface SessionRecord {
@@ -34,7 +48,10 @@ interface SessionRecord {
  */
 export type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
 
-export function createLocalMcpEndpoint(source: LocalMcpVaultSource): LocalMcpEndpoint {
+export function createLocalMcpEndpoint(
+  source: LocalMcpVaultSource,
+  options: LocalMcpEndpointOptions = {}
+): LocalMcpEndpoint {
   const provider = asProvider(source);
   const sessions = new Map<string, SessionRecord>();
 
@@ -51,6 +68,11 @@ export function createLocalMcpEndpoint(source: LocalMcpVaultSource): LocalMcpEnd
         return jsonRpcError('Bad Request: No valid MCP session id provided', 400);
       }
 
+      const actor = options.actorFromRequest?.(request);
+      if (isServiceFailure(actor)) {
+        return jsonRpcError(`Bad Request: ${actor.message}`, 400);
+      }
+
       let assignedSessionId: string | undefined;
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -58,7 +80,7 @@ export function createLocalMcpEndpoint(source: LocalMcpVaultSource): LocalMcpEnd
           assignedSessionId = nextSessionId;
         }
       });
-      const server = createLocalMcpServer(provider);
+      const server = createLocalMcpServer(provider, { actor });
 
       transport.onclose = () => {
         const id = transport.sessionId ?? assignedSessionId;
@@ -81,7 +103,10 @@ export function createLocalMcpEndpoint(source: LocalMcpVaultSource): LocalMcpEnd
   };
 }
 
-export function createLocalMcpServer(source: LocalMcpVaultSource): McpServer {
+export function createLocalMcpServer(
+  source: LocalMcpVaultSource,
+  options: LocalMcpServerOptions = {}
+): McpServer {
   const provider = asProvider(source);
   const server = new McpServer({
     name: 'kb-2-local-daemon',
@@ -89,8 +114,9 @@ export function createLocalMcpServer(source: LocalMcpVaultSource): McpServer {
   });
 
   const actor = (): LocalMcpActor => {
+    if (options.actor) return options.actor;
     const client = server.server.getClientVersion()?.name?.trim();
-    return client ? { kind: 'mcp_client', client } : unknownActor;
+    return client ? localAgentActor(client) : unknownActor;
   };
 
   // Resolve the addressed vault's service. vaultId is required on every data

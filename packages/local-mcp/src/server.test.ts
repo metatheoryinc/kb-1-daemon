@@ -141,7 +141,50 @@ describe('local MCP server', () => {
     expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}');
 
     expect(mutationActors).toHaveLength(11);
-    expect(mutationActors.every((actor) => actor.kind === 'mcp_client' && actor.client === 'sdk-test-client')).toBe(true);
+    expect(mutationActors.every((actor) =>
+      actor.kind === 'mcp_client' &&
+      actor.id === 'local agent' &&
+      actor.name === 'local agent' &&
+      actor.client === 'sdk-test-client'
+    )).toBe(true);
+
+    await transport.terminateSession();
+    await endpoint.close();
+  });
+
+  it('uses the endpoint-provided actor for an initialized MCP session', async () => {
+    const mutationActors: VaultActor[] = [];
+    const service = {
+      ...emptyService(),
+      createNote: async (input: { path: string; content: string; overwrite?: boolean; actor: VaultActor }) =>
+        recordActor(mutationActors, input.actor, {
+          ok: true,
+          path: input.path,
+          audit: audit(input.actor, 'create')
+        })
+    } satisfies LocalMcpVaultService;
+    const actor: VaultActor = {
+      kind: 'integration',
+      id: 'integration-1',
+      name: 'Integration One',
+      client: 'sdk-test-client'
+    };
+    const endpoint = createLocalMcpEndpoint(service, {
+      actorFromRequest: () => actor
+    });
+    const client = new Client({ name: 'sdk-test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL('http://127.0.0.1/mcp'), {
+      fetch: async (input, init) => endpoint.handleRequest(input instanceof Request ? input : new Request(input, init))
+    });
+
+    await client.connect(transport);
+    expect(await toolJson(client, 'create_note', {
+      vaultId: 'default',
+      path: 'created.md',
+      content: 'created'
+    })).toMatchObject({ ok: true, path: 'created.md' });
+
+    expect(mutationActors).toEqual([actor]);
 
     await transport.terminateSession();
     await endpoint.close();

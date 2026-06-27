@@ -7,6 +7,7 @@ export {
   PersistFailedError,
   type DocumentSessionFailure,
   type DocumentSessionEventHandler,
+  type DocumentSessionMutationOptions,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions,
   type SessionContentEditReject,
@@ -23,23 +24,36 @@ export {
 } from './manager.js';
 export {
   bindYjsWebSocket,
+  type YjsWebSocketBindingOptions,
   type YjsWebSocketLike
 } from './websocket.js';
 export {
+  LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   MESSAGE_ACKED_SYNC_UPDATE,
+  MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_SYNCED,
   MESSAGE_SYNC_UPDATE_ACK,
+  UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
   decodeAckedSyncUpdate,
+  decodeAttributedSyncUpdate,
   decodeSessionEvent,
   decodeSyncUpdateAck,
   encodeAckedSyncUpdate,
+  encodeAttributedSyncUpdate,
   encodeSessionEvent,
   encodeSyncUpdateAck,
   encodeSyncedMessage,
+  createDocumentUpdateAttributionOrigin,
+  documentUpdateAttributionFromOrigin,
+  documentUpdateAttributionSourceFromOrigin,
   type AckedSyncUpdate,
+  type AttributedSyncUpdate,
   type DocumentSessionEvent,
   type DocumentSessionEventKind,
+  type DocumentUpdateAttribution,
+  type DocumentUpdateAttributionValue,
   type SyncUpdateAck
 } from './protocol.js';

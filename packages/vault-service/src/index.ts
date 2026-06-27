@@ -1,4 +1,10 @@
-import { PersistFailedError, type DocumentSessionEvent, type DocumentSessionManager, type SessionSpliceReject } from '@kb-2/doc-session';
+import {
+  PersistFailedError,
+  type DocumentSessionEvent,
+  type DocumentSessionManager,
+  type DocumentUpdateAttribution,
+  type SessionSpliceReject
+} from '@kb-2/doc-session';
 import {
   InvalidPathError,
   appendContent,
@@ -211,7 +217,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         if (!input.overwrite) {
           return failure('already_exists', 'file already exists');
         }
-        const applied = await mapWriteFailure(() => liveSession.applyContent(input.content));
+        const applied = await mapWriteFailure(() => liveSession.applyContent(
+          input.content,
+          { attribution: documentUpdateAttribution(input.actor, 'write', input.path) }
+        ));
         if (!applied.ok) return applied;
         const audit = await emitVaultAudit({
           root: options.vaultRoot,
@@ -250,7 +259,11 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         ...(input.occurrence !== undefined ? { occurrence: input.occurrence } : {})
       };
       const result = await mapWriteFailure(() => options.documentSessions.withSession(input.path, (session) =>
-        session.applyBaselineEdit(input.baseline, (currentContent) => applyAnchoredSplice(currentContent, request))
+        session.applyBaselineEdit(
+          input.baseline,
+          (currentContent) => applyAnchoredSplice(currentContent, request),
+          { attribution: documentUpdateAttribution(input.actor, 'splice', input.path) }
+        )
       ));
       if (!result.ok) return result;
       if (!result.value.ok) return sessionFailureResult(result.value);
@@ -278,7 +291,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       if (!validPath.ok) return validPath;
       const result = await mapWriteFailure(() => options.documentSessions.withSession(
         input.path,
-        (session) => session.applyContentEdit((currentContent) => appendContent(currentContent, input.content)),
+        (session) => session.applyContentEdit(
+          (currentContent) => appendContent(currentContent, input.content),
+          { attribution: documentUpdateAttribution(input.actor, 'append', input.path) }
+        ),
         { defaultContent: '' }
       ));
       if (!result.ok) return result;
@@ -304,7 +320,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       const diskRead = await readVaultFile(ctx(), input.path);
       if (!diskRead.ok) return serviceResult(diskRead);
       const result = await mapWriteFailure(() => options.documentSessions.withSession(input.path, (session) =>
-        session.applyContentEdit((currentContent) => prependContent(currentContent, input.content))
+        session.applyContentEdit(
+          (currentContent) => prependContent(currentContent, input.content),
+          { attribution: documentUpdateAttribution(input.actor, 'prepend', input.path) }
+        )
       ));
       if (!result.ok) return result;
       const audit = await emitVaultAudit({
@@ -459,6 +478,27 @@ function changeEventFromDocumentSessionEvent(event: DocumentSessionEvent): Vault
   }
   /* v8 ignore next -- Exhaustive switch guard for future document-session event codes. */
   return assertNever(event.kind);
+}
+
+function documentUpdateAttribution(
+  actor: VaultActor,
+  operation: string,
+  path: string
+): DocumentUpdateAttribution {
+  return {
+    actor: actorAttribution(actor),
+    operation,
+    path
+  };
+}
+
+function actorAttribution(actor: VaultActor): DocumentUpdateAttribution {
+  return {
+    kind: actor.kind,
+    ...(actor.id !== undefined ? { id: actor.id } : {}),
+    ...(actor.name !== undefined ? { name: actor.name } : {}),
+    ...(actor.client !== undefined ? { client: actor.client } : {})
+  };
 }
 
 function emitAuditChange(

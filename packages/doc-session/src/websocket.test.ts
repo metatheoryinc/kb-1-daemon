@@ -13,14 +13,20 @@ import * as Y from 'yjs';
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
+  LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   MESSAGE_ACKED_SYNC_UPDATE,
+  MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   MESSAGE_SYNC_UPDATE_ACK,
   OneFileDocumentSession,
+  UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
+  decodeAttributedSyncUpdate,
   decodeSyncUpdateAck,
   decodeSessionEvent,
   encodeAckedSyncUpdate,
+  type AttributedSyncUpdate,
   type DocumentSessionEvent,
   type YjsWebSocketLike
 } from './index.js';
@@ -107,6 +113,111 @@ describe('Yjs WebSocket session', () => {
 
     socket.emitClose();
     await binding.closed;
+    await session.close();
+    clientDoc.destroy();
+  });
+
+  it('sends opaque attribution sidecars for attributed session mutations', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'attributed.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    socket.sent.length = 0;
+
+    const attribution = {
+      actor: { kind: 'integration', id: 'agent-1', name: 'Agent One' },
+      operation: 'write',
+      path: 'attributed.md'
+    };
+    await session.applyContent('attributed write\n', { attribution });
+
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for attributed sync update; sent=${describeMessages(socket.sent)}`
+    );
+    const attributed = findAttributedSyncUpdate(socket.sent);
+    expect(attributed?.attribution).toEqual(attribution);
+
+    const attributedDoc = new Y.Doc();
+    Y.applyUpdate(attributedDoc, attributed!.update);
+    expect(attributedDoc.getText('markdown').toString()).toBe('attributed write\n');
+    expect(socket.sent.some((message) => messageType(message) === MESSAGE_SYNC)).toBe(true);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    attributedDoc.destroy();
+  });
+
+  it('sends sentinel attribution sidecars for local and unknown document updates', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'sentinels.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+
+    socket.sent.length = 0;
+    await session.applyContent('local write\n');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for local user attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.sent.length = 0;
+    await session.applyContentEdit(() => 'local agent splice\n');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for local agent attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.sent.length = 0;
+    session.ydoc.getText('markdown').insert(0, 'unknown origin ');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for unknown attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
+  it('labels socket-origin Yjs updates with the socket binding attribution', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'socket-attribution.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const sender = new FakeSocket();
+    const receiver = new FakeSocket();
+    const senderBinding = await bindYjsWebSocket(session, sender);
+    const receiverBinding = await bindYjsWebSocket(session, receiver);
+    sender.sent.length = 0;
+    receiver.sent.length = 0;
+
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'socket edit\n');
+    sender.emitMessage(encodeAckedSyncUpdate({
+      ackId: 'socket-edit',
+      update: Y.encodeStateAsUpdate(clientDoc)
+    }));
+
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(receiver.sent)),
+      () => `Timed out waiting for socket attribution; receiver=${describeMessages(receiver.sent)}`
+    );
+    expect(findAttributedSyncUpdate(receiver.sent)?.attribution).toEqual(LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION);
+    expect(findAttributedSyncUpdate(sender.sent)).toBeUndefined();
+
+    sender.emitClose();
+    receiver.emitClose();
+    await senderBinding.closed;
+    await receiverBinding.closed;
     await session.close();
     clientDoc.destroy();
   });
@@ -874,6 +985,18 @@ function findSyncUpdateAck(messages: Uint8Array[], ackId: string) {
   return undefined;
 }
 
+function findAttributedSyncUpdate(messages: Uint8Array[]): AttributedSyncUpdate | undefined {
+  for (const message of messages) {
+    const decoder = decoding.createDecoder(message);
+    if (decoding.readVarUint(decoder) !== MESSAGE_ATTRIBUTED_SYNC_UPDATE) {
+      continue;
+    }
+    const update = decodeAttributedSyncUpdate(decoder);
+    if (update) return update;
+  }
+  return undefined;
+}
+
 function sessionEventKind(message: Uint8Array): DocumentSessionEvent['kind'] | undefined {
   const decoder = decoding.createDecoder(message);
   const messageType = decoding.readVarUint(decoder);
@@ -896,11 +1019,19 @@ function describeMessages(messages: Uint8Array[]): string {
     if (messageType === MESSAGE_ACKED_SYNC_UPDATE) {
       return { type: 'acked-sync-update' };
     }
+    if (messageType === MESSAGE_ATTRIBUTED_SYNC_UPDATE) {
+      return { type: 'attributed-sync-update', update: decodeAttributedSyncUpdate(decoder) };
+    }
     if (messageType === MESSAGE_SYNC) {
       return { type: 'sync' };
     }
     return { type: messageType };
   }));
+}
+
+function messageType(message: Uint8Array): number {
+  const decoder = decoding.createDecoder(message);
+  return decoding.readVarUint(decoder);
 }
 
 function receiveSyncMessage(doc: Y.Doc, message: Uint8Array): Uint8Array | undefined {
