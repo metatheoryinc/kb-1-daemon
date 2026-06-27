@@ -11,14 +11,19 @@ import {
   type OneFileDocumentSession
 } from './session.js';
 import {
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_SYNC,
+  UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
+  createDocumentUpdateAttributionOrigin,
   decodeAckedSyncUpdate,
   documentUpdateAttributionFromOrigin,
+  documentUpdateAttributionSourceFromOrigin,
   encodeAttributedSyncUpdate,
   encodeSessionEvent,
   encodeSyncUpdateAck,
-  encodeSyncedMessage
+  encodeSyncedMessage,
+  type DocumentUpdateAttribution
 } from './protocol.js';
 
 const socketOpen = 1;
@@ -37,9 +42,14 @@ export interface BoundYjsWebSocket {
   closed: Promise<void>;
 }
 
+export interface YjsWebSocketBindingOptions {
+  attribution?: DocumentUpdateAttribution;
+}
+
 export async function bindYjsWebSocket(
   session: OneFileDocumentSession,
-  socket: YjsWebSocketLike
+  socket: YjsWebSocketLike,
+  options: YjsWebSocketBindingOptions = {}
 ): Promise<BoundYjsWebSocket> {
   let cleanupStarted = false;
   let sessionReady = false;
@@ -53,16 +63,18 @@ export async function bindYjsWebSocket(
   });
   let unsubscribeSessionEvents: () => void = () => {};
   const deferredPersistedAckIds = new Set<string>();
+  const socketUpdateOrigin = createDocumentUpdateAttributionOrigin(
+    options.attribution ?? LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
+    socket
+  );
 
   const updateHandler = (update: Uint8Array, origin: unknown) => {
-    if (origin === socket) {
+    if (origin === socket || documentUpdateAttributionSourceFromOrigin(origin) === socket) {
       return;
     }
 
-    const attribution = documentUpdateAttributionFromOrigin(origin);
-    if (attribution) {
-      sendBytes(socket, encodeAttributedSyncUpdate({ attribution, update }));
-    }
+    const attribution = documentUpdateAttributionFromOrigin(origin) ?? UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION;
+    sendBytes(socket, encodeAttributedSyncUpdate({ attribution, update }));
 
     sendSync(socket, (encoder) => {
       syncProtocol.writeUpdate(encoder, update);
@@ -123,7 +135,7 @@ export async function bindYjsWebSocket(
           closeUnsafeDivergence(socket);
           return;
         }
-        Y.applyUpdate(session.ydoc, ackedUpdate.update, socket);
+        Y.applyUpdate(session.ydoc, ackedUpdate.update, socketUpdateOrigin);
         void session.flush().then(() => {
           sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
         }, (error: unknown) => {
@@ -141,7 +153,7 @@ export async function bindYjsWebSocket(
       }
 
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      const syncResult = processYjsSyncPayload(session, socket, decoder, encoder);
+      const syncResult = processYjsSyncPayload(session, socket, socketUpdateOrigin, decoder, encoder);
       if (syncResult === 'closed') {
         return;
       }
@@ -224,6 +236,7 @@ type SyncMessageResult = 'answered-sync-step1' | 'processed' | 'closed';
 function processYjsSyncPayload(
   session: OneFileDocumentSession,
   socket: YjsWebSocketLike,
+  origin: unknown,
   decoder: decoding.Decoder,
   encoder: encoding.Encoder
 ): SyncMessageResult {
@@ -240,7 +253,7 @@ function processYjsSyncPayload(
       closeUnsafeDivergence(socket);
       return 'closed';
     }
-    Y.applyUpdate(session.ydoc, update, socket);
+    Y.applyUpdate(session.ydoc, update, origin);
     return 'processed';
   }
 

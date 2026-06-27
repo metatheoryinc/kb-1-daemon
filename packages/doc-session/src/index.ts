@@ -24,15 +24,19 @@ export {
 } from './manager.js';
 export {
   bindYjsWebSocket,
+  type YjsWebSocketBindingOptions,
   type YjsWebSocketLike
 } from './websocket.js';
 export {
+  LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_SYNCED,
   MESSAGE_SYNC_UPDATE_ACK,
+  UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
   decodeAckedSyncUpdate,
   decodeAttributedSyncUpdate,
   decodeSessionEvent,
@@ -44,6 +48,7 @@ export {
   encodeSyncedMessage,
   createDocumentUpdateAttributionOrigin,
   documentUpdateAttributionFromOrigin,
+  documentUpdateAttributionSourceFromOrigin,
   type AckedSyncUpdate,
   type AttributedSyncUpdate,
   type DocumentSessionEvent,

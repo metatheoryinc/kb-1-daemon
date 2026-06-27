@@ -49,6 +49,18 @@ export type DocumentUpdateAttribution = {
   [key: string]: DocumentUpdateAttributionValue;
 };
 
+export const LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION = {
+  actor: { kind: 'user', id: 'local user', name: 'local user' }
+} satisfies DocumentUpdateAttribution;
+
+export const LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION = {
+  actor: { kind: 'mcp_client', id: 'local agent', name: 'local agent', client: 'local agent' }
+} satisfies DocumentUpdateAttribution;
+
+export const UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION = {
+  actor: { kind: 'unknown' }
+} satisfies DocumentUpdateAttribution;
+
 export interface AttributedSyncUpdate {
   attribution: DocumentUpdateAttribution;
   update: Uint8Array;
@@ -57,14 +69,17 @@ export interface AttributedSyncUpdate {
 interface DocumentUpdateAttributionOrigin {
   [DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN]: true;
   attribution: DocumentUpdateAttribution;
+  source?: unknown;
 }
 
 export function createDocumentUpdateAttributionOrigin(
   attribution: DocumentUpdateAttribution,
+  source?: unknown,
 ): unknown {
   return {
     [DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN]: true,
     attribution,
+    ...(source !== undefined ? { source } : {})
   } satisfies DocumentUpdateAttributionOrigin;
 }
 
@@ -75,6 +90,13 @@ export function documentUpdateAttributionFromOrigin(
   const candidate = origin as Partial<DocumentUpdateAttributionOrigin>;
   if (candidate[DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN] !== true) return undefined;
   return isJsonObject(candidate.attribution) ? candidate.attribution : undefined;
+}
+
+export function documentUpdateAttributionSourceFromOrigin(origin: unknown): unknown | undefined {
+  if (!origin || typeof origin !== 'object') return undefined;
+  const candidate = origin as Partial<DocumentUpdateAttributionOrigin>;
+  if (candidate[DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN] !== true) return undefined;
+  return candidate.source;
 }
 
 export function encodeSessionEvent(event: DocumentSessionEvent): Uint8Array {

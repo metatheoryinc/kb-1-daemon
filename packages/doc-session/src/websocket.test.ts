@@ -13,12 +13,15 @@ import * as Y from 'yjs';
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
+  LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   MESSAGE_SYNC_UPDATE_ACK,
   OneFileDocumentSession,
+  UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
   decodeAttributedSyncUpdate,
   decodeSyncUpdateAck,
   decodeSessionEvent,
@@ -146,6 +149,77 @@ describe('Yjs WebSocket session', () => {
     await binding.closed;
     await session.close();
     attributedDoc.destroy();
+  });
+
+  it('sends sentinel attribution sidecars for local and unknown document updates', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'sentinels.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+
+    socket.sent.length = 0;
+    await session.applyContent('local write\n');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for local user attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.sent.length = 0;
+    await session.applyContentEdit(() => 'local agent splice\n');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for local agent attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.sent.length = 0;
+    session.ydoc.getText('markdown').insert(0, 'unknown origin ');
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for unknown attribution; sent=${describeMessages(socket.sent)}`
+    );
+    expect(findAttributedSyncUpdate(socket.sent)?.attribution).toEqual(UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
+  it('labels socket-origin Yjs updates with the socket binding attribution', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'socket-attribution.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const sender = new FakeSocket();
+    const receiver = new FakeSocket();
+    const senderBinding = await bindYjsWebSocket(session, sender);
+    const receiverBinding = await bindYjsWebSocket(session, receiver);
+    sender.sent.length = 0;
+    receiver.sent.length = 0;
+
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'socket edit\n');
+    sender.emitMessage(encodeAckedSyncUpdate({
+      ackId: 'socket-edit',
+      update: Y.encodeStateAsUpdate(clientDoc)
+    }));
+
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(receiver.sent)),
+      () => `Timed out waiting for socket attribution; receiver=${describeMessages(receiver.sent)}`
+    );
+    expect(findAttributedSyncUpdate(receiver.sent)?.attribution).toEqual(LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION);
+    expect(findAttributedSyncUpdate(sender.sent)).toBeUndefined();
+
+    sender.emitClose();
+    receiver.emitClose();
+    await senderBinding.closed;
+    await receiverBinding.closed;
+    await session.close();
+    clientDoc.destroy();
   });
 
   it('defers tagged client update acknowledgement until failed persistence recovers', async () => {

@@ -11,7 +11,13 @@ import type {
   ServiceFailure
 } from './types.js';
 
-const unknownActor: LocalMcpActor = { kind: 'mcp_client', client: 'unknown local caller' };
+const localAgentActor = (client: string): LocalMcpActor => ({
+  kind: 'mcp_client',
+  id: 'local agent',
+  name: 'local agent',
+  client
+});
+const unknownActor: LocalMcpActor = localAgentActor('unknown local caller');
 
 /** The single synthetic vault id used when the endpoint is built from a bare service. */
 const SINGLE_VAULT_ID = 'default';
@@ -110,7 +116,7 @@ export function createLocalMcpServer(
   const actor = (): LocalMcpActor => {
     if (options.actor) return options.actor;
     const client = server.server.getClientVersion()?.name?.trim();
-    return client ? { kind: 'mcp_client', client } : unknownActor;
+    return client ? localAgentActor(client) : unknownActor;
   };
 
   // Resolve the addressed vault's service. vaultId is required on every data

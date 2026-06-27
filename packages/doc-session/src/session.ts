@@ -8,6 +8,8 @@ import * as Y from 'yjs';
 import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-2/vault-core';
 
 import {
+  LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
+  LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   createDocumentUpdateAttributionOrigin,
   type DocumentSessionEvent,
   type DocumentUpdateAttribution
@@ -16,7 +18,6 @@ import {
 const Y_TEXT_NAME = 'markdown';
 const DOCUMENT_SESSION_STATE_VERSION = 1;
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb2.external-change');
-const AGENT_SPLICE_ORIGIN = Symbol('kb2.agent-splice');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
 
@@ -235,7 +236,7 @@ export class OneFileDocumentSession {
     this.doc.transact(() => {
       this.text.delete(0, this.text.length);
       this.text.insert(0, content);
-    }, this);
+    }, updateOriginForOptions({}, LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION));
 
     await this.flush();
     return this.currentContent();
@@ -251,7 +252,7 @@ export class OneFileDocumentSession {
     if (current !== content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, content));
-      }, updateOriginForOptions(options, this));
+      }, updateOriginForOptions(options, LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION));
     }
 
     await this.flush();
@@ -280,7 +281,7 @@ export class OneFileDocumentSession {
     if (current !== result.content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, result.content));
-      }, updateOriginForOptions(options, AGENT_SPLICE_ORIGIN));
+      }, updateOriginForOptions(options, LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION));
     }
 
     await this.flush();
@@ -536,7 +537,7 @@ export class OneFileDocumentSession {
     if (current !== content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, content));
-      }, updateOriginForOptions(options, AGENT_SPLICE_ORIGIN));
+      }, updateOriginForOptions(options, LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION));
     }
     await this.flush();
     return {
@@ -865,11 +866,9 @@ function truncateUtf8(value: string, limitBytes: number): string {
 
 function updateOriginForOptions(
   options: DocumentSessionMutationOptions,
-  fallback: unknown,
+  fallback: DocumentUpdateAttribution,
 ): unknown {
-  return options.attribution
-    ? createDocumentUpdateAttributionOrigin(options.attribution)
-    : fallback;
+  return createDocumentUpdateAttributionOrigin(options.attribution ?? fallback);
 }
 
 export type YTextDeltaOperation =

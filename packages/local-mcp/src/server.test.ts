@@ -141,7 +141,12 @@ describe('local MCP server', () => {
     expect(textContent(stale)).toBe('edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}');
 
     expect(mutationActors).toHaveLength(11);
-    expect(mutationActors.every((actor) => actor.kind === 'mcp_client' && actor.client === 'sdk-test-client')).toBe(true);
+    expect(mutationActors.every((actor) =>
+      actor.kind === 'mcp_client' &&
+      actor.id === 'local agent' &&
+      actor.name === 'local agent' &&
+      actor.client === 'sdk-test-client'
+    )).toBe(true);
 
     await transport.terminateSession();
     await endpoint.close();

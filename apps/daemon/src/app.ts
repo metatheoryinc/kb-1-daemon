@@ -29,7 +29,7 @@ import type {
   VaultRegistryErrorCode
 } from './vault-registry.js';
 
-const ACTOR_HEADER = 'x-kb2-actor';
+export const ACTOR_HEADER = 'x-kb2-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
@@ -573,10 +573,10 @@ function actorFromRequest(context: Context, actorDefault: ActorDefault): Service
   const parsed = actorFromHeader(context.req.header(ACTOR_HEADER));
 
   if (!parsed.ok) return parsed;
-  return { ok: true, actor: parsed.actor ?? { kind: actorDefault } };
+  return { ok: true, actor: parsed.actor ?? defaultActor(actorDefault) };
 }
 
-function actorFromHeader(rawActor: string | undefined): ServiceResult<{ actor?: VaultActor }> {
+export function actorFromHeader(rawActor: string | undefined): ServiceResult<{ actor?: VaultActor }> {
   if (rawActor === undefined) {
     return { ok: true };
   }
@@ -617,6 +617,14 @@ function actorFromHeader(rawActor: string | undefined): ServiceResult<{ actor?: 
       ...(client.value !== undefined ? { client: client.value } : {})
     }
   };
+}
+
+function defaultActor(actorDefault: ActorDefault): VaultActor {
+  if (actorDefault === 'unknown') {
+    return { kind: 'unknown' };
+  }
+
+  return { kind: 'user', id: 'local user', name: 'local user' };
 }
 
 function readOptionalActorString(

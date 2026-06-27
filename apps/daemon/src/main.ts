@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager } from '@kb-2/doc-session';
+import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
+import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { validateVaultPath } from '@kb-2/vault-core';
+import { validateVaultPath, type VaultActor } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { createApp, mcpVaultProvider, type RelayLifecycleController } from './app.js';
+import { ACTOR_HEADER, actorFromHeader, createApp, mcpVaultProvider, type RelayLifecycleController } from './app.js';
 import {
   createDaemonConfig,
   DEFAULT_VAULT_SLUG,
@@ -131,6 +132,12 @@ export async function startDaemon(): Promise<StartedDaemon> {
         return;
       }
 
+      const attribution = documentUpdateAttributionFromRequest(request);
+      if (!attribution.ok) {
+        socket.destroy();
+        return;
+      }
+
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
         // Track the connection's whole lifecycle — handshake, session open (which
         // writes the session-state snapshot), and the bound stream — in the drain
@@ -139,7 +146,11 @@ export async function startDaemon(): Promise<StartedDaemon> {
         const lifecycle = (async () => {
           const bindingLease = target.manager.attachClientSession(target.documentPath);
           try {
-            const binding = await bindYjsWebSocket(bindingLease.session, webSocket);
+            const binding = await bindYjsWebSocket(
+              bindingLease.session,
+              webSocket,
+              attribution.attribution ? { attribution: attribution.attribution } : {}
+            );
             try {
               await binding.closed;
             } finally {
@@ -235,6 +246,29 @@ function resolveWebSocketTarget(
   }
   const documentPath = safeValidateFilePath(scoped.rawPath);
   return documentPath ? { manager: instance.manager, documentPath } : undefined;
+}
+
+function documentUpdateAttributionFromRequest(
+  request: IncomingMessage
+): { ok: true; attribution?: DocumentUpdateAttribution } | { ok: false } {
+  const parsed = actorFromHeader(firstHeaderValue(request.headers[ACTOR_HEADER]));
+  if (!parsed.ok) return { ok: false };
+  return {
+    ok: true,
+    ...(parsed.actor ? { attribution: documentUpdateAttributionForActor(parsed.actor) } : {})
+  };
+}
+
+function documentUpdateAttributionForActor(actor: VaultActor): DocumentUpdateAttribution {
+  const attributedActor: Record<string, string> = { kind: actor.kind };
+  if (actor.id !== undefined) attributedActor.id = actor.id;
+  if (actor.name !== undefined) attributedActor.name = actor.name;
+  if (actor.client !== undefined) attributedActor.client = actor.client;
+  return { actor: attributedActor };
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */
