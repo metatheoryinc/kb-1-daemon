@@ -29,7 +29,7 @@ import type {
   VaultRegistryErrorCode
 } from './vault-registry.js';
 
-export const ACTOR_HEADER = 'x-kb2-actor';
+export const ACTOR_HEADER = 'x-kb1-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
