@@ -111,7 +111,12 @@ export function createApp(options: CreateAppOptions): Hono {
     // One MCP endpoint addresses every vault. vaultId resolution and vault
     // enumeration go through the registry — the same source of truth as the HTTP
     // layer. Every data tool requires a vaultId; there is no default vault.
-    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(mcpVaultProvider(registry));
+    const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(mcpVaultProvider(registry), {
+      actorFromRequest: (request) => {
+        const parsed = actorFromHeader(request.headers.get(ACTOR_HEADER) ?? undefined);
+        return parsed.ok ? parsed.actor : parsed;
+      }
+    });
     app.all('/mcp', async (context) => {
       return mcpEndpoint.handleRequest(context.req.raw);
     });
@@ -565,10 +570,15 @@ function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 |
 }
 
 function actorFromRequest(context: Context, actorDefault: ActorDefault): ServiceResult<{ actor: VaultActor }> {
-  const rawActor = context.req.header(ACTOR_HEADER);
+  const parsed = actorFromHeader(context.req.header(ACTOR_HEADER));
 
+  if (!parsed.ok) return parsed;
+  return { ok: true, actor: parsed.actor ?? { kind: actorDefault } };
+}
+
+function actorFromHeader(rawActor: string | undefined): ServiceResult<{ actor?: VaultActor }> {
   if (rawActor === undefined) {
-    return { ok: true, actor: { kind: actorDefault } };
+    return { ok: true };
   }
 
   if (new TextEncoder().encode(rawActor).byteLength > MAX_ACTOR_HEADER_BYTES) {

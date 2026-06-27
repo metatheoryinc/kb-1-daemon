@@ -14,13 +14,16 @@ import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   MESSAGE_ACKED_SYNC_UPDATE,
+  MESSAGE_ATTRIBUTED_SYNC_UPDATE,
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
   MESSAGE_SYNC_UPDATE_ACK,
   OneFileDocumentSession,
+  decodeAttributedSyncUpdate,
   decodeSyncUpdateAck,
   decodeSessionEvent,
   encodeAckedSyncUpdate,
+  type AttributedSyncUpdate,
   type DocumentSessionEvent,
   type YjsWebSocketLike
 } from './index.js';
@@ -109,6 +112,40 @@ describe('Yjs WebSocket session', () => {
     await binding.closed;
     await session.close();
     clientDoc.destroy();
+  });
+
+  it('sends opaque attribution sidecars for attributed session mutations', async () => {
+    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb2Home, 'demo-vault', 'attributed.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    socket.sent.length = 0;
+
+    const attribution = {
+      actor: { kind: 'integration', id: 'agent-1', name: 'Agent One' },
+      operation: 'write',
+      path: 'attributed.md'
+    };
+    await session.applyContent('attributed write\n', { attribution });
+
+    await waitUntil(
+      () => Boolean(findAttributedSyncUpdate(socket.sent)),
+      () => `Timed out waiting for attributed sync update; sent=${describeMessages(socket.sent)}`
+    );
+    const attributed = findAttributedSyncUpdate(socket.sent);
+    expect(attributed?.attribution).toEqual(attribution);
+
+    const attributedDoc = new Y.Doc();
+    Y.applyUpdate(attributedDoc, attributed!.update);
+    expect(attributedDoc.getText('markdown').toString()).toBe('attributed write\n');
+    expect(socket.sent.some((message) => messageType(message) === MESSAGE_SYNC)).toBe(true);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    attributedDoc.destroy();
   });
 
   it('defers tagged client update acknowledgement until failed persistence recovers', async () => {
@@ -874,6 +911,18 @@ function findSyncUpdateAck(messages: Uint8Array[], ackId: string) {
   return undefined;
 }
 
+function findAttributedSyncUpdate(messages: Uint8Array[]): AttributedSyncUpdate | undefined {
+  for (const message of messages) {
+    const decoder = decoding.createDecoder(message);
+    if (decoding.readVarUint(decoder) !== MESSAGE_ATTRIBUTED_SYNC_UPDATE) {
+      continue;
+    }
+    const update = decodeAttributedSyncUpdate(decoder);
+    if (update) return update;
+  }
+  return undefined;
+}
+
 function sessionEventKind(message: Uint8Array): DocumentSessionEvent['kind'] | undefined {
   const decoder = decoding.createDecoder(message);
   const messageType = decoding.readVarUint(decoder);
@@ -896,11 +945,19 @@ function describeMessages(messages: Uint8Array[]): string {
     if (messageType === MESSAGE_ACKED_SYNC_UPDATE) {
       return { type: 'acked-sync-update' };
     }
+    if (messageType === MESSAGE_ATTRIBUTED_SYNC_UPDATE) {
+      return { type: 'attributed-sync-update', update: decodeAttributedSyncUpdate(decoder) };
+    }
     if (messageType === MESSAGE_SYNC) {
       return { type: 'sync' };
     }
     return { type: messageType };
   }));
+}
+
+function messageType(message: Uint8Array): number {
+  const decoder = decoding.createDecoder(message);
+  return decoding.readVarUint(decoder);
 }
 
 function receiveSyncMessage(doc: Y.Doc, message: Uint8Array): Uint8Array | undefined {

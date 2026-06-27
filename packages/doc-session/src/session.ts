@@ -7,7 +7,11 @@ import diff from 'fast-diff';
 import * as Y from 'yjs';
 import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-2/vault-core';
 
-import type { DocumentSessionEvent } from './protocol.js';
+import {
+  createDocumentUpdateAttributionOrigin,
+  type DocumentSessionEvent,
+  type DocumentUpdateAttribution
+} from './protocol.js';
 
 const Y_TEXT_NAME = 'markdown';
 const DOCUMENT_SESSION_STATE_VERSION = 1;
@@ -39,6 +43,10 @@ export interface OneFileDocumentSessionOptions {
 }
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
+
+export interface DocumentSessionMutationOptions {
+  attribution?: DocumentUpdateAttribution;
+}
 
 // Deliberately re-declared at the doc-session boundary to keep this package decoupled from service/transport mappers while preserving the closed one-failure-dialect shape.
 export interface DocumentSessionFailure {
@@ -233,7 +241,7 @@ export class OneFileDocumentSession {
     return this.currentContent();
   }
 
-  async applyContent(content: string): Promise<string> {
+  async applyContent(content: string, options: DocumentSessionMutationOptions = {}): Promise<string> {
     await this.open();
     if (this.deleted) {
       throw new Error(`Document session for ${this.eventPath} has been deleted.`);
@@ -243,7 +251,7 @@ export class OneFileDocumentSession {
     if (current !== content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, content));
-      }, this);
+      }, updateOriginForOptions(options, this));
     }
 
     await this.flush();
@@ -252,7 +260,8 @@ export class OneFileDocumentSession {
 
   async applyBaselineEdit(
     baseline: string,
-    edit: (currentContent: string) => SessionContentEditResult
+    edit: (currentContent: string) => SessionContentEditResult,
+    options: DocumentSessionMutationOptions = {},
   ): Promise<SessionSpliceResult> {
     await this.open();
     if (this.deleted) {
@@ -271,7 +280,7 @@ export class OneFileDocumentSession {
     if (current !== result.content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, result.content));
-      }, AGENT_SPLICE_ORIGIN);
+      }, updateOriginForOptions(options, AGENT_SPLICE_ORIGIN));
     }
 
     await this.flush();
@@ -282,9 +291,12 @@ export class OneFileDocumentSession {
     };
   }
 
-  async applyContentEdit(edit: (currentContent: string) => string): Promise<{ content: string; baseline: string }> {
+  async applyContentEdit(
+    edit: (currentContent: string) => string,
+    options: DocumentSessionMutationOptions = {},
+  ): Promise<{ content: string; baseline: string }> {
     await this.open();
-    return this.applyPositionedContent(edit(this.currentContentAfterOpen()));
+    return this.applyPositionedContent(edit(this.currentContentAfterOpen()), options);
   }
 
   async flush(): Promise<void> {
@@ -512,7 +524,10 @@ export class OneFileDocumentSession {
     return this.currentContent();
   }
 
-  private async applyPositionedContent(content: string): Promise<{ content: string; baseline: string }> {
+  private async applyPositionedContent(
+    content: string,
+    options: DocumentSessionMutationOptions = {},
+  ): Promise<{ content: string; baseline: string }> {
     await this.open();
     if (this.deleted) {
       throw new Error(`Document session for ${this.eventPath} has been deleted.`);
@@ -521,7 +536,7 @@ export class OneFileDocumentSession {
     if (current !== content) {
       this.doc.transact(() => {
         this.text.applyDelta(createFastDiffYTextDelta(current, content));
-      }, AGENT_SPLICE_ORIGIN);
+      }, updateOriginForOptions(options, AGENT_SPLICE_ORIGIN));
     }
     await this.flush();
     return {
@@ -846,6 +861,15 @@ function truncateUtf8(value: string, limitBytes: number): string {
     bytes += next;
   }
   return output;
+}
+
+function updateOriginForOptions(
+  options: DocumentSessionMutationOptions,
+  fallback: unknown,
+): unknown {
+  return options.attribution
+    ? createDocumentUpdateAttributionOrigin(options.attribution)
+    : fallback;
 }
 
 export type YTextDeltaOperation =

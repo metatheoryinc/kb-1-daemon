@@ -6,6 +6,9 @@ export const MESSAGE_SESSION_EVENT = 1;
 export const MESSAGE_SYNCED = 2;
 export const MESSAGE_ACKED_SYNC_UPDATE = 3;
 export const MESSAGE_SYNC_UPDATE_ACK = 4;
+export const MESSAGE_ATTRIBUTED_SYNC_UPDATE = 5;
+
+const DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN = Symbol('kb2.document-update-attribution-origin');
 
 export type DocumentSessionEventKind =
   | 'content-persisted'
@@ -32,6 +35,46 @@ export interface AckedSyncUpdate {
 export interface SyncUpdateAck {
   ackId: string;
   ts: number;
+}
+
+export type DocumentUpdateAttributionValue =
+  | null
+  | boolean
+  | number
+  | string
+  | DocumentUpdateAttributionValue[]
+  | { [key: string]: DocumentUpdateAttributionValue };
+
+export type DocumentUpdateAttribution = {
+  [key: string]: DocumentUpdateAttributionValue;
+};
+
+export interface AttributedSyncUpdate {
+  attribution: DocumentUpdateAttribution;
+  update: Uint8Array;
+}
+
+interface DocumentUpdateAttributionOrigin {
+  [DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN]: true;
+  attribution: DocumentUpdateAttribution;
+}
+
+export function createDocumentUpdateAttributionOrigin(
+  attribution: DocumentUpdateAttribution,
+): unknown {
+  return {
+    [DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN]: true,
+    attribution,
+  } satisfies DocumentUpdateAttributionOrigin;
+}
+
+export function documentUpdateAttributionFromOrigin(
+  origin: unknown,
+): DocumentUpdateAttribution | undefined {
+  if (!origin || typeof origin !== 'object') return undefined;
+  const candidate = origin as Partial<DocumentUpdateAttributionOrigin>;
+  if (candidate[DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN] !== true) return undefined;
+  return isJsonObject(candidate.attribution) ? candidate.attribution : undefined;
 }
 
 export function encodeSessionEvent(event: DocumentSessionEvent): Uint8Array {
@@ -77,6 +120,25 @@ export function decodeSyncUpdateAck(decoder: decoding.Decoder): SyncUpdateAck | 
   return { ackId: parsed.ackId, ts: parsed.ts };
 }
 
+export function encodeAttributedSyncUpdate(update: AttributedSyncUpdate): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_ATTRIBUTED_SYNC_UPDATE);
+  encoding.writeVarString(encoder, JSON.stringify({ attribution: update.attribution }));
+  encoding.writeVarUint8Array(encoder, update.update);
+  return encoding.toUint8Array(encoder);
+}
+
+export function decodeAttributedSyncUpdate(
+  decoder: decoding.Decoder,
+): AttributedSyncUpdate | undefined {
+  const parsed = JSON.parse(decoding.readVarString(decoder)) as { attribution?: unknown };
+  const update = decoding.readVarUint8Array(decoder);
+  if (!isJsonObject(parsed.attribution)) {
+    return undefined;
+  }
+  return { attribution: parsed.attribution, update };
+}
+
 export function decodeSessionEvent(
   decoder: decoding.Decoder,
 ): DocumentSessionEvent | undefined {
@@ -109,4 +171,29 @@ function isSessionEventKind(kind: unknown): kind is DocumentSessionEventKind {
     kind === 'persist-recovered' ||
     kind === 'doc-moved' ||
     kind === 'doc-deleted';
+}
+
+function isJsonObject(value: unknown): value is DocumentUpdateAttribution {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every(isJsonValue);
+}
+
+function isJsonValue(value: unknown): value is DocumentUpdateAttributionValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  ) {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (typeof value === 'object') {
+    return isJsonObject(value);
+  }
+  return false;
 }

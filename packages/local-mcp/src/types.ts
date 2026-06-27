@@ -2,7 +2,7 @@ import type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor } 
 
 export type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor };
 
-export type LocalMcpActor = { kind: 'mcp_client'; client: string };
+export type LocalMcpActor = VaultActor;
 
 /** A vault the MCP layer can address: its stable slug as `id` plus a display name. */
 export interface LocalMcpVaultSummary {

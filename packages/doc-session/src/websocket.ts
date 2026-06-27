@@ -14,6 +14,8 @@ import {
   MESSAGE_ACKED_SYNC_UPDATE,
   MESSAGE_SYNC,
   decodeAckedSyncUpdate,
+  documentUpdateAttributionFromOrigin,
+  encodeAttributedSyncUpdate,
   encodeSessionEvent,
   encodeSyncUpdateAck,
   encodeSyncedMessage
@@ -55,6 +57,11 @@ export async function bindYjsWebSocket(
   const updateHandler = (update: Uint8Array, origin: unknown) => {
     if (origin === socket) {
       return;
+    }
+
+    const attribution = documentUpdateAttributionFromOrigin(origin);
+    if (attribution) {
+      sendBytes(socket, encodeAttributedSyncUpdate({ attribution, update }));
     }
 
     sendSync(socket, (encoder) => {
