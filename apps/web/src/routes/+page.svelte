@@ -334,6 +334,17 @@
     return undefined;
   }
 
+  function markDocumentNotFound(path = documentPath): void {
+    if (!path) return;
+    teardownProvider();
+    notFoundPath = path;
+    docDeleted = true;
+    persistFailureActive = false;
+    externalChangeVisible = false;
+    externalMergeVisible = false;
+    status = 'closed';
+  }
+
   // The node the URL currently points at, resolved against the live
   // tree. Mirrors KB-1's selector resolution: the tree decides whether
   // a path is a folder or a note, and the route renders the matching
@@ -528,10 +539,7 @@
     }
 
     if (event.kind === 'doc-deleted') {
-      docDeleted = true;
-      persistFailureActive = false;
-      externalChangeVisible = false;
-      externalMergeVisible = false;
+      markDocumentNotFound(event.path);
       void refreshTree();
       return;
     }
@@ -772,8 +780,18 @@
         staleTime: 30_000,
       });
       vaultTrees = { ...vaultTrees, [vaultId]: tree };
+      if (
+        vaultId === activeVaultId &&
+        documentPath !== '' &&
+        !findNode(tree, documentPath)
+      ) {
+        markDocumentNotFound(documentPath);
+      }
+      if (vaultId === activeVaultId) error = null;
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
+      if (vaultId === activeVaultId) {
+        error = caught instanceof Error ? caught.message : String(caught);
+      }
     }
   }
 
@@ -1257,6 +1275,9 @@
 
     const sources = ids.map((id) => {
       const source = new EventSource(`/api/vaults/${encodeURIComponent(id)}/events`);
+      source.addEventListener('open', () => {
+        void refreshTreeForVault(id);
+      });
       source.addEventListener('change', (message) => {
         try {
           const event = JSON.parse((message as MessageEvent).data) as VaultChangeEvent;
