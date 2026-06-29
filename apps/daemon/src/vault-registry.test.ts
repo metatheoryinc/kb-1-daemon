@@ -9,7 +9,8 @@ import {
   readOrMintVaultIdentity,
   slugify,
   VAULT_TRASH_DIRNAME,
-  VaultRegistry
+  VaultRegistry,
+  type VaultRegistryChangeEvent
 } from './vault-registry.js';
 
 describe('vault registry', () => {
@@ -223,6 +224,40 @@ describe('vault registry', () => {
 
       await registry.close();
       await reloaded.close();
+    });
+
+    it('forwards service change events for vaults created after subscription', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+      const events: VaultRegistryChangeEvent[] = [];
+      const unsubscribe = registry.onVaultEvent((event) => events.push(event));
+
+      await registry.create({ displayName: 'Project X', slug: 'project-x' });
+      const instance = registry.get('project-x');
+      if (!instance) throw new Error('expected live vault instance');
+
+      await expect(instance.service.createFolder({
+        path: 'event-test-folder',
+        actor: { kind: 'user' }
+      })).resolves.toMatchObject({ ok: true, path: 'event-test-folder' });
+
+      expect(events).toContainEqual(expect.objectContaining({
+        vaultSlug: 'project-x',
+        event: expect.objectContaining({
+          kind: 'folder_created',
+          path: 'event-test-folder'
+        })
+      }));
+
+      unsubscribe();
+      const countAfterUnsubscribe = events.length;
+      await expect(instance.service.createFolder({
+        path: 'later',
+        actor: { kind: 'user' }
+      })).resolves.toMatchObject({ ok: true, path: 'later' });
+      expect(events).toHaveLength(countAfterUnsubscribe);
+
+      await registry.close();
     });
 
     it('rejects creating a vault whose slug collides with an existing one', async () => {

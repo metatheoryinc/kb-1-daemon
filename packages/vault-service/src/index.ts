@@ -29,6 +29,7 @@ import {
   type AuditChangeEventOptions,
   type AuditEntry,
   type FolderMetadataInput,
+  type VaultEntry,
   type VaultActor,
   type VaultErrorCode,
   type VaultResult
@@ -84,6 +85,8 @@ export interface VaultChangeEvent {
 
 export type VaultChangeEventHandler = (event: VaultChangeEvent) => void;
 
+const TREE_WATCH_INTERVAL_MS = 1_000;
+
 export interface EditNoteInput {
   path: string;
   baseline: string;
@@ -127,6 +130,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   const ctx = (actor?: VaultActor) => ({ root: options.vaultRoot, ...(actor ? { actor } : {}) });
   const eventHandlers = new Set<VaultChangeEventHandler>();
   const emitChange = (event: VaultChangeEvent) => {
+    if (event.kind !== 'external_change_detected') {
+      treeWatchSnapshot = undefined;
+    }
     for (const handler of eventHandlers) {
       try {
         handler(event);
@@ -136,6 +142,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     }
   };
   let unsubscribeAudit: (() => void) | undefined;
+  let treeWatchTimer: ReturnType<typeof setInterval> | undefined;
+  let treeWatchSnapshot: string | undefined;
+  let treeWatchInFlight = false;
   const ensureAuditSubscription = () => {
     if (unsubscribeAudit) return;
     unsubscribeAudit = onVaultAudit((audit, input) => {
@@ -143,10 +152,65 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       emitAuditChange(emitChange, audit, input.changeEvent);
     });
   };
+  const pollTreeWatch = async () => {
+    if (treeWatchInFlight) return;
+
+    treeWatchInFlight = true;
+    try {
+      const result = await listVaultTree(ctx(), { depth: Number.MAX_SAFE_INTEGER });
+      if (!result.ok) return;
+
+      const nextSnapshot = treeSnapshot(result.value.entries);
+      if (treeWatchSnapshot === undefined) {
+        treeWatchSnapshot = nextSnapshot;
+        return;
+      }
+
+      if (treeWatchSnapshot === nextSnapshot) return;
+
+      treeWatchSnapshot = nextSnapshot;
+      emitChange({
+        kind: 'external_change_detected',
+        path: '',
+        actor: { kind: 'system' },
+        ts: new Date().toISOString()
+      });
+    } catch (error) {
+      console.warn('KB-2 vault tree watch failed.', error);
+    } finally {
+      treeWatchInFlight = false;
+    }
+  };
+  const ensureTreeWatch = () => {
+    if (treeWatchTimer) return;
+
+    treeWatchSnapshot = undefined;
+    void pollTreeWatch();
+    treeWatchTimer = setInterval(() => {
+      void pollTreeWatch();
+    }, TREE_WATCH_INTERVAL_MS);
+  };
+  const releaseTreeWatch = () => {
+    if (!treeWatchTimer) return;
+
+    clearInterval(treeWatchTimer);
+    treeWatchTimer = undefined;
+    treeWatchSnapshot = undefined;
+    treeWatchInFlight = false;
+  };
+  const ensureEventSources = () => {
+    ensureAuditSubscription();
+    ensureTreeWatch();
+  };
   const releaseAuditSubscription = () => {
     if (eventHandlers.size > 0) return;
     unsubscribeAudit?.();
     unsubscribeAudit = undefined;
+  };
+  const releaseEventSources = () => {
+    if (eventHandlers.size > 0) return;
+    releaseAuditSubscription();
+    releaseTreeWatch();
   };
   options.documentSessions.onEvent((event) => {
     const change = changeEventFromDocumentSessionEvent(event);
@@ -156,10 +220,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   return {
     onEvent(handler) {
       eventHandlers.add(handler);
-      ensureAuditSubscription();
+      ensureEventSources();
       return () => {
         eventHandlers.delete(handler);
-        releaseAuditSubscription();
+        releaseEventSources();
       };
     },
 
@@ -542,6 +606,18 @@ function auditChangeEventKind(
   }
   /* v8 ignore next -- Exhaustive switch guard for future audit operation codes. */
   return assertNever(audit.operation);
+}
+
+function treeSnapshot(entries: VaultEntry[]): string {
+  return JSON.stringify(
+    entries
+      .map((entry) => ({
+        path: entry.path,
+        kind: entry.kind,
+        ...(entry.metadata !== undefined ? { metadata: entry.metadata } : {})
+      }))
+      .sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind))
+  );
 }
 
 /* v8 ignore next -- Called only by exhaustive guards when a future union member is missing above. */

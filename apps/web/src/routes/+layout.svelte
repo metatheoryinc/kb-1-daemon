@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { QueryClientProvider } from '@tanstack/svelte-query';
   import { createAppState, setAppStateContext } from '$lib/app-state';
+  import { createKbQueryClient } from '$lib/realtime';
   import '../app.css';
 
   let { children } = $props();
@@ -11,6 +13,7 @@
   // store instance.
   const appState = createAppState({ storage: window.localStorage });
   setAppStateContext(appState);
+  const { client: queryClient } = createKbQueryClient();
 
   // Color-mode resolver. Subscribes to the persisted `colorMode`, then
   // resolves `'system'` against `prefers-color-scheme` and writes:
@@ -55,4 +58,6 @@
   });
 </script>
 
-{@render children()}
+<QueryClientProvider client={queryClient}>
+  {@render children()}
+</QueryClientProvider>

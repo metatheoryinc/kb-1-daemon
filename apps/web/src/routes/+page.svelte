@@ -52,12 +52,40 @@
   import { buildStarredViewData } from '$lib/favorites-data';
   import { createViewportStore } from '$lib/viewport.svelte';
   import { onMount, untrack } from 'svelte';
+  import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { queryKeys } from '$lib/realtime';
 
   interface TreeEntry {
     path: string;
     kind: 'file' | 'folder';
     metadata?: { color?: AccentName; icon?: string | null };
   }
+
+  type TreeDirtyEventKind =
+    | 'file_created'
+    | 'folder_created'
+    | 'file_deleted'
+    | 'folder_deleted'
+    | 'file_moved'
+    | 'folder_moved'
+    | 'folder_metadata_changed'
+    | 'external_change_detected';
+
+  interface VaultChangeEvent {
+    kind: string;
+    path?: string;
+  }
+
+  const TREE_DIRTY_EVENT_KINDS = new Set<string>([
+    'file_created',
+    'folder_created',
+    'file_deleted',
+    'folder_deleted',
+    'file_moved',
+    'folder_moved',
+    'folder_metadata_changed',
+    'external_change_detected',
+  ] satisfies TreeDirtyEventKind[]);
 
   // The dialog the orchestration layer currently has open. Each variant
   // carries the operation it will perform on submit; `busy`/`error`
@@ -207,6 +235,32 @@
   // owns mutation + localStorage; the template builds its view model from
   // this list plus the live tree.
   let favorites = $state<FavoriteEntry[]>(appState.getState().favorites);
+  const queryClient = useQueryClient();
+  const vaultsQuery = createQuery<VaultSummary[]>(() => ({
+    queryKey: queryKeys.vaults(),
+    queryFn: () => kbService.listVaults(),
+    staleTime: 30_000,
+  }));
+  type TreeQueryShape = { queryFnData: LocalTreeNode[] };
+  const treeQueries = createQueries<TreeQueryShape[], Record<string, LocalTreeNode[]>>(() => {
+    const ids = knownVaults.map((vault) => vault.id);
+    return {
+      queries: ids.map((id) => ({
+        queryKey: queryKeys.tree(id),
+        queryFn: () => fetchVaultTree(id),
+        staleTime: 30_000,
+      })),
+      combine: (results): Record<string, LocalTreeNode[]> => {
+        const next: Record<string, LocalTreeNode[]> = {};
+        for (let i = 0; i < ids.length; i += 1) {
+          const id = ids[i];
+          const data = results[i]?.data;
+          if (id !== undefined) next[id] = data ?? [];
+        }
+        return next;
+      },
+    };
+  });
 
   // Render-ready starred rows + the path sets the tree menus read to
   // pick Favorite vs Unfavorite. Recomputed when favorites or the tree
@@ -685,12 +739,25 @@
   // caller can pick a default vault on first load.
   async function refreshVaults(): Promise<VaultSummary[]> {
     try {
-      knownVaults = await kbService.listVaults();
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.vaults(),
+        exact: true,
+      });
+      knownVaults = await queryClient.fetchQuery({
+        queryKey: queryKeys.vaults(),
+        queryFn: () => kbService.listVaults(),
+        staleTime: 30_000,
+      });
       return knownVaults;
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
       return knownVaults;
     }
+  }
+
+  async function fetchVaultTree(vaultId: string): Promise<LocalTreeNode[]> {
+    const entries = await kbService.tree(vaultId);
+    return buildTree(entries as TreeEntry[]);
   }
 
   // Fetch one vault's tree into the per-vault cache. The rail groups by
@@ -699,8 +766,12 @@
   async function loadVaultTree(vaultId: string): Promise<void> {
     if (!vaultId) return;
     try {
-      const entries = await kbService.tree(vaultId);
-      vaultTrees = { ...vaultTrees, [vaultId]: buildTree(entries as TreeEntry[]) };
+      const tree = await queryClient.fetchQuery({
+        queryKey: queryKeys.tree(vaultId),
+        queryFn: () => fetchVaultTree(vaultId),
+        staleTime: 30_000,
+      });
+      vaultTrees = { ...vaultTrees, [vaultId]: tree };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
@@ -713,7 +784,16 @@
 
   // Refresh the ACTIVE vault's tree — used after a file/folder mutation.
   async function refreshTree(): Promise<void> {
-    await loadVaultTree(activeVaultId);
+    await refreshTreeForVault(activeVaultId);
+  }
+
+  async function refreshTreeForVault(vaultId: string): Promise<void> {
+    if (!vaultId) return;
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.tree(vaultId),
+      exact: true,
+    });
+    await loadVaultTree(vaultId);
   }
 
   // ---- Path helpers for the file-management operations ----------------
@@ -1146,6 +1226,56 @@
   function nameFromPath(path: string): string {
     return path.split('/').filter(Boolean).at(-1) ?? path;
   }
+
+  function isTreeDirtyEvent(event: VaultChangeEvent): boolean {
+    return TREE_DIRTY_EVENT_KINDS.has(event.kind)
+      && (event.kind !== 'external_change_detected' || event.path === '');
+  }
+
+  // TanStack query data is the source of truth for vault list + trees.
+  // The route keeps the existing `$state` mirrors so the rest of the
+  // editor shell can stay prop-driven while query invalidation handles
+  // freshness.
+  $effect(() => {
+    if (vaultsQuery.data !== undefined) {
+      knownVaults = vaultsQuery.data;
+    }
+    if (vaultsQuery.error) {
+      error = vaultsQuery.error instanceof Error
+        ? vaultsQuery.error.message
+        : 'Failed to load vaults.';
+    }
+  });
+
+  $effect(() => {
+    vaultTrees = treeQueries;
+  });
+
+  $effect(() => {
+    const ids = knownVaults.map((vault) => vault.id);
+    if (ids.length === 0 || typeof EventSource === 'undefined') return undefined;
+
+    const sources = ids.map((id) => {
+      const source = new EventSource(`/api/vaults/${encodeURIComponent(id)}/events`);
+      source.addEventListener('change', (message) => {
+        try {
+          const event = JSON.parse((message as MessageEvent).data) as VaultChangeEvent;
+          if (isTreeDirtyEvent(event)) {
+            void refreshTreeForVault(id);
+          }
+        } catch (caught) {
+          console.warn('Failed to process vault change event.', caught);
+        }
+      });
+      return source;
+    });
+
+    return () => {
+      for (const source of sources) {
+        source.close();
+      }
+    };
+  });
 
   // Mirror the store's persisted choice so the toggle icon reflects the
   // live preference. The root layout owns applying the mode to the DOM.

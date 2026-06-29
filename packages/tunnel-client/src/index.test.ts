@@ -161,6 +161,33 @@ describe('ChunkedHttpRequestAssembler', () => {
 });
 
 describe('TunnelClient typed relay RPC', () => {
+  it('sends daemon-origin relay event frames over the control socket', () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+    (client as unknown as { control: FakeSocket }).control = control;
+
+    expect(client.sendRelayEvent({
+      topic: 'vault.tree.changed',
+      resource: { vaultSlug: 'demo-vault' },
+    })).toBe(true);
+
+    expect(control.sent).toHaveLength(1);
+    expect(JSON.parse(Buffer.from(control.sent[0].data as Uint8Array).toString('utf8'))).toEqual({
+      type: 'relay.frame',
+      frame: {
+        type: 'event',
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        topic: 'vault.tree.changed',
+        resource: { vaultSlug: 'demo-vault' },
+      },
+    });
+  });
+
   it('handles the vault.list capability through the daemon vault API', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('http://daemon.test/api/vaults');
