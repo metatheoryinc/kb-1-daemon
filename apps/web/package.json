@@ -17,6 +17,7 @@
     "@kb-2/doc-session": "workspace:*",
     "@kb-2/editor": "workspace:*",
     "@kb-2/ui": "workspace:*",
+    "@tanstack/svelte-query": "^6.1.18",
     "lib0": "0.2.117",
     "svelte": "catalog:",
     "y-protocols": "1.0.7",

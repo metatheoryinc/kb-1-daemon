@@ -3,6 +3,7 @@ import { serve } from '@hono/node-server';
 import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-2/doc-session';
 import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
+import type { VaultChangeEventKind } from '@kb-2/vault-service';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,8 +22,21 @@ import { writeDaemonStatus, type DaemonStatus } from './status.js';
 import {
   migrateLegacyVaultLayout,
   VAULT_TRASH_DIRNAME,
-  VaultRegistry
+  VaultRegistry,
+  type VaultRegistryChangeEvent
 } from './vault-registry.js';
+
+const VAULT_TREE_CHANGED_TOPIC = 'vault.tree.changed';
+const TREE_DIRTY_EVENT_KINDS = new Set<VaultChangeEventKind>([
+  'file_created',
+  'folder_created',
+  'file_deleted',
+  'folder_deleted',
+  'file_moved',
+  'folder_moved',
+  'folder_metadata_changed',
+  'external_change_detected'
+]);
 
 export interface StartedDaemon {
   config: DaemonConfig;
@@ -61,7 +75,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // go through the SAME live registry the HTTP layer uses — no second vault map.
   // Every data tool requires a vaultId; there is no default vault.
   const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry));
-  const relay = createRelayLifecycleController(config);
+  const relay = createRelayLifecycleController(config, registry);
 
   const app = createApp({
     statusFile: config.statusFile,
@@ -173,7 +187,10 @@ export async function startDaemon(): Promise<StartedDaemon> {
   });
 }
 
-function createRelayLifecycleController(config: DaemonConfig): RelayLifecycleController | undefined {
+function createRelayLifecycleController(
+  config: DaemonConfig,
+  registry: VaultRegistry
+): RelayLifecycleController | undefined {
   if (!config.relay) {
     return undefined;
   }
@@ -185,19 +202,42 @@ function createRelayLifecycleController(config: DaemonConfig): RelayLifecycleCon
     token: config.relay.token,
     logger: daemonRelayLogger,
   });
+  let unsubscribeVaultEvents: (() => void) | undefined;
+  const ensureVaultEventSubscription = () => {
+    if (unsubscribeVaultEvents) return;
+    unsubscribeVaultEvents = registry.onVaultEvent((event) => {
+      if (!isTreeDirtyVaultEvent(event)) return;
+
+      client.sendRelayEvent({
+        topic: VAULT_TREE_CHANGED_TOPIC,
+        resource: { vaultSlug: event.vaultSlug },
+      });
+    });
+  };
+  const releaseVaultEventSubscription = () => {
+    unsubscribeVaultEvents?.();
+    unsubscribeVaultEvents = undefined;
+  };
   return {
     status() {
       return { configured: true, ...client.status() };
     },
     connect() {
       client.start();
+      ensureVaultEventSubscription();
       return { configured: true, ...client.status() };
     },
     disconnect() {
+      releaseVaultEventSubscription();
       client.stop();
       return { configured: true, ...client.status() };
     },
   };
+}
+
+function isTreeDirtyVaultEvent(event: VaultRegistryChangeEvent): boolean {
+  return TREE_DIRTY_EVENT_KINDS.has(event.event.kind)
+    && (event.event.kind !== 'external_change_detected' || event.event.path === '');
 }
 
 const daemonRelayLogger: TunnelClientLogger = {

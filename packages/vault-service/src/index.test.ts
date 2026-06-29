@@ -263,13 +263,23 @@ describe('vault service failure mapping', () => {
 
     const session = sessions.getSession('notes/a.md');
     await session.open();
+    await expect(service.createNote({
+      path: 'notes/a.md',
+      content: 'live overwrite\n',
+      overwrite: true,
+      actor: { kind: 'user' }
+    })).resolves.toMatchObject({
+      ok: true,
+      path: 'notes/a.md',
+      live: true
+    });
     session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'SECRET_SERVICE_EVENT');
     await expect(service.flushDirtySessions()).resolves.toMatchObject({
       ok: true,
       flushed: 1,
       durableAsOf: expect.any(String)
     });
-    await expect(readFile(join(root, 'notes', 'a.md'), 'utf8')).resolves.toBe('overwritten\nSECRET_SERVICE_EVENT');
+    await expect(readFile(join(root, 'notes', 'a.md'), 'utf8')).resolves.toBe('live overwrite\nSECRET_SERVICE_EVENT');
 
     await expect(service.moveNote({
       fromPath: 'notes/a.md',
@@ -294,6 +304,7 @@ describe('vault service failure mapping', () => {
       'content_persisted',
       'folder_metadata_changed',
       'content_persisted',
+      'content_persisted',
       'file_moved',
       'file_deleted'
     ]);
@@ -310,6 +321,10 @@ describe('vault service failure mapping', () => {
       actor: { kind: 'system' }
     });
     expect(events[5]).toMatchObject({
+      path: 'notes/a.md',
+      actor: { kind: 'system' }
+    });
+    expect(events[6]).toMatchObject({
       path: 'notes/moved.md',
       fromPath: 'notes/a.md',
       toPath: 'notes/moved.md'
@@ -342,6 +357,20 @@ describe('vault service failure mapping', () => {
       actor: { kind: 'system' }
     }));
     await expect(session.getContent()).resolves.toBe('external\n');
+  });
+
+  it('emits a root-level external event when the cold file tree changes on disk', async () => {
+    const service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const events: VaultChangeEvent[] = [];
+    const unsubscribe = service.onEvent((event) => events.push(event));
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await writeFileWithParents(join(root, 'external-tree', 'added.md'), 'added\n');
+
+    await waitUntil(() => events.some((event) =>
+      event.kind === 'external_change_detected' && event.path === ''
+    ), () => `Timed out waiting for external tree event; events=${JSON.stringify(events)}`);
+    unsubscribe();
   });
 
   it('uses cold disk paths for file move and delete when no session is open', async () => {

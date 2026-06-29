@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { QueryClientProvider } from '@tanstack/svelte-query';
   import { createAppState, setAppStateContext } from '$lib/app-state';
+  import { createKbQueryClient } from '$lib/realtime';
   import Page from '../routes/+page.svelte';
 
   // Mirror the root layout: build the app-state store once and publish it
@@ -8,6 +10,9 @@
   // so the harness stands in for the layout.
   const appState = createAppState({ storage: window.localStorage });
   setAppStateContext(appState);
+  const { client: queryClient } = createKbQueryClient();
 </script>
 
-<Page />
+<QueryClientProvider client={queryClient}>
+  <Page />
+</QueryClientProvider>

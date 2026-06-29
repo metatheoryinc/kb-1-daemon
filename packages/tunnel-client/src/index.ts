@@ -14,6 +14,7 @@ import {
   encodeTunnelMessage,
   parseRelayFrame,
   type RelayFrame,
+  type RelayJsonObject,
   type RelayJsonValue,
   type RelayRpcRequestFrame,
   type RelayRpcResponseFrame,
@@ -49,6 +50,13 @@ export type TunnelClientStatus = {
   started: boolean;
   controlConnected: boolean;
   reconnectScheduled: boolean;
+};
+
+export type TunnelRelayEventInput = {
+  topic: string;
+  id?: string;
+  payload?: RelayJsonValue;
+  resource?: RelayJsonObject;
 };
 
 export type BackoffOptions = {
@@ -131,6 +139,37 @@ export class TunnelClient {
       controlConnected: this.control?.readyState === WebSocket.OPEN,
       reconnectScheduled: this.reconnectTimer !== undefined,
     };
+  }
+
+  sendRelayEvent(event: TunnelRelayEventInput): boolean {
+    const control = this.control;
+    if (!control || control.readyState !== WebSocket.OPEN) {
+      this.logger.log('debug', 'relay event skipped because control is not open', {
+        topic: event.topic,
+      });
+      return false;
+    }
+
+    try {
+      control.send(encodeJsonBytes({
+        type: 'relay.frame',
+        frame: {
+          type: 'event',
+          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+          topic: event.topic,
+          ...(event.id !== undefined ? { id: event.id } : {}),
+          ...(event.payload !== undefined ? { payload: { encoding: 'json', value: event.payload } } : {}),
+          ...(event.resource !== undefined ? { resource: event.resource } : {}),
+        },
+      }));
+      return true;
+    } catch (error) {
+      this.logger.log('warn', 'relay event send failed', {
+        topic: event.topic,
+        error: String(error),
+      });
+      return false;
+    }
   }
 
   private connectControl(): void {

@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:
 import { join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-2/doc-session';
-import { createVaultService, type VaultService } from '@kb-2/vault-service';
+import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-2/vault-service';
 import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
@@ -34,6 +34,13 @@ export interface VaultInstance {
   service: VaultService;
   manager: DocumentSessionManager;
 }
+
+export interface VaultRegistryChangeEvent {
+  vaultSlug: string;
+  event: VaultChangeEvent;
+}
+
+export type VaultRegistryChangeEventHandler = (event: VaultRegistryChangeEvent) => void;
 
 /**
  * Normalize a string into a vault slug using github-slugger (battle-tested, not
@@ -260,6 +267,8 @@ export type VaultRegistryResult<T extends object = object> =
  */
 export class VaultRegistry {
   private readonly instances: Map<string, VaultInstance>;
+  private readonly eventHandlers = new Set<VaultRegistryChangeEventHandler>();
+  private readonly eventUnsubscribers = new Map<string, () => void>();
 
   private constructor(
     private readonly vaultsHome: string,
@@ -286,6 +295,22 @@ export class VaultRegistry {
   /** Resolve a vault's live instance by slug, or `undefined` when unknown. */
   get(id: string): VaultInstance | undefined {
     return this.instances.get(id);
+  }
+
+  onVaultEvent(handler: VaultRegistryChangeEventHandler): () => void {
+    this.eventHandlers.add(handler);
+    if (this.eventHandlers.size === 1) {
+      for (const instance of this.instances.values()) {
+        this.subscribeInstance(instance);
+      }
+    }
+
+    return () => {
+      this.eventHandlers.delete(handler);
+      if (this.eventHandlers.size === 0) {
+        this.unsubscribeAllInstances();
+      }
+    };
   }
 
   /**
@@ -332,7 +357,9 @@ export class VaultRegistry {
     await seedVaultFromStarterKit(root);
 
     const entry: VaultRegistryEntry = { slug, displayName, root };
-    this.instances.set(slug, buildVaultInstance(entry));
+    const instance = buildVaultInstance(entry);
+    this.instances.set(slug, instance);
+    this.subscribeInstance(instance);
 
     return { ok: true, vault: { id: slug, displayName } };
   }
@@ -372,6 +399,7 @@ export class VaultRegistry {
       return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
     }
 
+    this.unsubscribeInstance(id);
     await instance.manager.close();
 
     await mkdir(this.trashHome, { recursive: true });
@@ -385,7 +413,38 @@ export class VaultRegistry {
 
   /** Close every vault's document session manager (used on daemon shutdown). */
   async close(): Promise<void> {
+    this.unsubscribeAllInstances();
     await Promise.all([...this.instances.values()].map((instance) => instance.manager.close()));
+  }
+
+  private subscribeInstance(instance: VaultInstance): void {
+    if (this.eventHandlers.size === 0 || this.eventUnsubscribers.has(instance.entry.slug)) return;
+
+    const unsubscribe = instance.service.onEvent((event) => {
+      const registryEvent = { vaultSlug: instance.entry.slug, event };
+      for (const handler of this.eventHandlers) {
+        try {
+          handler(registryEvent);
+        } catch (error) {
+          console.warn('KB-2 vault registry event handler failed.', error);
+        }
+      }
+    });
+    this.eventUnsubscribers.set(instance.entry.slug, unsubscribe);
+  }
+
+  private unsubscribeInstance(slug: string): void {
+    const unsubscribe = this.eventUnsubscribers.get(slug);
+    if (!unsubscribe) return;
+
+    this.eventUnsubscribers.delete(slug);
+    unsubscribe();
+  }
+
+  private unsubscribeAllInstances(): void {
+    for (const slug of [...this.eventUnsubscribers.keys()]) {
+      this.unsubscribeInstance(slug);
+    }
   }
 }
 
