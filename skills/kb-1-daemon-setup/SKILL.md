@@ -7,7 +7,7 @@ description: Install, run, repair, and verify the KB-1 local open-source daemon 
 
 Use this skill to install or repair the open-source KB-1 local daemon, verify its local web/API/MCP surfaces, configure local MCP clients, or help a user copy an existing Markdown/Obsidian vault into daemon-managed storage.
 
-Release posture: the daemon is local-first and local-only by default. It currently has no application authentication or authorization. Keep it bound to loopback unless the user explicitly approves private-network exposure and understands that any tailnet device allowed by ACLs can read and write through the daemon.
+Release posture: KB-1 Local is the free open-source local-only path and launches alongside KB-1 Cloud relay/Hosted. Local-only does not require Cloud login. Self-hosted full experience means Cloud login plus this daemon running on the user's machine. The daemon currently has no application authentication or authorization in local-only mode. Keep it bound to loopback unless the user explicitly approves private-network exposure and understands that any tailnet device allowed by ACLs can read and write through the daemon.
 
 Naming reality: the public product is KB-1, while current repo internals still use KB-2 names: repo `kb-1-daemon`, package `kb-2`, process `kb2d`, env vars `KB2_*`, default home `~/.kb2`, and default port `7382`. Do not rename those during setup unless the repo changes.
 

@@ -1,14 +1,19 @@
 # KB-1 Cloud Relay
 
-Cloud relay is the paid remote-access and collaboration layer for KB-1 Local. It
-keeps the KB-1-style web, API, and MCP experience while durable content storage
-stays on the user's local server.
+Cloud relay is the paid remote-access and collaboration layer for self-hosted
+KB-1. It keeps the KB-1-style web, API, and MCP experience while durable content
+storage stays on the user's local server.
 
-Cloud relay is not required for the first useful local KB-1 product. The
-open-source local service can host a local web UI and local MCP/API tools before
-remote relay is enabled. The public launch story is: local first, tailnet/local
-network for private access, KB-1 Cloud relay when authenticated reach is worth a
-paid service.
+Cloud relay is not required for local-only KB-1. The public launch story is
+simultaneous but explicit: local-only is the free open-source solo/developer
+path, self-hosted full experience is KB-1 Cloud login plus a vault engine on the
+user's machine, and Hosted full experience is the same Cloud login plus a
+KB-1-operated vault engine.
+
+Private access can still start with local network or a tailnet such as
+Tailscale. Cloud relay is for users who want KB-1 Cloud identity, org
+membership, signed entry, remote reach, and collaboration without exposing an
+inbound port.
 
 ## Responsibilities
 
@@ -21,7 +26,7 @@ The cloud layer owns:
 - permissions and feature gates
 - billing and plan enforcement
 - cloud MCP/API endpoints
-- web app delivery
+- web app delivery for the Cloud surface
 - ephemeral presence, cursors, selections, and follow-mode state
 - relay observability that avoids storing content payloads
 
@@ -61,10 +66,10 @@ Every edge should check permissions:
 - tunnel authority for the target vault
 - request envelope validity at the local server
 
-The open-source local app should remain useful without a cloud account. Relay
-access is the paid convenience path unless a later business decision introduces
-trials or a free single-user relay tier. Organization plans can enable other
-users to read, write, or collaborate in shared vaults.
+The open-source local app remains useful without a Cloud account. Relay access
+is the paid full-experience path for self-hosters unless a later business
+decision introduces trials or a free single-user relay tier. Organization plans
+can enable other users to read, write, or collaborate in shared vaults.
 
 ## Content Plane
 
@@ -94,7 +99,7 @@ The local server does not need cursor state to perform content writes. The cloud
 already knows authenticated users and connected browser sessions, making it the
 natural place for ephemeral awareness.
 
-The local-first UI intentionally does not implement presence. If a local user is
+The local-only UI intentionally does not implement presence. If a local user is
 editing a document and some other local process or agent changes that file, the
 local product should surface a file-change event or direct-write warning rather
 than attempting to show remote cursors or user presence.

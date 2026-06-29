@@ -1,8 +1,8 @@
 # KB-1 Local Packaging Paths
 
-Chunk 001 keeps release automation intentionally light, but the scaffold is
-structured so the same local service can run from pnpm, Docker, or a future npm
-CLI package.
+Release automation is intentionally light, but the scaffold is structured so
+the same local service can run from pnpm, Docker, a user service, or a future
+npm/Homebrew-style package.
 
 ## Public Naming
 
@@ -11,6 +11,11 @@ The product is **KB-1 Local**. This repo still exposes `KB2_HOME`, `KB2_PORT`,
 should explain that mismatch once, then use KB-1 Local for the product and
 `kb2d` only where a literal command or environment variable requires it.
 
+KB-1 launches local and Cloud paths together. Local-only is the free
+open-source path with no Cloud login. Self-hosted full experience uses KB-1
+Cloud login and relay while the daemon remains the vault home. Hosted full
+experience uses the same Cloud login while KB-1 operates the vault engine.
+
 ## Local Development
 
 ```bash
@@ -18,7 +23,7 @@ pnpm install
 pnpm --filter @kb-2/daemon dev
 ```
 
-The daemon reads configuration from environment variables owned by KB-2 code:
+The daemon reads configuration from the implementation environment variables:
 
 - `KB2_HOME`: home directory for daemon-managed local state, defaulting to
   `~/.kb2`
@@ -122,8 +127,31 @@ The daemon package reserves the future CLI binary name:
 }
 ```
 
-Publishing is deferred. The first public path can be `git clone` plus the setup
-skill while packaging is hardened. A future release chunk can make
+Publishing is deferred. The current public path can be `git clone` plus the
+setup skill while packaging is hardened. A future release chunk can make
 `@kb-2/daemon` publishable, add provenance/signing rules, decide whether the
 open-source package publishes from this package directly or from a dedicated
-release wrapper, and choose the public binary/package names.
+release wrapper, and choose the final public binary/package names.
+
+## Release Essentials
+
+Present:
+
+- `pnpm check` runs typecheck, tests, and builds.
+- `pnpm dev` starts the local web UI and daemon behind one front-door port.
+- `pnpm --filter @kb-2/daemon dev` runs the daemon foreground-only.
+- `skills/kb-1-daemon-setup/scripts/install_kb1_daemon_user_service.sh`
+  installs a Linux systemd user service or macOS LaunchAgent.
+- `skills/kb-1-daemon-setup/scripts/kb1_daemon_healthcheck.sh` checks health,
+  vault listing, optional vault info/flush, and MCP initialize.
+- Dockerfile and Compose path exist for container smoke runs.
+
+Not decided or not shipped:
+
+- The repo currently has no `LICENSE` file. Legal/product must choose the
+  open-source license before public release.
+- npm/Homebrew distribution, package signing, and provenance are not shipped.
+- Managed binary attachment APIs and MCP tools are not shipped.
+- Local-only mode has no application auth; loopback is the default safety
+  boundary.
+- Obsidian migration is a guarded copy workflow, not a polished importer.

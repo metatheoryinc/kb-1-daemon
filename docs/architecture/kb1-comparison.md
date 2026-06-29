@@ -38,7 +38,7 @@ KB-1 Local should preserve:
 
 - Markdown-centered knowledge work
 - a rich web UI
-- a useful local web UI before cloud relay
+- a useful local web UI that works without Cloud login
 - MCP/API access for agents
 - service-mediated reads and writes
 - splice edits and structured content operations
@@ -58,7 +58,7 @@ The central change is custody.
 | Concern | Hosted KB-1 | KB-1 Local |
 |---|---|---|
 | Durable content | Hosted D1/R2/DO substrate | User filesystem |
-| Cloud role | Source of truth and app backend | Optional paid relay, Hosted, auth, policy, presence |
+| Cloud role | Source of truth and app backend | Paid relay, Hosted, auth, policy, presence |
 | Local role | Optional desktop wrapper | Authoritative vault server and local app host |
 | Open source surface | Optional/unclear | Local server and local UI are the public open-source foundation |
 | Multi-tenancy | Shared hosted storage substrate | Tenant content outside hosted storage |
@@ -96,16 +96,17 @@ Cloud still needs account and routing metadata for relay, and Hosted stores a
 tenant's vault because managed hosting is the point. The default path keeps the
 user's actual vault content with the user.
 
-## Local Product Before Cloud Relay
+## Local Product With Optional Cloud Paths
 
 KB-1's primary useful experience depended on the hosted app and hosted substrate.
-KB-1 Local should become useful earlier: the open-source local server should
-host a local UI for file-tree browsing and Markdown editing, while local agents
+KB-1 Local is useful without that hosted substrate: the open-source local server
+hosts a local UI for file-tree browsing and Markdown editing, while local agents
 use local MCP/API tools against the same service.
 
-This changes execution order, not the long-term cloud ambition. Cloud relay,
-auth, org management, billing, presence, and Hosted vaults arrive as remote and
-multi-user layers around the same service contract.
+This changes the custody model, not the full team ambition. KB-1 Cloud relay,
+auth, org management, billing, presence, and Hosted vaults launch as remote and
+multi-user layers around the same service contract. Local-only users do not need
+Cloud login; self-hosted full-experience users do.
 
 ## Open Questions
 

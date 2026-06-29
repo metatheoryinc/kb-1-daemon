@@ -1,35 +1,38 @@
-# KB-2 Architecture Overview
+# KB-1 Local Architecture Overview
 
-KB-2 separates durable customer data from hosted coordination.
+KB-1 Local separates durable customer data from hosted coordination. Some
+implementation names still say KB-2 (`KB2_*`, `kb2d`, and `@kb-2/*`) while the
+product rename finishes; this document uses KB-1 Local for the product.
 
 The local server owns content operations, filesystem materialization, local
-agent access, and the first local web UI. The cloud later owns authentication,
-relay routing, billing, collaboration policy, and ephemeral presence. The
-cloud-connected web app and cloud APIs can look similar to KB-1 from a user and
-agent perspective, but content requests are proxied to the user's active local
-server instead of resolved from hosted D1/R2 storage.
+agent access, and the local web UI. KB-1 Cloud owns authentication, relay
+routing, billing, collaboration policy, Hosted operation, and ephemeral presence
+for the full team experience. The Cloud-connected web app and Cloud APIs can
+look similar to local KB-1 from a user and agent perspective, but self-hosted
+content requests are proxied to the user's active local server instead of
+resolved from a hosted D1/R2 storage substrate.
 
 ## High-Level Shape
 
 ```text
 Local Web UI / Local MCP / Local API
         |
-Open-source local KB-2 server
+Open-source local KB-1 server (`kb2d`)
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
 Markdown, images, attachments, .kb2 metadata
 
-Later cloud-connected mode:
+Self-hosted full experience:
 
 Cloud Web UI / Cloud MCP / Cloud API
         |
-Closed cloud layer
+KB-1 Cloud layer
 Auth, billing, relay registry, active sessions, permissions, presence
         |
 Outbound WebSocket tunnel from local server
         |
-Open-source local KB-2 server
+Open-source local KB-1 server (`kb2d`)
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
@@ -38,7 +41,7 @@ Markdown, images, attachments, .kb2 metadata
 
 ## Planes
 
-KB-2 has two main runtime planes.
+KB-1 Local has two main runtime planes.
 
 The content plane handles durable vault operations:
 
@@ -58,9 +61,9 @@ Presence, cursors, selections, and follow-mode state do not need to pass through
 the local server unless they become durable product history. This keeps the local
 server focused on content authority.
 
-The local UI should not model users, cursors, selections, or presence in the
-first local-first phase. It should show file and edit state clearly, including
-warnings when a file changes outside the service-mediated editing path.
+The local-only UI does not model Cloud users, cursors, selections, or presence.
+It should show file and edit state clearly, including warnings when a file
+changes outside the service-mediated editing path.
 
 ## Authority
 
@@ -106,11 +109,13 @@ and avoid storing content bodies in cloud databases or logs.
 
 ## Relationship To KB-1
 
-KB-1 used hosted D1/R2/Durable Object state as the knowledge substrate. KB-2
-uses the filesystem and local server as the substrate. The cloud remains central
-to the remote and multi-user product experience, but no longer acts as the
-durable content store. The local open-source product should be useful before the
-cloud relay exists.
+The older hosted KB-1 app used hosted D1/R2/Durable Object state as the
+knowledge substrate. KB-1 Local uses the filesystem and local server as the
+substrate. Cloud remains central to the full team experience, but Cloud does not
+automatically become the durable content store. In self-hosted full experience,
+the user's machine remains the vault home. In Hosted full experience, KB-1
+operates the vault engine and stores the hosted vault because managed hosting is
+the point.
 
 ## Open Questions
 
@@ -122,4 +127,5 @@ cloud relay exists.
   a vault to another machine?
 - What offline or degraded web states should exist when a vault's local server
   is disconnected?
-- Which local UI capabilities should ship before cloud relay work begins?
+- Which local UI capabilities should keep improving after the simultaneous
+  Local/Cloud launch?
