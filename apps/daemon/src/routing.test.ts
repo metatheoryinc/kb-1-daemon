@@ -432,12 +432,13 @@ describe("daemon routing", () => {
           operation: "create",
           path: "notes/attributed.md",
           actor: suppliedActor,
-          content: "attributed\n",
+          size: 11,
         },
       ],
     });
     const rawHistory = await readRawFileHistory(vaultRoot);
     expect(rawHistory).toContain("Ada Lovelace");
+    expect(rawHistory).not.toContain("\n    content:");
 
     const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
     expect(historyAgain.status).toBe(200);
@@ -477,13 +478,13 @@ describe("daemon routing", () => {
           operation: "move",
           path: "archive/attributed.md",
           actor: suppliedActor,
-          content: "attributed\n",
+          size: 11,
         },
         {
           operation: "create",
           path: "archive/attributed.md",
           actor: suppliedActor,
-          content: "attributed\n",
+          size: 11,
         },
       ],
     });

@@ -241,8 +241,15 @@ describe("vault-core filesystem operations", () => {
       }),
     ).resolves.toMatchObject({
       ok: true,
-      value: { operation: "create", actor, content: "first" },
+      value: {
+        operation: "create",
+        actor,
+        size: 5,
+      },
     });
+    const created = await listFileHistory(root, { path: "notes/history.md" });
+    if (!created.ok) throw new Error("expected created history page");
+    expect(created.value.entries[0]).not.toHaveProperty("content");
     await recordFileHistory(root, {
       path: "notes/history.md",
       operation: "update",
@@ -281,8 +288,8 @@ describe("vault-core filesystem operations", () => {
       value: {
         hasMore: true,
         entries: [
-          { content: "fifth", actor: otherActor },
-          { content: "fourth", actor: otherActor },
+          { actor: otherActor, size: 5 },
+          { actor: otherActor, size: 6 },
         ],
       },
     });
@@ -300,8 +307,8 @@ describe("vault-core filesystem operations", () => {
       value: {
         hasMore: false,
         entries: [
-          { content: "third", actor: otherClient },
-          { operation: "create", content: "second", actor },
+          { actor: otherClient, size: 5 },
+          { operation: "create", actor, size: 6 },
         ],
       },
     });
@@ -313,27 +320,34 @@ describe("vault-core filesystem operations", () => {
             expect.objectContaining({
               operation: "create",
               actor,
-              content: "second",
+              size: 6,
             }),
             expect.objectContaining({
               operation: "update",
               actor: otherClient,
-              content: "third",
+              size: 5,
             }),
             expect.objectContaining({
               operation: "update",
               actor: otherActor,
-              content: "fourth",
+              size: 6,
             }),
             expect.objectContaining({
               operation: "update",
               actor: otherActor,
-              content: "fifth",
+              size: 5,
             }),
           ],
         },
       },
     });
+    const historyEntries = (await readRawFileHistory(root)).parsed as {
+      files: Record<string, Array<Record<string, unknown>>>;
+    };
+    for (const entry of historyEntries.files["notes/history.md"] ?? []) {
+      expect(entry).not.toHaveProperty("content");
+      expect(entry).toHaveProperty("contentHash");
+    }
 
     await recordFileHistory(root, {
       path: "alpha/sorted.md",
@@ -378,7 +392,7 @@ describe("vault-core filesystem operations", () => {
         path: "notes/renamed.md",
         operation: "rename",
         actor,
-        content: "one\n",
+        size: 4,
       },
     });
     await expect(listFileHistory(root, { path: "notes/original.md" })).resolves.toMatchObject({
@@ -389,8 +403,8 @@ describe("vault-core filesystem operations", () => {
       ok: true,
       value: {
         entries: [
-          { path: "notes/renamed.md", operation: "rename", content: "one\n" },
-          { path: "notes/renamed.md", operation: "create", content: "one\n" },
+          { path: "notes/renamed.md", operation: "rename", size: 4 },
+          { path: "notes/renamed.md", operation: "create", size: 4 },
         ],
       },
     });
@@ -425,8 +439,8 @@ describe("vault-core filesystem operations", () => {
       ok: true,
       value: {
         entries: [
-          { operation: "move", actor, content: "move me\n" },
-          { operation: "create", actor, content: "move me\n" },
+          { operation: "move", actor, size: 8 },
+          { operation: "create", actor, size: 8 },
         ],
       },
     });
@@ -491,7 +505,7 @@ describe("vault-core filesystem operations", () => {
     ).resolves.toMatchObject({
       ok: true,
       value: {
-        entries: [{ actor: { kind: "unknown" }, content: "unknown" }],
+        entries: [{ actor: { kind: "unknown" }, size: 7 }],
       },
     });
 
@@ -513,6 +527,7 @@ describe("vault-core filesystem operations", () => {
       { files: { "notes/a.md": ["bad"] } },
       { files: { "notes/a.md": [{ ...validEntry, id: 1 }] } },
       { files: { "notes/a.md": [{ ...validEntry, integrationId: 42 }] } },
+      { files: { "notes/a.md": [{ ...validEntry, content: 42 }] } },
       { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "person" } }] } },
       { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", id: 42 } }] } },
       { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", name: 42 } }] } },
@@ -550,6 +565,19 @@ describe("vault-core filesystem operations", () => {
       ok: true,
       value: { entries: [{ operation: "rename" }] },
     });
+    await writeRawFileHistory(root, {
+      files: {
+        "notes/metadata-only.md": [
+          { ...validEntry, id: "entry-metadata-only", content: undefined },
+        ],
+      },
+    });
+    await expect(
+      listFileHistory(root, { path: "notes/metadata-only.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ id: "entry-metadata-only", size: 1, contentHash: "hash" }] },
+    });
   });
 
   it("honors zero coalescing windows and cursor tie-breaks entries with equal timestamps", async () => {
@@ -576,7 +604,7 @@ describe("vault-core filesystem operations", () => {
       listFileHistory(root, { path: "notes/zero.md" }),
     ).resolves.toMatchObject({
       ok: true,
-      value: { entries: [{ content: "second" }, { content: "first" }] },
+      value: { entries: [{ size: 6 }, { size: 5 }] },
     });
 
     await recordFileHistory(root, {
@@ -597,7 +625,7 @@ describe("vault-core filesystem operations", () => {
       listFileHistory(root, { path: "notes/anonymous.md" }),
     ).resolves.toMatchObject({
       ok: true,
-      value: { entries: [{ actor: { kind: "system" }, content: "second" }] },
+      value: { entries: [{ actor: { kind: "system" }, size: 6 }] },
     });
 
     await recordFileHistory(root, {

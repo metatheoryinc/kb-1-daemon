@@ -62,7 +62,7 @@ export interface FileHistoryEntry {
   integrationId?: string;
   createdAt: string;
   updatedAt: string;
-  content: string;
+  content?: string;
   size: number;
   contentHash: string;
 }

@@ -148,7 +148,6 @@ describe("local editor route", () => {
                 integrationId: "agent-codex",
                 createdAt: "2026-06-30T05:01:00.000Z",
                 updatedAt: "2026-06-30T05:03:00.000Z",
-                content: "second version",
                 size: 14,
                 contentHash: "hash-2",
               },
@@ -159,7 +158,6 @@ describe("local editor route", () => {
                 actor: { kind: "user", id: "olivia", name: "Olivia" },
                 createdAt: "2026-06-30T05:00:00.000Z",
                 updatedAt: "2026-06-30T05:00:00.000Z",
-                content: "first version",
                 size: 13,
                 contentHash: "hash-1",
               },
@@ -181,7 +179,6 @@ describe("local editor route", () => {
                 actor: { kind: "agent", id: "local-agent", name: "local agent" },
                 createdAt: "2026-06-30T04:55:00.000Z",
                 updatedAt: "2026-06-30T04:55:00.000Z",
-                content: "older version",
                 size: 13,
                 contentHash: "hash-0",
               },
@@ -309,13 +306,19 @@ describe("local editor route", () => {
     render(AppStateHarness);
 
     expect(await screen.findByLabelText("Markdown editor")).toBeTruthy();
+    expect(screen.queryByTestId("document-history-panel")).toBeNull();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(([url]) => String(url).includes("/history")),
+    ).toBe(false);
     await fireEvent.click(screen.getByRole("button", { name: "History" }));
 
     const panel = within(await screen.findByTestId("document-history-panel"));
     expect(await panel.findByText("Marcus")).toBeTruthy();
     expect(panel.getByText("Olivia")).toBeTruthy();
-    expect(panel.getByText("second version")).toBeTruthy();
-    expect(panel.getByText("first version")).toBeTruthy();
+    expect(panel.queryByText("second version")).toBeNull();
+    expect(panel.queryByText("first version")).toBeNull();
     expect(
       vi
         .mocked(fetch)
@@ -327,8 +330,9 @@ describe("local editor route", () => {
     await fireEvent.click(panel.getByRole("button", { name: "Load older" }));
 
     await waitFor(() => {
-      expect(panel.getByText("older version")).toBeTruthy();
+      expect(panel.getByText("local agent")).toBeTruthy();
     });
+    expect(panel.queryByText("older version")).toBeNull();
     expect(
       vi
         .mocked(fetch)
