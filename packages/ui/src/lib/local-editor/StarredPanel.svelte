@@ -73,7 +73,6 @@
                 kind={row.kind}
                 accent={row.accent}
                 colorHex={row.colorHex}
-                icon={row.icon}
                 href={row.href}
                 available={row.available}
                 active={row.path === activePath}
@@ -97,7 +96,6 @@
                 kind={row.kind}
                 accent={row.accent}
                 colorHex={row.colorHex}
-                icon={row.icon}
                 href={row.href}
                 available={row.available}
                 active={row.path === activePath}

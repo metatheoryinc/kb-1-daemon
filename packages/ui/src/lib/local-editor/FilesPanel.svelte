@@ -112,7 +112,14 @@
 
   // The filter lists every group unless the host overrides the set.
   const allVaults = $derived<VaultFilterEntry[]>(
-    vaults ?? groups.map((g) => ({ id: g.id, name: g.name, accent: g.accent })),
+    vaults ??
+      groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        accent: g.accent,
+        metadata: g.metadata,
+        colorHex: g.colorHex,
+      })),
   );
   const totalVaults = $derived(allVaults.length);
   const hidden = $derived(new Set(hiddenVaultIds));
@@ -166,6 +173,8 @@
             vaultId={group.id}
             vaultName={group.name}
             accent={group.accent}
+            metadata={group.metadata}
+            colorHex={group.colorHex}
             tree={group.tree}
             activePath={group.id === activePathVaultId ? activePath : ''}
             activeFolderId={group.id === activePathVaultId ? activeFolderId : undefined}

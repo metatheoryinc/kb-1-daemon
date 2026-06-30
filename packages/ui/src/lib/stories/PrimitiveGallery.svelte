@@ -31,7 +31,7 @@
       <Avatar kind="human" accent="coral" letter="Y" size={28} />
       <Avatar kind="agent" accent="periwinkle" brand="codex" size={28} />
       <Avatar kind="folder" accent="sage" size={28} />
-      <FolderIcon color="#bae6fd" icon="*" size="lg" label="Folder" />
+      <FolderIcon color="#bae6fd" size="lg" label="Folder" />
     </div>
   </section>
 

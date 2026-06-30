@@ -139,6 +139,29 @@ export function createApp(options: CreateAppOptions): Hono {
       return mapRegistryResult(context, created, created.ok ? { vault: created.vault } : undefined, 201);
     });
 
+    api.put('/vaults/:id/metadata', async (context) => {
+      const instance = registry.get(vaultIdParam(context));
+      if (!instance) {
+        return mapRegistryResult(context, {
+          ok: false,
+          error: 'not_found',
+          message: `No vault with id "${vaultIdParam(context)}".`
+        }, undefined);
+      }
+      const actor = actorFromRequest(context, actorDefault);
+      if (!actor.ok) return mapServiceResult(context, actor);
+      const body = await readJsonObject(context.req.raw);
+      if (!body.ok) return mapServiceResult(context, body);
+      const metadata = readFolderMetadataBody(body.body);
+      if (!metadata.ok) return mapServiceResult(context, metadata);
+      const updated = await registry.setMetadata(
+        instance.entry.slug,
+        metadata.metadata,
+        actor.actor
+      );
+      return mapRegistryResult(context, updated, updated.ok ? { vault: updated.vault } : undefined);
+    });
+
     api.put('/vaults/:id', async (context) => {
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
@@ -168,6 +191,13 @@ export function createApp(options: CreateAppOptions): Hono {
       filesPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/files/`,
       foldersPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/folders/`
     };
+    api.get('/vaults/:id/events', (context) => {
+      const id = vaultIdParam(context);
+      if (!registry.get(id)) {
+        return mapServiceResult(context, { ok: false, error: 'not_found', message: `No vault with id "${id}".` });
+      }
+      return registryEventStreamResponse(registry, id);
+    });
     registerVaultDataRoutes(api, scopedScope, actorDefault, '/vaults/:id');
   }
 
@@ -480,6 +510,31 @@ function eventStreamResponse(vaultService: VaultService): Response {
   });
 }
 
+function registryEventStreamResponse(registry: VaultRegistry, vaultId: string): Response {
+  const encoder = new TextEncoder();
+  let unsubscribe: () => void = () => undefined;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      unsubscribe = registry.onVaultEvent((event) => {
+        if (event.vaultSlug !== vaultId) return;
+        controller.enqueue(encoder.encode(formatServerSentEvent(event.event)));
+      });
+    },
+    cancel() {
+      unsubscribe();
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive'
+    }
+  });
+}
+
 function formatServerSentEvent(event: VaultChangeEvent): string {
   return `event: change\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -646,21 +701,14 @@ function invalidActor(message: string): ServiceResult<never> {
   return { ok: false, error: 'invalid_actor', message };
 }
 
-function readFolderMetadataBody(body: Record<string, unknown>): ServiceResult<{ metadata: { color?: string | null; icon?: string | null } }> {
-  const metadata: { color?: string | null; icon?: string | null } = {};
+function readFolderMetadataBody(body: Record<string, unknown>): ServiceResult<{ metadata: { color?: string | null } }> {
+  const metadata: { color?: string | null } = {};
 
   if (Object.prototype.hasOwnProperty.call(body, 'color')) {
     if (body.color !== null && typeof body.color !== 'string') {
       return { ok: false, error: 'invalid_request', message: 'color must be a string or null when provided' };
     }
     metadata.color = body.color;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(body, 'icon')) {
-    if (body.icon !== null && typeof body.icon !== 'string') {
-      return { ok: false, error: 'invalid_request', message: 'icon must be a string or null when provided' };
-    }
-    metadata.icon = body.icon;
   }
 
   return { ok: true, metadata };
