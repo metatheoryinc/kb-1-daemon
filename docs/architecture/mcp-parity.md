@@ -6,6 +6,8 @@ boundary through `packages/local-mcp`.
 
 | UI capability | REST route used by app | MCP parity tool | Gap |
 | --- | --- | --- | --- |
+| Read vault color metadata | Inline in `GET /api/vaults` | `list_vaults` inline metadata | None |
+| Set vault color from vault context menu | `PUT /api/vaults/{id}/metadata` | None | Add `set_vault_metadata` or equivalent before claiming full MCP parity for vault root presentation metadata. |
 | Read vault file tree with inline folder metadata | `GET /api/tree` | `list_files` | None |
 | Search notes with snippets, limit 50 | `GET /api/search?q=...&limit=50` | `search` | None |
 | Open/read a note for editing | Yjs session route `GET /api/files/{path}/yjs`; REST read available as `GET /api/files/{path}` | `read_note` | None |
@@ -18,7 +20,7 @@ boundary through `packages/local-mcp`.
 | Rename folder from folder context menu | `POST /api/folders/{path}/move` | `move_folder` | None |
 | Move folder from folder context menu | `POST /api/folders/{path}/move` | `move_folder` | None |
 | Delete folder from folder context menu | `DELETE /api/folders/{path}?recursive=true` | `delete_folder` | None |
-| Read folder color/icon metadata | Inline in `GET /api/tree`; direct `GET /api/folders/{path}/metadata` | `get_folder_metadata`; `list_files` inline metadata | None |
+| Read folder color metadata | Inline in `GET /api/tree`; direct `GET /api/folders/{path}/metadata` | `get_folder_metadata`; `list_files` inline metadata | None |
 | Set folder color from folder context menu | `PUT /api/folders/{path}/metadata` | `set_folder_metadata` | None |
 
 Out-of-scope UI in Chunk 011B has no parity requirement because it is not

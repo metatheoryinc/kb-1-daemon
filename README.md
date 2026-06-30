@@ -16,8 +16,9 @@ command/package names only. Public product language should say **KB-1 Local**.
 - Local REST API under `/api/*`.
 - Local MCP endpoint at `/mcp` for agents on the same machine.
 - Filesystem-backed vaults under `KB2_HOME/vaults/<vault-id>/`.
-- Markdown notes, folders, search, move/delete operations, audit
-  rows, live document sessions, and explicit flush endpoints.
+- Markdown notes, folders, search, move/delete operations, folder and vault
+  color metadata, audit rows, live document sessions, and explicit flush
+  endpoints.
 - Arbitrary non-Markdown files can live in a vault directory, but managed binary
   attachment APIs and MCP tools are not shipped yet.
 - Optional relay client configuration for KB-1 Cloud relay.
@@ -57,7 +58,7 @@ Open:
 | Surface | URL | Notes |
 | --- | --- | --- |
 | Local UI | `http://127.0.0.1:7382/` | Served by the daemon front door. |
-| REST API | `http://127.0.0.1:7382/api/*` | Health, vaults, files, search, events, relay status. |
+| REST API | `http://127.0.0.1:7382/api/*` | Health, vaults, files, folders, metadata, search, events, relay status. |
 | MCP | `http://127.0.0.1:7382/mcp` | Streamable HTTP MCP for local agents. |
 | Storybook | `http://127.0.0.1:6006/` | Run `pnpm storybook`; pass `-p <port>` if 6006 is taken. |
 
@@ -114,6 +115,7 @@ $KB2_HOME/
     <vault-id>/
       .kb2/
         vault.json
+        folders.yml
       README.md
       notes/
 ```

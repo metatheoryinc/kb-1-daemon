@@ -15,7 +15,7 @@ session state — is a rebuildable artifact.
   an accepted edit lives at rest.
 - Deleting `.kb2/cache/` and `.kb2/runtime/` must never lose user content.
 - New durable product semantics live in files (vault content or durable
-  `.kb2` metadata such as `vault.yml`, `folders.yml`, audit logs) — not in
+  `.kb2` metadata such as `vault.json`, `folders.yml`, audit logs) — not in
   runtime-only state.
 
 ## Good Examples
