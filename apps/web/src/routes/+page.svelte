@@ -22,6 +22,7 @@
   import {
     ConfirmDialog,
     DocumentByline,
+    DocumentHistoryPanel,
     DocumentNotFoundState,
     EditorSaveNotifications,
     EmptyVaultsState,
@@ -47,7 +48,7 @@
     ROOT_DEFAULT_COLOR,
     resolveFolderColor,
   } from '@kb-2/ui';
-  import { kbService, type VaultSummary } from '$lib/kb-service';
+  import { kbService, type FileHistoryEntry, type VaultSummary } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import {
     useAppState,
@@ -58,7 +59,7 @@
   } from '$lib/app-state';
   import { buildStarredViewData } from '$lib/favorites-data';
   import { createViewportStore } from '$lib/viewport.svelte';
-  import { onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
   import { queryKeys } from '$lib/realtime';
 
@@ -171,6 +172,16 @@
   let persistRecoveredVisible = $state(false);
   let docDeleted = $state(false);
   let notFoundPath = $state<string | null>(null);
+  let historyPanelOpen = $state(false);
+  let historyEntries = $state<FileHistoryEntry[]>([]);
+  let historyHasMore = $state(false);
+  let historyLoading = $state(false);
+  let historyLoadingMore = $state(false);
+  let historyError = $state<string | null>(null);
+  let historyLoadedPath = $state<string | null>(null);
+  let historyLoadedVaultId = $state<string | null>(null);
+  let historyRequestId = 0;
+  let historyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   // The vaults the daemon serves (id = stable slug, displayName = label).
   // The active id keys every data call and the collaborative socket.
   let knownVaults = $state<VaultSummary[]>([]);
@@ -522,6 +533,122 @@
       ? 'error'
       : 'normal',
   );
+
+  const HISTORY_PAGE_SIZE = 25;
+
+  function resetHistoryState(): void {
+    historyEntries = [];
+    historyHasMore = false;
+    historyLoading = false;
+    historyLoadingMore = false;
+    historyError = null;
+    historyLoadedPath = null;
+    historyLoadedVaultId = null;
+  }
+
+  function openHistoryPanel(): void {
+    if (viewingFolder) return;
+    if (!historyPanelOpen) resetHistoryState();
+    historyPanelOpen = true;
+  }
+
+  function closeHistoryPanel(): void {
+    historyPanelOpen = false;
+  }
+
+  async function loadHistoryHead(path: string): Promise<void> {
+    if (!activeVaultId || path.length === 0) return;
+    const vaultIdForRequest = activeVaultId;
+    const requestId = ++historyRequestId;
+    historyLoading = true;
+    historyError = null;
+    try {
+      const page = await kbService.listNoteHistory(vaultIdForRequest, path, {
+        limit: HISTORY_PAGE_SIZE,
+      });
+      if (requestId !== historyRequestId) return;
+      historyEntries = page.entries;
+      historyHasMore = page.hasMore;
+      historyLoadedPath = path;
+      historyLoadedVaultId = vaultIdForRequest;
+    } catch (cause) {
+      if (requestId !== historyRequestId) return;
+      historyError =
+        cause instanceof Error ? cause.message : 'Failed to load history.';
+    } finally {
+      if (requestId === historyRequestId) historyLoading = false;
+    }
+  }
+
+  async function loadOlderHistory(): Promise<void> {
+    const vaultIdForRequest = historyLoadedVaultId ?? activeVaultId;
+    if (!vaultIdForRequest || historyLoadingMore || historyEntries.length === 0) {
+      return;
+    }
+    const path = historyLoadedPath ?? documentPath;
+    const oldest = historyEntries[historyEntries.length - 1];
+    historyLoadingMore = true;
+    historyError = null;
+    try {
+      const page = await kbService.listNoteHistory(vaultIdForRequest, path, {
+        before: oldest.createdAt,
+        beforeId: oldest.id,
+        limit: HISTORY_PAGE_SIZE,
+      });
+      const seen = new Set(historyEntries.map((entry) => entry.id));
+      const merged = [...historyEntries];
+      for (const entry of page.entries) {
+        if (!seen.has(entry.id)) merged.push(entry);
+      }
+      historyEntries = merged;
+      historyHasMore = page.hasMore;
+    } catch (cause) {
+      historyError =
+        cause instanceof Error ? cause.message : 'Failed to load older history.';
+    } finally {
+      historyLoadingMore = false;
+    }
+  }
+
+  function scheduleHistoryRefresh(): void {
+    if (!historyPanelOpen || viewingFolder || documentPath.length === 0) return;
+    if (historyRefreshTimer !== null) clearTimeout(historyRefreshTimer);
+    const path = documentPath;
+    historyRefreshTimer = setTimeout(() => {
+      historyRefreshTimer = null;
+      void loadHistoryHead(path);
+    }, 1_000);
+  }
+
+  onDestroy(() => {
+    historyRequestId += 1;
+    if (historyRefreshTimer !== null) clearTimeout(historyRefreshTimer);
+  });
+
+  $effect(() => {
+    if (!historyPanelOpen) return;
+    if (viewingFolder) {
+      historyPanelOpen = false;
+      resetHistoryState();
+      return;
+    }
+    const path = documentPath;
+    const activeVaultKey = activeVaultId;
+    if (path.length === 0) return;
+    untrack(() => {
+      if (historyLoadedPath !== path || historyLoadedVaultId !== activeVaultKey) {
+        void loadHistoryHead(path);
+      }
+    });
+  });
+
+  $effect(() => {
+    const saveStatus = saveState.status;
+    if (saveStatus !== 'saved') return;
+    untrack(() => {
+      scheduleHistoryRefresh();
+    });
+  });
 
   // The document header breadcrumb trail. Built in the app from the
   // active path so the package stays free of path-parsing policy
@@ -1657,23 +1784,41 @@
         {#if notFoundPath === documentPath}
           <DocumentNotFoundState path={documentPath} />
         {:else if provider && providerSynced}
-          <div class="doc-column">
-            <DocumentByline
-              statusLabel={bylineStatusLabel}
-              statusTone={bylineStatusTone}
-            />
-            {#key provider}
-              <PlaintextEditor
-                ydoc={provider.doc}
-                ytext={provider.text}
-                livePaths={livePaths}
-                orgPeople={orgPeople}
-                readOnly={docDeleted}
-                scroll="external"
-                class="vault-editor"
-                onWikilinkClick={handleWikilinkClick}
+          <div class:history-open={historyPanelOpen} class="document-workspace">
+            <div class="doc-column">
+              <DocumentByline
+                statusLabel={bylineStatusLabel}
+                statusTone={bylineStatusTone}
+                onHistory={openHistoryPanel}
               />
-            {/key}
+              {#key provider}
+                <PlaintextEditor
+                  ydoc={provider.doc}
+                  ytext={provider.text}
+                  livePaths={livePaths}
+                  orgPeople={orgPeople}
+                  readOnly={docDeleted}
+                  scroll="external"
+                  class="vault-editor"
+                  onWikilinkClick={handleWikilinkClick}
+                />
+              {/key}
+            </div>
+            {#if historyPanelOpen}
+              <DocumentHistoryPanel
+                class="note-history-panel"
+                path={documentPath}
+                entries={historyEntries}
+                loading={historyLoading}
+                loadingMore={historyLoadingMore}
+                error={historyError}
+                hasMore={historyHasMore}
+                onClose={closeHistoryPanel}
+                onLoadMore={() => {
+                  void loadOlderHistory();
+                }}
+              />
+            {/if}
           </div>
         {:else if mounted}
           <div class="loading">Opening document…</div>
@@ -1884,6 +2029,20 @@
     }
   }
 
+  .document-workspace {
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .document-workspace.history-open {
+    max-width: 1160px;
+    display: grid;
+    grid-template-columns: minmax(0, 760px) minmax(280px, 340px);
+    gap: 48px;
+    align-items: start;
+  }
+
   /* Single owning element for the document column geometry — the editor
      is a width:100% child, centered at a fixed prose measure. */
   .doc-column {
@@ -1892,11 +2051,22 @@
     width: 100%;
   }
 
+  .document-workspace.history-open .doc-column {
+    margin: 0;
+  }
+
   /* Editor surface only — transparent so the doc-body's panel color
      shows through. Top breathing room sits on the column, not a header
      band. */
   .doc-body :global(.vault-editor) {
     background: transparent;
+  }
+
+  @media (max-width: 1180px) {
+    .document-workspace.history-open {
+      max-width: 760px;
+      display: block;
+    }
   }
 
   .loading {

@@ -136,6 +136,59 @@ describe("local editor route", () => {
             ],
           });
         }
+        if (url === "/api/vaults/demo-vault/files/hello-world.md/history?limit=25") {
+          return json({
+            ok: true,
+            entries: [
+              {
+                id: "hist-2",
+                path: "hello-world.md",
+                operation: "update",
+                actor: { kind: "user", id: "marcus", name: "Marcus" },
+                integrationId: "agent-codex",
+                createdAt: "2026-06-30T05:01:00.000Z",
+                updatedAt: "2026-06-30T05:03:00.000Z",
+                content: "second version",
+                size: 14,
+                contentHash: "hash-2",
+              },
+              {
+                id: "hist-1",
+                path: "hello-world.md",
+                operation: "create",
+                actor: { kind: "user", id: "olivia", name: "Olivia" },
+                createdAt: "2026-06-30T05:00:00.000Z",
+                updatedAt: "2026-06-30T05:00:00.000Z",
+                content: "first version",
+                size: 13,
+                contentHash: "hash-1",
+              },
+            ],
+            hasMore: true,
+          });
+        }
+        if (
+          url ===
+          "/api/vaults/demo-vault/files/hello-world.md/history?before=2026-06-30T05%3A00%3A00.000Z&beforeId=hist-1&limit=25"
+        ) {
+          return json({
+            ok: true,
+            entries: [
+              {
+                id: "hist-0",
+                path: "hello-world.md",
+                operation: "update",
+                actor: { kind: "agent", id: "local-agent", name: "local agent" },
+                createdAt: "2026-06-30T04:55:00.000Z",
+                updatedAt: "2026-06-30T04:55:00.000Z",
+                content: "older version",
+                size: 13,
+                contentHash: "hash-0",
+              },
+            ],
+            hasMore: false,
+          });
+        }
         return json(
           { ok: false, error: "not_found", message: `Unhandled ${url}` },
           404,
@@ -250,6 +303,41 @@ describe("local editor route", () => {
       "content:projects/active/editor-shell.md",
     );
     expect(editor.value).toBe("content:projects/active/editor-shell.md");
+  });
+
+  it("opens note history from the byline and pages older entries", async () => {
+    render(AppStateHarness);
+
+    expect(await screen.findByLabelText("Markdown editor")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    const panel = within(await screen.findByTestId("document-history-panel"));
+    expect(await panel.findByText("Marcus")).toBeTruthy();
+    expect(panel.getByText("Olivia")).toBeTruthy();
+    expect(panel.getByText("second version")).toBeTruthy();
+    expect(panel.getByText("first version")).toBeTruthy();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) => url === "/api/vaults/demo-vault/files/hello-world.md/history?limit=25",
+        ),
+    ).toBe(true);
+
+    await fireEvent.click(panel.getByRole("button", { name: "Load older" }));
+
+    await waitFor(() => {
+      expect(panel.getByText("older version")).toBeTruthy();
+    });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) =>
+            url ===
+            "/api/vaults/demo-vault/files/hello-world.md/history?before=2026-06-30T05%3A00%3A00.000Z&beforeId=hist-1&limit=25",
+        ),
+    ).toBe(true);
   });
 
   it("rebinds the editor on history navigation and can land on a deleted document path", async () => {
