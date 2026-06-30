@@ -2,10 +2,10 @@
   import ContextMenu from '../menus/ContextMenu.svelte';
   import FolderIcon from '../primitives/FolderIcon.svelte';
   import Icon from '../primitives/Icon.svelte';
-  import { accentHex } from '../primitives/accent';
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
   import { folderKey } from './expansion';
+  import { ROOT_DEFAULT_COLOR, resolveFolderColor } from './folder-presentation';
   import type { LocalFolderNode, LocalTreeAction, LocalTreeNode } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
 
@@ -35,6 +35,7 @@
         for whether a row is open — the shell owns this set. */
     expandedFolderIds?: Set<string>;
     depth?: number;
+    inheritedColor?: string;
     /** Set of starred folder paths — drives this row's menu item. */
     favoritedFolderPaths?: Set<string>;
     /** Set of starred note paths — threaded to descendant file rows. */
@@ -61,6 +62,7 @@
     activeFolderId,
     expandedFolderIds = new Set<string>(),
     depth = 0,
+    inheritedColor = ROOT_DEFAULT_COLOR,
     favoritedFolderPaths,
     favoritedNotePaths,
     kebabAlwaysVisible = false,
@@ -84,12 +86,12 @@
   // just direct children. Answers "how big is this folder?", matching the
   // count shown on the folder row.
   const count = $derived(countNotes(node.children));
-  const folderColor = $derived(accentHex[node.metadata?.color ?? 'slate']);
-  const folderIcon = $derived(node.metadata?.icon ?? null);
+  const folderColor = $derived(resolveFolderColor(node.metadata, inheritedColor));
 
   const items = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onAction?.({ kind: 'folder', action: 'new-note', path: node.path }) },
     { label: 'New Folder', onSelect: () => onAction?.({ kind: 'folder', action: 'new-folder', path: node.path }) },
+    { label: 'Customize', onSelect: () => onAction?.({ kind: 'folder', action: 'customize', path: node.path }) },
     favorited
       ? { label: 'Unfavorite', onSelect: () => onAction?.({ kind: 'folder', action: 'unfavorite', path: node.path }) }
       : { label: 'Favorite', onSelect: () => onAction?.({ kind: 'folder', action: 'favorite', path: node.path }) },
@@ -158,7 +160,7 @@
       </span>
     </button>
     <button type="button" class="activate" onclick={handleClick}>
-      <FolderIcon color={folderColor} icon={folderIcon} size="sm" variant="filled" label={`${node.name} folder`} />
+      <FolderIcon color={folderColor} size="sm" variant="filled" label={`${node.name} folder`} />
       <span class="name">{node.name}</span>
     </button>
     <span class="count">{count}</span>
@@ -185,6 +187,7 @@
             {activeFolderId}
             {expandedFolderIds}
             depth={depth + 1}
+            inheritedColor={folderColor}
             {favoritedFolderPaths}
             {favoritedNotePaths}
             {kebabAlwaysVisible}

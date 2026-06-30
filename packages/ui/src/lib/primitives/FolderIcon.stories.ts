@@ -6,7 +6,6 @@ const meta = {
   component: FolderIcon,
   args: {
     color: '#bae6fd',
-    icon: '*',
     size: 'lg',
     variant: 'filled',
     label: 'Folder'

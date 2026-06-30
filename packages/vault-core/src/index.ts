@@ -5,16 +5,19 @@ export {
   type AuditEntry,
   type AuditInput,
   type VaultActor,
-  type VaultAuditHandler
-} from './audit.js';
+  type VaultAuditHandler,
+} from "./audit.js";
 export {
-  folderMetadataColorNames,
-  folderMetadataIconNames,
+  INHERIT_COLOR,
+  normalizeFolderMetadataColor,
   type FolderMetadataColor,
-  type FolderMetadataIcon
-} from './folder-metadata-options.js';
-export { isNodeError, statOrNull } from './fs.js';
-export { InvalidPathError, resolveVaultPath, validateVaultPath } from './path.js';
+} from "./folder-metadata-options.js";
+export { isNodeError, statOrNull } from "./fs.js";
+export {
+  InvalidPathError,
+  resolveVaultPath,
+  validateVaultPath,
+} from "./path.js";
 export {
   DOCUMENT_BYTES_LIMIT,
   SPLICE_BYTES_LIMIT,
@@ -24,14 +27,14 @@ export {
   prependContent,
   utf8ByteLength,
   type AnchoredSpliceRequest,
-  type AnchoredSpliceResult
-} from './splice.js';
+  type AnchoredSpliceResult,
+} from "./splice.js";
 export {
   searchVaultFiles,
   type SearchHit,
   type SearchInput,
-  type SearchResult
-} from './search.js';
+  type SearchResult,
+} from "./search.js";
 export {
   deleteVaultFile,
   deleteVaultFolder,
@@ -56,6 +59,6 @@ export {
   type VaultErrorCode,
   type VaultInfo,
   type VaultResult,
-  type WriteFileValue
-} from './vault-ops.js';
-export { anchoredSpliceContractCases } from './splice-contract-cases.test-support.js';
+  type WriteFileValue,
+} from "./vault-ops.js";
+export { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";

@@ -5,14 +5,7 @@
   export type BreadcrumbAvatar =
     | { kind: 'org'; accent: AccentName; letter: string }
     | { kind: 'folder'; accent: AccentName }
-    /**
-     * Folder crumb tinted by an explicit hex color + optional emoji
-     * icon. Used by /vault surfaces that resolve customize-folder
-     * metadata via `folderIconResolver`. The legacy `FolderIcon`
-     * primitive renders the swatch so the redesign and legacy paths
-     * agree on color treatment.
-     */
-    | { kind: 'folder-color'; color: string; icon: string | null }
+    | { kind: 'folder-color'; color: string }
     | { kind: 'human'; accent: AccentName; letter: string }
     | { kind: 'agent'; accent: AccentName; brand: IconName };
 
@@ -47,7 +40,7 @@
   {:else if av.kind === 'folder'}
     <Avatar kind="folder" accent={av.accent} size={14} />
   {:else if av.kind === 'folder-color'}
-    <FolderIcon color={av.color} icon={av.icon} size="sm" variant="filled" />
+    <FolderIcon color={av.color} size="sm" variant="filled" />
   {:else if av.kind === 'human'}
     <Avatar kind="human" accent={av.accent} letter={av.letter} size={16} />
   {:else if av.kind === 'agent'}

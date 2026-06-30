@@ -70,6 +70,7 @@ export type VaultChangeEventKind =
   | 'file_moved'
   | 'folder_moved'
   | 'folder_metadata_changed'
+  | 'vault_metadata_changed'
   | 'external_change_detected'
   | 'persist_failure'
   | 'persist_recovered';

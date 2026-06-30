@@ -96,6 +96,45 @@ describe('vault registry', () => {
 
       await expect(readOrMintVaultIdentity(root, 'broken')).rejects.toThrow(/Malformed vault identity/);
     });
+
+    it('reads valid metadata and rejects malformed metadata', async () => {
+      const root = join(home, 'demo-vault');
+      await mkdir(join(root, '.kb2'), { recursive: true });
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: '#f97316' } }),
+        'utf8'
+      );
+
+      await expect(readOrMintVaultIdentity(root, 'demo-vault')).resolves.toEqual({
+        id: 'demo-vault',
+        displayName: 'Demo Vault',
+        metadata: { color: '#f97316' }
+      });
+
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: 'coral' }),
+        'utf8'
+      );
+      await expect(readOrMintVaultIdentity(root, 'demo-vault')).rejects.toThrow(/"metadata" must be a JSON object/);
+
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: 42 } }),
+        'utf8'
+      );
+      await expect(readOrMintVaultIdentity(root, 'demo-vault')).rejects.toThrow(/"metadata.color" must be a string/);
+
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: 'neon' } }),
+        'utf8'
+      );
+      await expect(readOrMintVaultIdentity(root, 'demo-vault')).rejects.toThrow(
+        /"metadata.color" must be "inherit" or a hex color/
+      );
+    });
   });
 
   describe('discoverVaults', () => {
@@ -333,6 +372,24 @@ describe('vault registry', () => {
       await registry.close();
     });
 
+    it('preserves vault metadata when renaming a vault', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+      await registry.create({ displayName: 'Original', slug: 'original' });
+      await registry.setMetadata('original', { color: '#0ea5e9' }, { kind: 'user' });
+
+      const renamed = await registry.rename('original', { displayName: 'Renamed' });
+      expect(renamed).toEqual({
+        ok: true,
+        vault: { id: 'original', displayName: 'Renamed', metadata: { color: '#0ea5e9' } }
+      });
+
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb2', 'vault.json'), 'utf8'));
+      expect(identity).toEqual({ id: 'original', displayName: 'Renamed', metadata: { color: '#0ea5e9' } });
+
+      await registry.close();
+    });
+
     it('returns a clean not_found when renaming an unknown vault', async () => {
       await mkdir(vaultsHome, { recursive: true });
       const registry = await loadRegistry();
@@ -398,6 +455,76 @@ describe('vault registry', () => {
       await expect(readFile(join(firstDelete.trashedTo, 'v1.md'), 'utf8')).resolves.toBe('first\n');
       await expect(readFile(join(secondDelete.trashedTo, 'v2.md'), 'utf8')).resolves.toBe('second\n');
 
+      await registry.close();
+    });
+
+    it('sets, clears, validates, and emits vault metadata changes', async () => {
+      await mkdir(vaultsHome, { recursive: true });
+      const registry = await loadRegistry();
+      await registry.create({ displayName: 'Design Notes', slug: 'design-notes' });
+
+      const events: VaultRegistryChangeEvent[] = [];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const unsubscribeThrowingHandler = registry.onVaultEvent(() => {
+        throw new Error('boom');
+      });
+      const unsubscribe = registry.onVaultEvent((event) => events.push(event));
+
+      const set = await registry.setMetadata('design-notes', { color: '#a855f7' }, { kind: 'user' });
+      expect(set).toEqual({
+        ok: true,
+        vault: { id: 'design-notes', displayName: 'Design Notes', metadata: { color: '#a855f7' } }
+      });
+      expect(registry.list()).toContainEqual({
+        id: 'design-notes',
+        displayName: 'Design Notes',
+        metadata: { color: '#a855f7' }
+      });
+      await expect(readFile(join(vaultsHome, 'design-notes', '.kb2', 'vault.json'), 'utf8')).resolves.toContain(
+        '"metadata"'
+      );
+      expect(events).toContainEqual(expect.objectContaining({
+        vaultSlug: 'design-notes',
+        event: expect.objectContaining({
+          kind: 'vault_metadata_changed',
+          path: '',
+          actor: { kind: 'user' }
+        })
+      }));
+      expect(warn).toHaveBeenCalledWith('KB-2 vault registry event handler failed.', expect.any(Error));
+
+      expect(await registry.setMetadata('missing', { color: '#a855f7' }, { kind: 'user' })).toEqual({
+        ok: false,
+        error: 'not_found',
+        message: expect.stringContaining('missing')
+      });
+      expect(await registry.setMetadata('design-notes', { color: 'hotpink' }, { kind: 'user' })).toEqual({
+        ok: false,
+        error: 'invalid_request',
+        message: 'metadata.color must be "inherit" or a hex color'
+      });
+      expect(
+        await registry.setMetadata('design-notes', { color: 42 as unknown as string }, { kind: 'user' })
+      ).toEqual({
+        ok: false,
+        error: 'invalid_request',
+        message: 'metadata.color must be a string or null'
+      });
+
+      const inherited = await registry.setMetadata('design-notes', { color: 'inherit' }, { kind: 'user' });
+      expect(inherited).toEqual({
+        ok: true,
+        vault: { id: 'design-notes', displayName: 'Design Notes', metadata: { color: 'inherit' } }
+      });
+
+      const cleared = await registry.setMetadata('design-notes', { color: null }, { kind: 'user' });
+      expect(cleared).toEqual({ ok: true, vault: { id: 'design-notes', displayName: 'Design Notes' } });
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'design-notes', '.kb2', 'vault.json'), 'utf8'));
+      expect(identity).toEqual({ id: 'design-notes', displayName: 'Design Notes' });
+
+      unsubscribe();
+      unsubscribeThrowingHandler();
+      warn.mockRestore();
       await registry.close();
     });
   });

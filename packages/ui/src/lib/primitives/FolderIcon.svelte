@@ -18,7 +18,6 @@
 
   export interface FolderIconProps {
     color?: string | null;
-    icon?: string | null;
     size?: FolderIconSize;
     variant?: FolderIconVariant;
     label?: string;
@@ -38,7 +37,6 @@
 <script lang="ts">
   let {
     color = null,
-    icon = null,
     size = 'md',
     variant = 'filled',
     label,
@@ -59,9 +57,6 @@
   style:--folder-icon-bg-outline="color-mix(in srgb, {resolvedColor} 35%, transparent)"
   style:--folder-icon-border={`light-dark(color-mix(in srgb, ${resolvedColor} 75%, black), color-mix(in srgb, ${resolvedColor} 85%, black))`}
 >
-  {#if icon}
-    <span class="folder-icon-glyph" aria-hidden="true">{icon}</span>
-  {/if}
 </span>
 
 <style>
@@ -103,14 +98,4 @@
     font-size: 14px;
   }
 
-  .folder-icon-glyph {
-    display: block;
-    font-size: 0.7em;
-    line-height: 1;
-    filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.2));
-  }
-
-  :global(.dark) .folder-icon-glyph {
-    filter: brightness(1.15) saturate(1.1) drop-shadow(0 0 1px rgb(0 0 0 / 0.4));
-  }
 </style>

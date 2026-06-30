@@ -35,6 +35,7 @@ const TREE_DIRTY_EVENT_KINDS = new Set<VaultChangeEventKind>([
   'file_moved',
   'folder_moved',
   'folder_metadata_changed',
+  'vault_metadata_changed',
   'external_change_detected'
 ]);
 
@@ -210,7 +211,7 @@ function createRelayLifecycleController(
 
       client.sendRelayEvent({
         topic: VAULT_TREE_CHANGED_TOPIC,
-        resource: { vaultSlug: event.vaultSlug },
+        resource: { vaultSlug: event.vaultSlug, cause: event.event.kind },
       });
     });
   };

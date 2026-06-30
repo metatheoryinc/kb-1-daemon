@@ -1,18 +1,17 @@
-import type { AccentName } from '../primitives/accent';
+import type { AccentName } from "../primitives/accent";
 
 export interface LocalFileNode {
-  kind: 'file';
+  kind: "file";
   path: string;
   name: string;
 }
 
 export interface LocalFolderMetadata {
-  color?: AccentName;
-  icon?: string | null;
+  color?: string;
 }
 
 export interface LocalFolderNode {
-  kind: 'folder';
+  kind: "folder";
   path: string;
   name: string;
   metadata?: LocalFolderMetadata;
@@ -32,6 +31,8 @@ export interface VaultFilterEntry {
   id: string;
   name: string;
   accent: AccentName;
+  metadata?: LocalFolderMetadata;
+  colorHex?: string | null;
 }
 
 /**
@@ -45,6 +46,8 @@ export interface VaultGroupData {
   id: string;
   name: string;
   accent: AccentName;
+  metadata?: LocalFolderMetadata;
+  colorHex?: string | null;
   tree: LocalTreeNode[];
 }
 
@@ -57,14 +60,22 @@ export interface LocalSearchResult {
 }
 
 export interface LocalFileAction {
-  kind: 'file';
-  action: 'rename' | 'move' | 'delete' | 'favorite' | 'unfavorite';
+  kind: "file";
+  action: "rename" | "move" | "delete" | "favorite" | "unfavorite";
   path: string;
 }
 
 export interface LocalFolderAction {
-  kind: 'folder';
-  action: 'new-note' | 'new-folder' | 'rename' | 'move' | 'delete' | 'favorite' | 'unfavorite';
+  kind: "folder";
+  action:
+    | "new-note"
+    | "new-folder"
+    | "customize"
+    | "rename"
+    | "move"
+    | "delete"
+    | "favorite"
+    | "unfavorite";
   path: string;
 }
 
@@ -76,7 +87,7 @@ export interface LocalFolderAction {
 export interface StarredRowData {
   /** Stable id (`kind:vaultId:path`) — keyed iteration + active match. */
   id: string;
-  kind: 'note' | 'folder';
+  kind: "note" | "folder";
   /** Human label — the path basename. */
   label: string;
   /** Vault context for the secondary line ("in <vault>"). */
@@ -86,8 +97,6 @@ export interface StarredRowData {
   /** Resolved hex color for the leading folder swatch. When null, the row
    *  falls back to the `accent` palette dot. */
   colorHex: string | null;
-  /** Folder customize-icon glyph (folder rows only). */
-  icon: string | null;
   /** Vault-relative path; used for active-row matching. */
   path: string;
   /** Click target href. `undefined` when unavailable — the row renders as
@@ -98,16 +107,25 @@ export interface StarredRowData {
 }
 
 export interface LocalVaultAction {
-  kind: 'vault';
+  kind: "vault";
   /**
    * `new-vault` creates a brand-new vault and is vault-list-level, so it
    * carries no `vaultId`. Every other action targets an existing vault
    * group and stamps that group's `vaultId` so the host knows which vault
    * the menu acted on (the rail now lists more than one).
    */
-  action: 'new-note' | 'new-folder' | 'rename' | 'delete' | 'new-vault';
+  action:
+    | "new-note"
+    | "new-folder"
+    | "customize"
+    | "rename"
+    | "delete"
+    | "new-vault";
   /** The vault the action targets. Absent for `new-vault`. */
   vaultId?: string;
 }
 
-export type LocalTreeAction = LocalFileAction | LocalFolderAction | LocalVaultAction;
+export type LocalTreeAction =
+  | LocalFileAction
+  | LocalFolderAction
+  | LocalVaultAction;
