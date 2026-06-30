@@ -529,11 +529,7 @@
 
   function handleSessionEvent(event: DocumentSessionEvent): void {
     if (event.kind === 'doc-moved') {
-      const nextPath = event.toPath ?? event.path;
-      docDeleted = false;
-      // Navigate to the moved path; the derived document path follows and
-      // the provider effect rebinds onto the new location.
-      void goto(vaultRoute(activeVaultId, nextPath), { replaceState: true, noScroll: true, keepFocus: true });
+      markDocumentNotFound(event.fromPath ?? documentPath);
       void refreshTree();
       return;
     }
