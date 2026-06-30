@@ -227,7 +227,7 @@ describe("vault service failure mapping", () => {
         {
           operation: "create",
           actor: marcus,
-          content: "two\n",
+          size: 4,
         },
       ],
       hasMore: false,
@@ -256,12 +256,12 @@ describe("vault service failure mapping", () => {
         {
           operation: "update",
           actor: olivia,
-          content: "two\nthree\n",
+          size: 10,
         },
         {
           operation: "create",
           actor: marcus,
-          content: "two\n",
+          size: 4,
         },
       ],
     });
@@ -323,19 +323,19 @@ describe("vault service failure mapping", () => {
           path: "archive/history.md",
           operation: "move",
           actor: marcus,
-          content: "one\ntwo\n",
+          size: 8,
         },
         {
           path: "archive/history.md",
           operation: "update",
           actor: olivia,
-          content: "one\ntwo\n",
+          size: 8,
         },
         {
           path: "archive/history.md",
           operation: "create",
           actor: marcus,
-          content: "one\n",
+          size: 4,
         },
       ],
       hasMore: false,
@@ -374,13 +374,13 @@ describe("vault service failure mapping", () => {
           path: "live/renamed.md",
           operation: "rename",
           actor: marcus,
-          content: "live\n",
+          size: 5,
         },
         {
           path: "live/renamed.md",
           operation: "create",
           actor: olivia,
-          content: "live\n",
+          size: 5,
         },
       ],
       hasMore: false,
@@ -498,12 +498,12 @@ describe("vault service failure mapping", () => {
         {
           operation: "update",
           actor: olivia,
-          content: "socket\n",
+          size: 7,
         },
         {
           operation: "create",
           actor: marcus,
-          content: "base\n",
+          size: 5,
         },
       ],
     });

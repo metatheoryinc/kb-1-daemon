@@ -23,7 +23,7 @@
     integrationId?: string;
     createdAt: string;
     updatedAt: string;
-    content: string;
+    content?: string;
     size: number;
     contentHash: string;
   }
@@ -121,17 +121,6 @@
     if (days < 7) return `${days}d`;
     return absoluteFormatter.format(new Date(time));
   }
-
-  function previewContent(content: string): string {
-    const normalized = content.replace(/\r\n/g, "\n").trim();
-    if (normalized.length === 0) return "(empty note)";
-    const lines = normalized.split("\n");
-    const clipped = lines.slice(0, 8).join("\n");
-    const withLineClip = lines.length > 8 ? `${clipped}\n...` : clipped;
-    return withLineClip.length > 520
-      ? `${withLineClip.slice(0, 520).trimEnd()}...`
-      : withLineClip;
-  }
 </script>
 
 <aside
@@ -184,7 +173,6 @@
                   {formatWhen(entry.updatedAt)}
                 </time>
               </div>
-              <pre class="snapshot">{previewContent(entry.content)}</pre>
             </div>
           </li>
         {/each}
@@ -381,16 +369,6 @@
     color: var(--rd-ink-4);
     font-family: var(--rd-mono);
     font-size: 11px;
-  }
-
-  .snapshot {
-    margin: 8px 0 0;
-    max-height: 154px;
-    overflow: hidden;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--rd-ink-2);
-    font: 12px/1.45 var(--rd-mono);
   }
 
   .load-more {

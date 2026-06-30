@@ -18,7 +18,7 @@ export interface FileHistoryEntry {
   integrationId?: string;
   createdAt: string;
   updatedAt: string;
-  content: string;
+  content?: string;
   size: number;
   contentHash: string;
 }
@@ -58,6 +58,7 @@ const FILE_HISTORY_RELATIVE_PATH = path.posix.join(".kb2", "file-history.yml");
 const DEFAULT_HISTORY_COALESCE_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_HISTORY_PAGE_LIMIT = 50;
 const MAX_HISTORY_PAGE_LIMIT = 200;
+const FILE_HISTORY_CONTENT_SNAPSHOTS_ENABLED = false;
 const fileHistoryMutationQueues = new Map<string, Promise<void>>();
 
 function ignoreMutationQueueResult(): void {
@@ -133,12 +134,16 @@ export async function recordFileHistory(
       now.getTime() - new Date(previous.updatedAt).getTime() <= coalesceWindowMs
     ) {
       entry = {
-        ...previous,
+        id: previous.id,
         path: rel,
-        content: input.content,
+        operation: previous.operation,
+        actor: cloneActor(previous.actor),
+        ...(previous.integrationId !== undefined ? { integrationId: previous.integrationId } : {}),
+        createdAt: previous.createdAt,
         size,
         contentHash,
         updatedAt: nowIso,
+        ...contentSnapshot(input.content),
       };
       existingEntries[existingEntries.length - 1] = entry;
     } else {
@@ -150,7 +155,7 @@ export async function recordFileHistory(
         ...(integrationId !== undefined ? { integrationId } : {}),
         createdAt: nowIso,
         updatedAt: nowIso,
-        content: input.content,
+        ...contentSnapshot(input.content),
         size,
         contentHash,
       };
@@ -231,7 +236,7 @@ export async function moveFileHistory(
       ...(integrationId !== undefined ? { integrationId } : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
-      content: input.content,
+      ...contentSnapshot(input.content),
       size,
       contentHash,
     };
@@ -349,7 +354,6 @@ function normalizeFileHistoryEntry(
     typeof value.operation !== "string" ||
     typeof value.createdAt !== "string" ||
     typeof value.updatedAt !== "string" ||
-    typeof value.content !== "string" ||
     typeof value.size !== "number" ||
     typeof value.contentHash !== "string" ||
     !isFileHistoryOperation(value.operation) ||
@@ -365,6 +369,9 @@ function normalizeFileHistoryEntry(
   if (value.integrationId !== undefined && typeof value.integrationId !== "string") {
     return metadataFileFailure();
   }
+  if (value.content !== undefined && typeof value.content !== "string") {
+    return metadataFileFailure();
+  }
 
   return {
     ok: true,
@@ -376,7 +383,7 @@ function normalizeFileHistoryEntry(
       ...(typeof value.integrationId === "string" ? { integrationId: value.integrationId } : {}),
       createdAt: value.createdAt,
       updatedAt: value.updatedAt,
-      content: value.content,
+      ...(typeof value.content === "string" ? { content: value.content } : {}),
       size: value.size,
       contentHash: value.contentHash,
     },
@@ -432,7 +439,9 @@ function serializedEntry(entry: FileHistoryEntry): Omit<FileHistoryEntry, "path"
     ...(entry.integrationId !== undefined ? { integrationId: entry.integrationId } : {}),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
-    content: entry.content,
+    ...(FILE_HISTORY_CONTENT_SNAPSHOTS_ENABLED && entry.content !== undefined
+      ? { content: entry.content }
+      : {}),
     size: entry.size,
     contentHash: entry.contentHash,
   };
@@ -447,10 +456,14 @@ function cloneFileHistoryEntry(entry: FileHistoryEntry): FileHistoryEntry {
     ...(entry.integrationId !== undefined ? { integrationId: entry.integrationId } : {}),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
-    content: entry.content,
+    ...(entry.content !== undefined ? { content: entry.content } : {}),
     size: entry.size,
     contentHash: entry.contentHash,
   };
+}
+
+function contentSnapshot(content: string): Partial<Pick<FileHistoryEntry, "content">> {
+  return FILE_HISTORY_CONTENT_SNAPSHOTS_ENABLED ? { content } : {};
 }
 
 function cloneActor(actor: VaultActor): VaultActor {
