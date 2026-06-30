@@ -11,7 +11,6 @@ const meta = {
     kind: 'note',
     accent: 'coral',
     colorHex: '#ee8a91',
-    icon: null,
     href: '/projects/active/launch-notes.md',
     available: true,
     active: false,

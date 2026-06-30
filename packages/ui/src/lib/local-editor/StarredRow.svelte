@@ -29,8 +29,6 @@
     /** Resolved hex color for folder + note rows. When null, the row
      *  falls back to the `accent` palette swatch. */
     colorHex?: string | null;
-    /** Folder customize-icon glyph (folder rows only). */
-    icon?: string | null;
     href?: string;
     /** When false, render dimmed and as a static element rather than a link. */
     available?: boolean;
@@ -50,7 +48,6 @@
     kind,
     accent = 'slate',
     colorHex = null,
-    icon = null,
     href,
     available = true,
     active = false,
@@ -60,8 +57,7 @@
   const iconName = $derived<IconName>(kind === 'note' ? 'file' : 'folder');
   // Folder + note rows tint by folder color when supplied. Notes get the
   // outline-variant FolderIcon (matches the file-leaf treatment); folders
-  // get the filled variant + their optional icon glyph. Rows with no
-  // resolved color keep the palette accent dot.
+  // get the filled variant. Rows with no resolved color keep the palette accent dot.
   const showFolderSwatch = $derived(colorHex !== null);
 </script>
 
@@ -69,7 +65,6 @@
   {#if showFolderSwatch}
     <FolderIcon
       color={colorHex}
-      icon={kind === 'folder' ? icon : null}
       size="sm"
       variant={kind === 'note' ? 'outline' : 'filled'}
     />

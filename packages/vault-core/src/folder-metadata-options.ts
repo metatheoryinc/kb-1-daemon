@@ -1,71 +1,17 @@
-export const folderMetadataColorNames = [
-  'coral',
-  'peach',
-  'butter',
-  'sage',
-  'mint',
-  'lime',
-  'sky',
-  'periwinkle',
-  'lavender',
-  'rose',
-  'teal',
-  'slate'
-] as const;
+export const INHERIT_COLOR = "inherit";
 
-export const folderMetadataIconNames = [
-  'bookmark',
-  'home',
-  'vault',
-  'book',
-  'activity',
-  'people',
-  'star',
-  'user',
-  'stop',
-  'history',
-  'refresh',
-  'fullscreen',
-  'panel',
-  'collapse',
-  'expand-rail',
-  'dots',
-  'settings',
-  'plus',
-  'search',
-  'filter',
-  'chevron',
-  'chevron-down',
-  'file',
-  'folder',
-  'robot',
-  'cloud',
-  'code',
-  'codex',
-  'claude',
-  'anthropic',
-  'opencode',
-  'chatgpt',
-  'openai',
-  'claudeCode',
-  'cursor',
-  'gemini',
-  'copilot',
-  'mistral',
-  'replit',
-  'zed',
-  'cline',
-  'note',
-  'menu',
-  'pushpin',
-  'pushpin-slash',
-  'sun',
-  'moon',
-  'desktop',
-  'device-mobile',
-  'bell',
-  'x'
-] as const;
+const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
-export type FolderMetadataColor = (typeof folderMetadataColorNames)[number];
-export type FolderMetadataIcon = (typeof folderMetadataIconNames)[number];
+export type FolderMetadataColor = string;
+
+export function normalizeFolderMetadataColor(
+  color: string,
+): FolderMetadataColor | null {
+  if (color === INHERIT_COLOR) return INHERIT_COLOR;
+  if (!HEX_COLOR_PATTERN.test(color)) return null;
+  const normalized = color.toLowerCase();
+  if (normalized.length === 4) {
+    return `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`;
+  }
+  return normalized;
+}

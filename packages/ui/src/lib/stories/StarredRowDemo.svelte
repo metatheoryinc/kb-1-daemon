@@ -8,7 +8,6 @@
     kind?: 'note' | 'folder';
     accent?: AccentName;
     colorHex?: string | null;
-    icon?: string | null;
     href?: string;
     available?: boolean;
     active?: boolean;
@@ -21,7 +20,6 @@
     kind = 'note',
     accent = 'coral',
     colorHex = '#ee8a91',
-    icon = null,
     href = '/projects/active/launch-notes.md',
     available = true,
     active = false,
@@ -31,7 +29,7 @@
 
 <div class:dark={mode === 'dark'} data-rd-mode={mode} class="preview">
   <div class="row-host">
-    <StarredRow {label} {meta} {kind} {accent} {colorHex} {icon} {href} {available} {active} />
+    <StarredRow {label} {meta} {kind} {accent} {colorHex} {href} {available} {active} />
   </div>
 </div>
 

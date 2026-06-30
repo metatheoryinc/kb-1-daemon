@@ -1,5 +1,4 @@
 <script lang="ts" module>
-  import type { AccentName } from '../primitives/accent';
   import type { LocalTreeNode } from './types';
 
   // Recursively count notes under a set of tree nodes — descendants
@@ -21,8 +20,6 @@
     name: string;
     /** Resolved swatch color for the row's FolderIcon. */
     color: string;
-    /** Folder glyph if the folder carries one; notes never do. */
-    icon: string | null;
     /** Recursive note count for a folder row; `null` for a note row. */
     count: number | null;
   }
@@ -30,7 +27,7 @@
 
 <script lang="ts">
   import FolderIcon from '../primitives/FolderIcon.svelte';
-  import { accentHex } from '../primitives/accent';
+  import { ROOT_DEFAULT_COLOR, resolveFolderColor } from './folder-presentation';
 
   interface Props {
     /** Display name for the vault — the heading at vault root and the
@@ -41,9 +38,9 @@
         relative to the vault root (no leading slash). */
     folderPath: string;
     /** This folder's own customization, when the vault has any. The
-        daemon does not yet expose folder color/icon metadata, so this
-        is normally undefined and the icon falls back to the default. */
-    metadata?: { color?: AccentName; icon?: string | null };
+        same daemon-owned shape the file tree receives inline. */
+    metadata?: { color?: string };
+    inheritedColor?: string;
     /** The folder's full subtree (direct children plus their
         descendants), the same `LocalFolderNode.children` shape the file
         tree uses. Drives the contents list and the recursive count. */
@@ -58,6 +55,7 @@
     vaultName,
     folderPath,
     metadata,
+    inheritedColor = ROOT_DEFAULT_COLOR,
     children,
     onOpenFile,
     onOpenFolder,
@@ -70,16 +68,15 @@
     return idx === -1 ? folderPath : folderPath.slice(idx + 1);
   });
 
-  const headingColor = $derived(accentHex[metadata?.color ?? 'slate']);
-  const headingIcon = $derived(metadata?.icon ?? null);
+  const headingColor = $derived(resolveFolderColor(metadata, inheritedColor));
 
   const directFolders = $derived(children.filter((c) => c.kind === 'folder'));
   const directNotes = $derived(children.filter((c) => c.kind === 'file'));
   const recursiveNoteCount = $derived(countNotes(children));
 
   // Direct children as render-ready rows — folders first, then notes,
-  // each group sorted by name. Folder color falls back to the default
-  // accent (the daemon has no folder-color metadata yet).
+  // each group sorted by name. Child folders inherit the current folder's
+  // resolved color unless they set one explicitly.
   const contents = $derived.by<ContentsRow[]>(() => {
     const folderRows: ContentsRow[] = directFolders
       .map((node) => ({
@@ -88,9 +85,8 @@
         name: node.name,
         color:
           node.kind === 'folder'
-            ? accentHex[node.metadata?.color ?? 'slate']
-            : accentHex.slate,
-        icon: node.kind === 'folder' ? (node.metadata?.icon ?? null) : null,
+            ? resolveFolderColor(node.metadata, headingColor)
+            : headingColor,
         count: node.kind === 'folder' ? countNotes(node.children) : 0,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -99,8 +95,7 @@
         kind: 'file' as const,
         path: node.path,
         name: node.name,
-        color: accentHex.slate,
-        icon: null,
+        color: headingColor,
         count: null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -121,7 +116,6 @@
         {#if !isVaultRoot}
           <FolderIcon
             color={headingColor}
-            icon={headingIcon}
             size="lg"
             variant="filled"
           />
@@ -161,7 +155,6 @@
                 <span class="contents-main">
                   <FolderIcon
                     color={row.color}
-                    icon={row.icon}
                     size="sm"
                     variant={row.kind === 'folder' ? 'filled' : 'outline'}
                   />

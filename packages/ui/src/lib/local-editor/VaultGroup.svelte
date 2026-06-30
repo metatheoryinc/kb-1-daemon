@@ -1,5 +1,6 @@
 <script lang="ts">
   import Avatar from '../primitives/Avatar.svelte';
+  import FolderIcon from '../primitives/FolderIcon.svelte';
   import Icon from '../primitives/Icon.svelte';
   import ContextMenu from '../menus/ContextMenu.svelte';
   import type { AccentName } from '../primitives/accent';
@@ -7,7 +8,8 @@
   import FileNode from './FileNode.svelte';
   import FolderNode from './FolderNode.svelte';
   import { vaultKey } from './expansion';
-  import type { LocalTreeAction, LocalTreeNode } from './types';
+  import { ROOT_DEFAULT_COLOR, resolveFolderColor } from './folder-presentation';
+  import type { LocalFolderMetadata, LocalTreeAction, LocalTreeNode } from './types';
 
   interface Props {
     /** Stable vault identifier — also the seed for every child folder's
@@ -17,6 +19,8 @@
     vaultName: string;
     /** Accent for the header's folder token. Defaults to a neutral slate. */
     accent?: AccentName;
+    metadata?: LocalFolderMetadata;
+    colorHex?: string | null;
     tree: LocalTreeNode[];
     activePath?: string;
     /** Currently-selected folder row key (when a folder is the active
@@ -61,6 +65,8 @@
     vaultId,
     vaultName,
     accent = 'slate',
+    metadata,
+    colorHex = null,
     tree,
     activePath = '',
     activeFolderId,
@@ -84,6 +90,8 @@
   // its collapsed deny-list).
   const open = $derived(expandedVaultIds === undefined || expandedVaultIds.has(key));
   const active = $derived(activeVaultId === key);
+  const inheritedColor = $derived(resolveFolderColor(metadata, ROOT_DEFAULT_COLOR));
+  const customColor = $derived(colorHex ?? (metadata?.color && metadata.color !== 'inherit' ? metadata.color : null));
 
   // The kebab and right-click open the same menu; the kebab hangs from the
   // button rect (anchor) while right-click pins to the cursor.
@@ -96,6 +104,7 @@
   const items = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-note', vaultId }) },
     { label: 'New Folder', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'new-folder', vaultId }) },
+    { label: 'Customize', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'customize', vaultId }) },
     { label: 'Rename', onSelect: () => onTreeAction?.({ kind: 'vault', action: 'rename', vaultId }) },
     {
       label: 'Delete',
@@ -130,7 +139,11 @@
       <span class="chev" class:collapsed={!open} aria-hidden="true">
         <Icon name="chevron-down" size={12} weight="bold" />
       </span>
-      <Avatar kind="folder" {accent} size={16} />
+      {#if customColor}
+        <FolderIcon color={customColor} size="sm" label={vaultName} />
+      {:else}
+        <Avatar kind="folder" {accent} size={16} />
+      {/if}
       <span class="name">{vaultName}</span>
     </button>
     <button
@@ -155,6 +168,7 @@
             {activePath}
             {activeFolderId}
             {expandedFolderIds}
+            {inheritedColor}
             {favoritedFolderPaths}
             {favoritedNotePaths}
             {kebabAlwaysVisible}

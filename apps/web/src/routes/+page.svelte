@@ -24,21 +24,26 @@
     EditorSaveNotifications,
     EmptyVaultsState,
     FolderCanvas,
+    FolderColorDialog,
     LocalEditorShell,
     LocalEditorMobileShell,
     MovePickerDialog,
     NewVaultDialog,
     TextInputDialog,
-    type AccentName,
     type BreadcrumbItem,
     type DialogField,
     type LocalFolderNode,
+    type LocalFolderMetadata,
     type LocalTreeAction,
     type LocalTreeNode,
     type NewVaultSubmit,
     type RailNavId,
     type VaultFilterEntry,
     type VaultGroupData,
+    createFolderPresentationResolver,
+    parentFolderPath,
+    ROOT_DEFAULT_COLOR,
+    resolveFolderColor,
   } from '@kb-2/ui';
   import { kbService, type VaultSummary } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
@@ -58,7 +63,7 @@
   interface TreeEntry {
     path: string;
     kind: 'file' | 'folder';
-    metadata?: { color?: AccentName; icon?: string | null };
+    metadata?: { color?: string };
   }
 
   type TreeDirtyEventKind =
@@ -69,6 +74,7 @@
     | 'file_moved'
     | 'folder_moved'
     | 'folder_metadata_changed'
+    | 'vault_metadata_changed'
     | 'external_change_detected';
 
   interface VaultChangeEvent {
@@ -84,6 +90,7 @@
     'file_moved',
     'folder_moved',
     'folder_metadata_changed',
+    'vault_metadata_changed',
     'external_change_detected',
   ] satisfies TreeDirtyEventKind[]);
 
@@ -123,6 +130,18 @@
         folderPaths: string[];
         currentParent: string;
         run: (folderPath: string) => Promise<void>;
+        busy: boolean;
+        error: string | null;
+      }
+    | {
+        kind: 'folder-color';
+        folderPath: string;
+        title?: string;
+        description?: string;
+        previewLabel?: string;
+        initial: LocalFolderMetadata | null;
+        inheritedColorPreview: string;
+        run: (next: LocalFolderMetadata | null) => Promise<void>;
         busy: boolean;
         error: string | null;
       }
@@ -176,11 +195,19 @@
   const vaultName = $derived(activeVault?.displayName ?? activeVaultId);
   const vaultId = $derived(activeVaultId);
   const tree = $derived<LocalTreeNode[]>(vaultTrees[activeVaultId] ?? []);
+  const activeVaultRootColor = $derived(resolveFolderColor(activeVault?.metadata, ROOT_DEFAULT_COLOR));
+  const activeVaultCustomColor = $derived(customVaultColor(activeVault?.metadata));
 
   // The filter lists every vault. The deny-list lives in the app-state
   // store; toggling hides/shows a vault's group in the rail.
   const vaults = $derived<VaultFilterEntry[]>(
-    knownVaults.map((v) => ({ id: v.id, name: v.displayName, accent: 'slate' })),
+    knownVaults.map((v) => ({
+      id: v.id,
+      name: v.displayName,
+      accent: 'slate',
+      metadata: v.metadata,
+      colorHex: customVaultColor(v.metadata),
+    })),
   );
   // One render-ready group per vault, each carrying its own tree. The
   // rail renders a VaultGroup per entry; trees not yet fetched render
@@ -190,6 +217,8 @@
       id: v.id,
       name: v.displayName,
       accent: 'slate',
+      metadata: v.metadata,
+      colorHex: customVaultColor(v.metadata),
       tree: vaultTrees[v.id] ?? [],
     })),
   );
@@ -360,6 +389,7 @@
   const activeFolderNode = $derived<LocalFolderNode | undefined>(
     activeNode?.kind === 'folder' ? activeNode : undefined,
   );
+  const folderPresentation = $derived(createFolderPresentationResolver(tree, activeVaultRootColor));
   // The active folder row key for the tree highlight + three-state
   // click. Empty path (vault root) has no folder row to highlight.
   const activeFolderId = $derived(
@@ -467,16 +497,36 @@
   // (prop-driven, matching the reference header). The vault name is the
   // first crumb; each path segment follows, with the leaf marked
   // current. A folder view marks its own leaf current too.
-  const breadcrumbItems = $derived<BreadcrumbItem[]>([
-    { label: vaultName, current: documentPath === '' },
-    ...documentPath
-      .split('/')
-      .filter(Boolean)
-      .map((segment, index, parts) => ({
-        label: segment,
-        current: index === parts.length - 1,
-      })),
-  ]);
+  const breadcrumbItems = $derived.by<BreadcrumbItem[]>(() => {
+    const parts = documentPath.split('/').filter(Boolean);
+    return [
+      {
+        label: vaultName,
+        current: documentPath === '',
+        avatar: activeVaultCustomColor
+          ? {
+              kind: 'folder-color' as const,
+              color: activeVaultCustomColor,
+            }
+          : undefined,
+      },
+      ...parts.map((segment, index) => {
+        const path = parts.slice(0, index + 1).join('/');
+        const isFolderCrumb = viewingFolder || index < parts.length - 1;
+        const presentation = isFolderCrumb ? folderPresentation(path) : null;
+        return {
+          label: segment,
+          current: index === parts.length - 1,
+          avatar: presentation
+            ? {
+                kind: 'folder-color' as const,
+                color: presentation.color,
+              }
+            : undefined,
+        };
+      }),
+    ];
+  });
 
   // Whether the active document is favorited — drives the header's
   // favorite toggle. Folder views toggle the folder's favorite instead.
@@ -845,6 +895,14 @@
     return out;
   }
 
+  function folderMetadataPayload(
+    next: LocalFolderMetadata | null,
+  ): { color: string | null } {
+    return {
+      color: next?.color ?? null,
+    };
+  }
+
   // ---- Dialog orchestration -------------------------------------------
 
   function closeDialog(): void {
@@ -988,6 +1046,22 @@
       return;
     }
 
+    if (action.action === 'customize') {
+      const folder = findNode(tree, action.path);
+      dialog = {
+        kind: 'folder-color',
+        folderPath: action.path,
+        initial: folder?.kind === 'folder' ? (folder.metadata ?? null) : null,
+        inheritedColorPreview: folderPresentation(parentFolderPath(action.path)).color,
+        busy: false,
+        error: null,
+        run: async (next) => {
+          await kbService.setFolderMetadata(vaultId, action.path, folderMetadataPayload(next));
+        },
+      };
+      return;
+    }
+
     if (action.action === 'delete') {
       dialog = {
         kind: 'confirm',
@@ -1065,6 +1139,23 @@
     }
     if (action.action === 'new-folder') {
       void openVault(targetVaultId).then(() => openNewFolderDialog(''));
+      return;
+    }
+    if (action.action === 'customize') {
+      dialog = {
+        kind: 'folder-color',
+        folderPath: '',
+        title: 'Customize vault',
+        previewLabel: targetName,
+        initial: target?.metadata ?? null,
+        inheritedColorPreview: ROOT_DEFAULT_COLOR,
+        busy: false,
+        error: null,
+        run: async (next) => {
+          await kbService.setVaultMetadata(targetVaultId, folderMetadataPayload(next));
+          await refreshVaults();
+        },
+      };
       return;
     }
     if (action.action === 'rename') {
@@ -1246,6 +1337,11 @@
       && (event.kind !== 'external_change_detected' || event.path === '');
   }
 
+  function customVaultColor(metadata: LocalFolderMetadata | null | undefined): string | null {
+    const color = metadata?.color;
+    return color && color !== 'inherit' ? color : null;
+  }
+
   // TanStack query data is the source of truth for vault list + trees.
   // The route keeps the existing `$state` mirrors so the rest of the
   // editor shell can stay prop-driven while query invalidation handles
@@ -1278,6 +1374,9 @@
         try {
           const event = JSON.parse((message as MessageEvent).data) as VaultChangeEvent;
           if (isTreeDirtyEvent(event)) {
+            if (event.kind === 'vault_metadata_changed') {
+              void refreshVaults();
+            }
             void refreshTreeForVault(id);
           }
         } catch (caught) {
@@ -1496,6 +1595,7 @@
       {vaultName}
       folderPath={documentPath}
       metadata={activeFolderNode?.metadata}
+      inheritedColor={folderPresentation(parentFolderPath(documentPath)).color}
       children={activeFolderNode?.children ?? tree}
       onOpenFile={(path) => {
         navOpen = false;
@@ -1681,6 +1781,22 @@
     error={dialog.error}
     onsubmit={(destination) => {
       void runDialogOperation(() => dialog.kind === 'move' ? dialog.run(destination) : Promise.resolve());
+    }}
+    oncancel={closeDialog}
+  />
+{:else if dialog.kind === 'folder-color'}
+  <FolderColorDialog
+    open
+    folderPath={dialog.folderPath}
+    title={dialog.title}
+    description={dialog.description}
+    previewLabel={dialog.previewLabel}
+    initial={dialog.initial}
+    inheritedColorPreview={dialog.inheritedColorPreview}
+    busy={dialog.busy}
+    error={dialog.error}
+    onsubmit={(next) => {
+      void runDialogOperation(() => dialog.kind === 'folder-color' ? dialog.run(next) : Promise.resolve());
     }}
     oncancel={closeDialog}
   />

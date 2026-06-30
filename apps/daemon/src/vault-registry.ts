@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-2/doc-session';
 import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-2/vault-service';
+import { normalizeFolderMetadataColor, type VaultActor } from '@kb-2/vault-core';
 import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
@@ -19,6 +20,16 @@ export interface VaultIdentity {
   id: string;
   /** Human-facing name; defaults to the folder name on first sight. */
   displayName: string;
+  /** Presentation metadata for the vault root. */
+  metadata?: VaultMetadata;
+}
+
+export interface VaultMetadata {
+  color?: string;
+}
+
+export interface VaultMetadataInput {
+  color?: string | null;
 }
 
 /** A vault the daemon knows about: identity plus its on-disk root. */
@@ -26,6 +37,7 @@ export interface VaultRegistryEntry {
   slug: string;
   displayName: string;
   root: string;
+  metadata?: VaultMetadata;
 }
 
 /** A live, root-scoped instance serving one vault. */
@@ -101,8 +113,15 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
 
 /** Persist a vault's identity to `<vault>/.kb2/vault.json`, creating `.kb2` if needed. */
 export async function writeVaultIdentity(vaultRoot: string, identity: VaultIdentity): Promise<void> {
+  const payload: VaultIdentity = {
+    id: identity.id,
+    displayName: identity.displayName,
+    ...(identity.metadata && !isEmptyVaultMetadata(identity.metadata)
+      ? { metadata: cloneVaultMetadata(identity.metadata) }
+      : {})
+  };
   await mkdir(join(vaultRoot, VAULT_IDENTITY_DIR), { recursive: true });
-  await writeFile(identityPath(vaultRoot), `${JSON.stringify(identity, null, 2)}\n`, 'utf8');
+  await writeFile(identityPath(vaultRoot), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
 function parseVaultIdentity(raw: string, file: string): VaultIdentity {
@@ -125,8 +144,31 @@ function parseVaultIdentity(raw: string, file: string): VaultIdentity {
   const displayName = typeof record.displayName === 'string' && record.displayName.trim().length > 0
     ? record.displayName
     : record.id;
+  const metadata = parseVaultMetadata(record.metadata, file);
 
-  return { id: record.id, displayName };
+  return { id: record.id, displayName, ...(metadata ? { metadata } : {}) };
+}
+
+function parseVaultMetadata(value: unknown, file: string): VaultMetadata | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Malformed vault identity at ${file}: "metadata" must be a JSON object.`);
+  }
+
+  const record = value as Record<string, unknown>;
+  const metadata: VaultMetadata = {};
+  if (Object.prototype.hasOwnProperty.call(record, 'color')) {
+    if (typeof record.color !== 'string') {
+      throw new Error(`Malformed vault identity at ${file}: "metadata.color" must be a string.`);
+    }
+    const color = normalizeFolderMetadataColor(record.color);
+    if (!color) {
+      throw new Error(`Malformed vault identity at ${file}: "metadata.color" must be "inherit" or a hex color.`);
+    }
+    metadata.color = color;
+  }
+
+  return isEmptyVaultMetadata(metadata) ? undefined : metadata;
 }
 
 /**
@@ -231,7 +273,12 @@ export async function discoverVaults(vaultsHome: string): Promise<VaultRegistryE
       );
     }
 
-    bySlug.set(identity.id, { slug: identity.id, displayName: identity.displayName, root });
+    bySlug.set(identity.id, {
+      slug: identity.id,
+      displayName: identity.displayName,
+      root,
+      ...(identity.metadata ? { metadata: cloneVaultMetadata(identity.metadata) } : {})
+    });
   }
 
   return [...bySlug.values()];
@@ -250,6 +297,7 @@ export function buildVaultInstances(entries: VaultRegistryEntry[]): Map<string, 
 export interface VaultSummary {
   id: string;
   displayName: string;
+  metadata?: VaultMetadata;
 }
 
 /** Error codes the registry can return for vault-management operations. */
@@ -288,7 +336,7 @@ export class VaultRegistry {
   /** Every registered vault as `{ id, displayName }`, ordered by slug. */
   list(): VaultSummary[] {
     return [...this.instances.values()]
-      .map((instance) => ({ id: instance.entry.slug, displayName: instance.entry.displayName }))
+      .map((instance) => this.summaryFor(instance))
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
@@ -380,11 +428,52 @@ export class VaultRegistry {
       return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
     }
 
-    const identity: VaultIdentity = { id: instance.entry.slug, displayName };
+    const identity: VaultIdentity = {
+      id: instance.entry.slug,
+      displayName,
+      ...(instance.entry.metadata ? { metadata: cloneVaultMetadata(instance.entry.metadata) } : {})
+    };
     await writeVaultIdentity(instance.entry.root, identity);
     instance.entry.displayName = displayName;
 
-    return { ok: true, vault: { id: instance.entry.slug, displayName } };
+    return { ok: true, vault: this.summaryFor(instance) };
+  }
+
+  async setMetadata(
+    id: string,
+    input: VaultMetadataInput,
+    actor: VaultActor
+  ): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {
+    const instance = this.instances.get(id);
+    if (!instance) {
+      return { ok: false, error: 'not_found', message: `No vault with id "${id}".` };
+    }
+
+    const normalized = normalizeVaultMetadataInput(input);
+    if (!normalized.ok) return normalized;
+
+    const nextMetadata = applyVaultMetadataInput(instance.entry.metadata ?? {}, normalized.value);
+    const identity: VaultIdentity = {
+      id: instance.entry.slug,
+      displayName: instance.entry.displayName,
+      ...(isEmptyVaultMetadata(nextMetadata) ? {} : { metadata: nextMetadata })
+    };
+    await writeVaultIdentity(instance.entry.root, identity);
+
+    if (isEmptyVaultMetadata(nextMetadata)) {
+      delete instance.entry.metadata;
+    } else {
+      instance.entry.metadata = cloneVaultMetadata(nextMetadata);
+    }
+
+    this.emitVaultEvent(instance.entry.slug, {
+      kind: 'vault_metadata_changed',
+      path: '',
+      actor,
+      ts: new Date().toISOString()
+    });
+
+    return { ok: true, vault: this.summaryFor(instance) };
   }
 
   /**
@@ -433,6 +522,27 @@ export class VaultRegistry {
     this.eventUnsubscribers.set(instance.entry.slug, unsubscribe);
   }
 
+  private emitVaultEvent(vaultSlug: string, event: VaultChangeEvent): void {
+    const registryEvent = { vaultSlug, event };
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(registryEvent);
+      } catch (error) {
+        console.warn('KB-2 vault registry event handler failed.', error);
+      }
+    }
+  }
+
+  private summaryFor(instance: VaultInstance): VaultSummary {
+    return {
+      id: instance.entry.slug,
+      displayName: instance.entry.displayName,
+      ...(instance.entry.metadata && !isEmptyVaultMetadata(instance.entry.metadata)
+        ? { metadata: cloneVaultMetadata(instance.entry.metadata) }
+        : {})
+    };
+  }
+
   private unsubscribeInstance(slug: string): void {
     const unsubscribe = this.eventUnsubscribers.get(slug);
     if (!unsubscribe) return;
@@ -446,6 +556,57 @@ export class VaultRegistry {
       this.unsubscribeInstance(slug);
     }
   }
+}
+
+function cloneVaultMetadata(metadata: VaultMetadata): VaultMetadata {
+  return { ...(metadata.color === undefined ? {} : { color: metadata.color }) };
+}
+
+function isEmptyVaultMetadata(metadata: VaultMetadata): boolean {
+  return metadata.color === undefined;
+}
+
+function normalizeVaultMetadataInput(
+  input: VaultMetadataInput
+): VaultRegistryResult<{ value: VaultMetadataInput }> {
+  const normalized: VaultMetadataInput = {};
+  if (Object.prototype.hasOwnProperty.call(input, 'color')) {
+    if (input.color === null) {
+      normalized.color = null;
+    } else if (typeof input.color === 'string') {
+      const color = normalizeFolderMetadataColor(input.color);
+      if (!color) {
+        return {
+          ok: false,
+          error: 'invalid_request',
+          message: 'metadata.color must be "inherit" or a hex color'
+        };
+      }
+      normalized.color = color;
+    } else {
+      return {
+        ok: false,
+        error: 'invalid_request',
+        message: 'metadata.color must be a string or null'
+      };
+    }
+  }
+  return { ok: true, value: normalized };
+}
+
+function applyVaultMetadataInput(
+  current: VaultMetadata,
+  input: VaultMetadataInput
+): VaultMetadata {
+  const next = cloneVaultMetadata(current);
+  if (Object.prototype.hasOwnProperty.call(input, 'color')) {
+    if (input.color === null) {
+      delete next.color;
+    } else if (input.color !== undefined) {
+      next.color = input.color;
+    }
+  }
+  return next;
 }
 
 /** Build a single root-scoped service + document manager for one vault entry. */
