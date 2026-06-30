@@ -414,6 +414,34 @@ describe("daemon routing", () => {
       path: "notes/attributed.md",
       actor: suppliedActor,
     });
+
+    const read = await app.request(filePath("notes/attributed.md"));
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({
+      ok: true,
+      content: "attributed\n",
+    });
+
+    const history = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(history.status).toBe(200);
+    await expect(history.json()).resolves.toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [
+        {
+          operation: "create",
+          path: "notes/attributed.md",
+          actor: suppliedActor,
+          content: "attributed\n",
+        },
+      ],
+    });
+    const rawHistory = await readRawFileHistory(vaultRoot);
+    expect(rawHistory).toContain("Ada Lovelace");
+
+    const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(historyAgain.status).toBe(200);
+    await expect(readRawFileHistory(vaultRoot)).resolves.toBe(rawHistory);
   });
 
   it.each([
@@ -464,6 +492,12 @@ describe("daemon routing", () => {
         operation: "create",
         path: "notes/defaulted.md",
         actor: expectedActor,
+      });
+      const history = await app.request(`${filePath("notes/defaulted.md")}/history`);
+      expect(history.status).toBe(200);
+      await expect(history.json()).resolves.toMatchObject({
+        ok: true,
+        entries: [{ operation: "create", actor: expectedActor }],
       });
       await registry.close();
     },
@@ -2243,6 +2277,10 @@ async function readAuditRows(
 
 async function readRawFolderMetadata(root: string): Promise<string> {
   return readFile(join(root, ".kb2/folders.yml"), "utf8");
+}
+
+async function readRawFileHistory(root: string): Promise<string> {
+  return readFile(join(root, ".kb2/file-history.yml"), "utf8");
 }
 
 async function writeFileWithParents(

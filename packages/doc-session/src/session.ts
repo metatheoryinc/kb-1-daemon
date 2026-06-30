@@ -11,6 +11,7 @@ import {
   LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
   LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
   createDocumentUpdateAttributionOrigin,
+  documentUpdateAttributionFromOrigin,
   type DocumentSessionEvent,
   type DocumentUpdateAttribution
 } from './protocol.js';
@@ -128,6 +129,7 @@ export class OneFileDocumentSession {
   private nonEmptyMaterializedContent = false;
   // Set only around this session's own atomic write so file-watch echoes can be distinguished from external edits.
   private pendingWriteHash: string | undefined;
+  private pendingPersistAttribution: DocumentUpdateAttribution | undefined;
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
   private persistFailed = false;
@@ -422,6 +424,7 @@ export class OneFileDocumentSession {
       return;
     }
 
+    this.pendingPersistAttribution = documentUpdateAttributionFromOrigin(origin);
     this.requestPersist().catch((error: unknown) => {
       console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
     });
@@ -464,6 +467,8 @@ export class OneFileDocumentSession {
     }
 
     const content = this.currentContent();
+    const attribution = this.pendingPersistAttribution;
+    this.pendingPersistAttribution = undefined;
     const diskContent = await readOptionalFile(this.filePath);
     const diskHash = diskContent === undefined ? undefined : hashContent(diskContent);
 
@@ -488,7 +493,10 @@ export class OneFileDocumentSession {
       this.lastWrittenContent = content;
       this.nonEmptyMaterializedContent = content.length > 0;
       this.markPersistRecovered();
-      this.emitEvent('content-persisted');
+      this.emitEvent({
+        ...this.createEvent('content-persisted'),
+        ...(attribution !== undefined ? { attribution } : {})
+      });
     } finally {
       if (this.pendingWriteHash === contentHash) {
         this.pendingWriteHash = undefined;

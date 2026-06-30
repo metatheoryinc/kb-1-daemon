@@ -12,8 +12,10 @@ import {
   deleteVaultFile,
   deleteVaultFolder,
   emitVaultAudit,
+  historyOperationFromAudit,
   getFolderMetadata as getVaultFolderMetadata,
   getVaultInfo,
+  listFileHistory,
   listFolderMetadata as listVaultFolderMetadata,
   listVaultTree,
   makeVaultFolder,
@@ -21,6 +23,7 @@ import {
   onVaultAudit,
   prependContent,
   readVaultFile,
+  recordFileHistory,
   searchVaultFiles,
   setFolderMetadata as setVaultFolderMetadata,
   validateVaultPath,
@@ -28,6 +31,7 @@ import {
   type AnchoredSpliceRequest,
   type AuditChangeEventOptions,
   type AuditEntry,
+  type FileHistoryEntry,
   type FolderMetadataInput,
   type VaultEntry,
   type VaultActor,
@@ -36,6 +40,7 @@ import {
 } from '@kb-2/vault-core';
 
 export type { AuditEntry, VaultActor };
+export type { FileHistoryEntry };
 
 export type ServiceErrorCode =
   | VaultErrorCode
@@ -118,6 +123,7 @@ export interface LocalMcpVaultService {
 }
 
 export interface VaultService extends LocalMcpVaultService {
+  listNoteHistory(input: { path: string; before?: string; beforeId?: string; limit?: number }): Promise<ServiceResult<{ entries: FileHistoryEntry[]; hasMore: boolean }>>;
   flushDirtySessions(): Promise<ServiceResult<{ flushed: number; durableAsOf: string }>>;
   onEvent(handler: VaultChangeEventHandler): () => void;
 }
@@ -125,6 +131,7 @@ export interface VaultService extends LocalMcpVaultService {
 export interface VaultServiceOptions {
   vaultRoot: string;
   documentSessions: DocumentSessionManager;
+  historyCoalesceWindowMs?: number;
 }
 
 export function createVaultService(options: VaultServiceOptions): VaultService {
@@ -216,7 +223,51 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   options.documentSessions.onEvent((event) => {
     const change = changeEventFromDocumentSessionEvent(event);
     if (change) emitChange(change);
+    if (
+      event.kind === 'content-persisted' &&
+      event.attribution !== undefined &&
+      !isServiceWriteAttribution(event.attribution)
+    ) {
+      void recordPersistedSessionHistory(event).catch((error: unknown) => {
+        console.warn('KB-2 failed to record file history for persisted document session.', error);
+      });
+    }
   });
+  const recordHistory = async (
+    path: string,
+    operation: 'create' | 'update',
+    actor: VaultActor,
+    content: string
+  ): Promise<void> => {
+    const result = await recordFileHistory(options.vaultRoot, {
+      path,
+      operation,
+      actor,
+      content,
+      coalesceWindowMs: options.historyCoalesceWindowMs
+    });
+    if (!result.ok) {
+      throw new Error(`Failed to record file history for ${path}: ${result.message}`);
+    }
+  };
+  const recordHistoryFromAudit = async (audit: AuditEntry, content: string): Promise<void> => {
+    const operation = historyOperationFromAudit(audit.operation);
+    if (operation !== 'create' && operation !== 'update') return;
+    await recordHistory(audit.path, operation, audit.actor, content);
+  };
+  const recordServiceHistoryFromAudit = async (audit: AuditEntry, content: string): Promise<void> => {
+    try {
+      await recordHistoryFromAudit(audit, content);
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to record file history for service write.', error);
+    }
+  };
+  const recordPersistedSessionHistory = async (event: DocumentSessionEvent): Promise<void> => {
+    const actor = vaultActorFromDocumentAttribution(event.attribution);
+    const read = await readVaultFile(ctx(), event.path);
+    if (!read.ok) return;
+    await recordHistory(event.path, 'update', actor, read.value.content);
+  };
 
   return {
     onEvent(handler) {
@@ -276,6 +327,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
     },
 
+    async listNoteHistory(input) {
+      return serviceResult(await listFileHistory(options.vaultRoot, input));
+    },
+
     async createNote(input) {
       const liveSession = options.documentSessions.getOpenSession(input.path);
       if (liveSession) {
@@ -296,6 +351,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
           summary: `Wrote ${input.path}`,
           changeEvent: { skipContentPersisted: true }
         });
+        await recordServiceHistoryFromAudit(audit, applied.value);
         return {
           ok: true,
           path: input.path,
@@ -310,6 +366,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         content: input.content,
         overwrite: input.overwrite
       }));
+      if (result.ok) {
+        await recordServiceHistoryFromAudit(result.audit, input.content);
+      }
       return result;
     },
 
@@ -342,6 +401,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Spliced ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -372,6 +432,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Appended to ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -400,6 +461,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Prepended to ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -564,6 +626,33 @@ function actorAttribution(actor: VaultActor): DocumentUpdateAttribution {
     ...(actor.name !== undefined ? { name: actor.name } : {}),
     ...(actor.client !== undefined ? { client: actor.client } : {})
   };
+}
+
+function vaultActorFromDocumentAttribution(attribution: DocumentUpdateAttribution | undefined): VaultActor {
+  const actor = attribution?.actor;
+  if (!actor || typeof actor !== 'object' || Array.isArray(actor)) {
+    return { kind: 'unknown' };
+  }
+  const candidate = actor as Record<string, unknown>;
+  if (
+    candidate.kind !== 'user' &&
+    candidate.kind !== 'mcp_client' &&
+    candidate.kind !== 'integration' &&
+    candidate.kind !== 'system' &&
+    candidate.kind !== 'unknown'
+  ) {
+    return { kind: 'unknown' };
+  }
+  return {
+    kind: candidate.kind,
+    ...(typeof candidate.id === 'string' ? { id: candidate.id } : {}),
+    ...(typeof candidate.name === 'string' ? { name: candidate.name } : {}),
+    ...(typeof candidate.client === 'string' ? { client: candidate.client } : {})
+  };
+}
+
+function isServiceWriteAttribution(attribution: DocumentUpdateAttribution): boolean {
+  return typeof attribution.operation === 'string';
 }
 
 function emitAuditChange(

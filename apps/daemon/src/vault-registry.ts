@@ -54,6 +54,10 @@ export interface VaultRegistryChangeEvent {
 
 export type VaultRegistryChangeEventHandler = (event: VaultRegistryChangeEvent) => void;
 
+export interface VaultRegistryOptions {
+  historyCoalesceWindowMs?: number;
+}
+
 /**
  * Normalize a string into a vault slug using github-slugger (battle-tested, not
  * hand-rolled). Used to derive a slug from a folder name when minting identity,
@@ -285,10 +289,10 @@ export async function discoverVaults(vaultsHome: string): Promise<VaultRegistryE
 }
 
 /** Build a root-scoped service + document manager per discovered vault. */
-export function buildVaultInstances(entries: VaultRegistryEntry[]): Map<string, VaultInstance> {
+export function buildVaultInstances(entries: VaultRegistryEntry[], options: VaultRegistryOptions = {}): Map<string, VaultInstance> {
   const instances = new Map<string, VaultInstance>();
   for (const entry of entries) {
-    instances.set(entry.slug, buildVaultInstance(entry));
+    instances.set(entry.slug, buildVaultInstance(entry, options));
   }
   return instances;
 }
@@ -321,16 +325,17 @@ export class VaultRegistry {
   private constructor(
     private readonly vaultsHome: string,
     private readonly trashHome: string,
+    private readonly options: VaultRegistryOptions,
     instances: Map<string, VaultInstance>
   ) {
     this.instances = instances;
   }
 
   /** Scan `vaultsHome`, mint identities as needed, and build one instance per vault. */
-  static async load(vaultsHome: string, trashHome: string): Promise<VaultRegistry> {
+  static async load(vaultsHome: string, trashHome: string, options: VaultRegistryOptions = {}): Promise<VaultRegistry> {
     const entries = await discoverVaults(vaultsHome);
-    const instances = buildVaultInstances(entries);
-    return new VaultRegistry(vaultsHome, trashHome, instances);
+    const instances = buildVaultInstances(entries, options);
+    return new VaultRegistry(vaultsHome, trashHome, options, instances);
   }
 
   /** Every registered vault as `{ id, displayName }`, ordered by slug. */
@@ -405,7 +410,7 @@ export class VaultRegistry {
     await seedVaultFromStarterKit(root);
 
     const entry: VaultRegistryEntry = { slug, displayName, root };
-    const instance = buildVaultInstance(entry);
+    const instance = buildVaultInstance(entry, this.options);
     this.instances.set(slug, instance);
     this.subscribeInstance(instance);
 
@@ -610,9 +615,13 @@ function applyVaultMetadataInput(
 }
 
 /** Build a single root-scoped service + document manager for one vault entry. */
-function buildVaultInstance(entry: VaultRegistryEntry): VaultInstance {
+function buildVaultInstance(entry: VaultRegistryEntry, options: VaultRegistryOptions = {}): VaultInstance {
   const manager = new DocumentSessionManager({ root: entry.root });
-  const service = createVaultService({ vaultRoot: entry.root, documentSessions: manager });
+  const service = createVaultService({
+    vaultRoot: entry.root,
+    documentSessions: manager,
+    historyCoalesceWindowMs: options.historyCoalesceWindowMs
+  });
   return { entry, service, manager };
 }
 

@@ -5,6 +5,7 @@ export const SERVICE_NAME = 'kb2d';
 export const DEFAULT_PORT = 7382;
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_ACTOR_DEFAULT = 'user';
+export const DEFAULT_HISTORY_COALESCE_WINDOW_MS = 5 * 60 * 1000;
 
 export type ActorDefault = 'user' | 'unknown';
 
@@ -19,6 +20,7 @@ export interface DaemonConfig {
   webProxyTarget?: string;
   relay?: DaemonRelayConfig;
   actorDefault: ActorDefault;
+  historyCoalesceWindowMs: number;
   kb2Home: string;
   daemonHome: string;
   /** Directory that holds every vault: `<home>/vaults/<slug>/`. */
@@ -115,6 +117,21 @@ export function resolveActorDefault(env: NodeJS.ProcessEnv = process.env): Actor
   throw new Error(`KB2_ACTOR_DEFAULT must be "user" or "unknown". Received: ${configuredDefault}`);
 }
 
+export function resolveHistoryCoalesceWindowMs(env: NodeJS.ProcessEnv = process.env): number {
+  const configuredWindow = env.KB2_HISTORY_COALESCE_WINDOW_MS?.trim();
+
+  if (!configuredWindow) {
+    return DEFAULT_HISTORY_COALESCE_WINDOW_MS;
+  }
+
+  const windowMs = Number(configuredWindow);
+  if (!Number.isInteger(windowMs) || windowMs < 0) {
+    throw new Error(`KB2_HISTORY_COALESCE_WINDOW_MS must be a non-negative integer. Received: ${configuredWindow}`);
+  }
+
+  return windowMs;
+}
+
 export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonConfig {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
@@ -130,6 +147,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     webProxyTarget: resolveWebProxyTarget(env),
     relay: resolveRelayConfig(env),
     actorDefault: resolveActorDefault(env),
+    historyCoalesceWindowMs: resolveHistoryCoalesceWindowMs(env),
     kb2Home,
     daemonHome,
     vaultsHome,

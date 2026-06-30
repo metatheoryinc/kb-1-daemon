@@ -183,6 +183,212 @@ describe("vault service failure mapping", () => {
     ]);
   });
 
+  it("records file history for service writes while reads leave history untouched", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "browser",
+    };
+
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "one\n",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true, audit: { operation: "create" } });
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "two\n",
+        overwrite: true,
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true, audit: { operation: "write" } });
+    await expect(service.readNote({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      content: "two\n",
+    });
+
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "create",
+          actor: marcus,
+          content: "two\n",
+        },
+      ],
+      hasMore: false,
+    });
+    const rawAfterRead = await readRawFileHistory(root);
+    await expect(service.readNote({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      content: "two\n",
+    });
+    await expect(readRawFileHistory(root)).resolves.toBe(rawAfterRead);
+
+    await expect(
+      service.appendNote({
+        path: "notes/history.md",
+        content: "three\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      content: "two\nthree\n",
+      audit: { operation: "append" },
+    });
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "update",
+          actor: olivia,
+          content: "two\nthree\n",
+        },
+        {
+          operation: "create",
+          actor: marcus,
+          content: "two\n",
+        },
+      ],
+    });
+  });
+
+  it("keeps service writes best-effort when file history metadata is malformed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const actor = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+
+    try {
+      await writeFileWithParents(join(root, ".kb2", "file-history.yml"), "paths: [");
+
+      await expect(
+        service.createNote({
+          path: "notes/corrupt-history.md",
+          content: "one\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, audit: { operation: "create" } });
+      await expect(readFile(join(root, "notes", "corrupt-history.md"), "utf8")).resolves.toBe("one\n");
+
+      const read = await service.readNote({ path: "notes/corrupt-history.md" });
+      expect(read).toMatchObject({ ok: true, content: "one\n" });
+      if (!read.ok) throw new Error("expected corrupt-history note read to succeed");
+
+      await expect(
+        service.createNote({
+          path: "notes/corrupt-history.md",
+          content: "two\n",
+          overwrite: true,
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, audit: { operation: "write" } });
+      const overwritten = await service.readNote({ path: "notes/corrupt-history.md" });
+      expect(overwritten).toMatchObject({ ok: true, content: "two\n" });
+      const overwrittenBaseline = requireBaseline(overwritten);
+      await expect(
+        service.editNote({
+          path: "notes/corrupt-history.md",
+          baseline: overwrittenBaseline,
+          oldText: "two",
+          newText: "three",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "three\n" });
+      await expect(
+        service.appendNote({
+          path: "notes/corrupt-history.md",
+          content: "four\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "three\nfour\n" });
+      await expect(
+        service.prependNote({
+          path: "notes/corrupt-history.md",
+          content: "zero\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "zero\nthree\nfour\n" });
+      await expect(service.listNoteHistory({ path: "notes/corrupt-history.md" })).resolves.toMatchObject({
+        ok: false,
+        error: "metadata_parse_failed",
+      });
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records document-session persisted history with Yjs attribution", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "cloud-relay",
+    };
+
+    await service.createNote({
+      path: "notes/socket.md",
+      content: "base\n",
+      actor: marcus,
+    });
+    const session = sessions.getSession("notes/socket.md");
+    await session.applyContent("socket\n", {
+      attribution: { actor: olivia },
+    });
+
+    await waitUntil(async () => {
+      const history = await service.listNoteHistory({ path: "notes/socket.md" });
+      return history.ok && history.entries.length === 2 && history.entries[0]?.actor.id === "olivia";
+    }, () => "expected Yjs-attributed history entry to be recorded");
+    await expect(service.listNoteHistory({ path: "notes/socket.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "update",
+          actor: olivia,
+          content: "socket\n",
+        },
+        {
+          operation: "create",
+          actor: marcus,
+          content: "base\n",
+        },
+      ],
+    });
+  });
+
   it("routes live session writes and path transitions through the same audit-bearing response shape", async () => {
     await writeFileWithParents(join(root, "notes", "live.md"), "alpha\n");
     await writeFileWithParents(join(root, "tree", "child.md"), "child\n");
@@ -825,6 +1031,10 @@ async function readAuditRows(
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { operation: string });
+}
+
+async function readRawFileHistory(root: string): Promise<string> {
+  return readFile(join(root, ".kb2", "file-history.yml"), "utf8");
 }
 
 function requireBaseline(result: ServiceResult): string {
