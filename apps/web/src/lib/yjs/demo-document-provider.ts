@@ -5,8 +5,11 @@ import * as Y from 'yjs';
 import {
   MESSAGE_SESSION_EVENT,
   MESSAGE_SYNC,
+  MESSAGE_SYNC_UPDATE_ACK,
   MESSAGE_SYNCED,
   decodeSessionEvent,
+  decodeSyncUpdateAck,
+  encodeAckedSyncUpdate,
   type DocumentSessionEvent,
 } from '@kb-2/doc-session/protocol';
 
@@ -23,8 +26,13 @@ export type DemoDocumentProviderStatus =
 export interface DemoDocumentProvider {
   doc: Y.Doc;
   text: Y.Text;
-  destroy: () => void;
+  destroy: () => DemoDocumentProviderSaveState;
 }
+
+export type DemoDocumentProviderSaveState =
+  | { status: 'saved'; pending: 0 }
+  | { status: 'saving'; pending: number }
+  | { status: 'failed'; pending: number; message: string };
 
 export interface DemoDocumentProviderOpenFailure {
   ok: false;
@@ -46,9 +54,19 @@ export interface DemoDocumentProviderOptions {
   path?: string;
   onStatus?: (status: DemoDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
+  onSaveState?: (state: DemoDocumentProviderSaveState) => void;
   onSessionEvent?: (event: DocumentSessionEvent) => void;
   onSynced?: () => void;
 }
+
+interface PendingSaveAck {
+  ackId: string;
+  update: Uint8Array;
+  timedOut: boolean;
+  timeout?: ReturnType<typeof setTimeout>;
+}
+
+export const DOCUMENT_SAVE_ACK_TIMEOUT_MS = 10_000;
 
 export function createDemoDocumentProvider(
   options: DemoDocumentProviderOptions = {},
@@ -59,7 +77,89 @@ export function createDemoDocumentProvider(
   socket.binaryType = 'arraybuffer';
 
   let destroyed = false;
+  let latestSaveState: DemoDocumentProviderSaveState = { status: 'saved', pending: 0 };
+  let nextSaveAckSeq = 0;
+  const saveAckPrefix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const pendingSaveAcks = new Map<string, PendingSaveAck>();
   options.onStatus?.('connecting');
+
+  const publishSaveState = (): void => {
+    if (pendingSaveAcks.size === 0) {
+      latestSaveState = { status: 'saved', pending: 0 };
+      options.onSaveState?.(latestSaveState);
+      return;
+    }
+    const timedOut = Array.from(pendingSaveAcks.values()).some((pending) => pending.timedOut);
+    if (timedOut) {
+      latestSaveState = {
+        status: 'failed',
+        pending: pendingSaveAcks.size,
+        message:
+          'KB-2 has not confirmed your latest edit is saved. Keep this tab open while the connection recovers.',
+      };
+      options.onSaveState?.(latestSaveState);
+      return;
+    }
+    latestSaveState = { status: 'saving', pending: pendingSaveAcks.size };
+    options.onSaveState?.(latestSaveState);
+  };
+
+  const saveStateOnDestroy = (): DemoDocumentProviderSaveState => {
+    if (pendingSaveAcks.size === 0) return latestSaveState;
+    if (latestSaveState.status === 'failed') return latestSaveState;
+    return { status: 'saving', pending: pendingSaveAcks.size };
+  };
+
+  const armSaveAckTimeout = (pending: PendingSaveAck): void => {
+    if (pending.timeout || pending.timedOut || destroyed) return;
+    pending.timeout = setTimeout(() => {
+      const activePending = pendingSaveAcks.get(pending.ackId);
+      if (!activePending || destroyed) return;
+      activePending.timedOut = true;
+      activePending.timeout = undefined;
+      publishSaveState();
+    }, DOCUMENT_SAVE_ACK_TIMEOUT_MS);
+  };
+
+  const sendAckedUpdate = (pending: PendingSaveAck): boolean => {
+    if (socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(new Uint8Array(encodeAckedSyncUpdate({ ackId: pending.ackId, update: pending.update })));
+    armSaveAckTimeout(pending);
+    return true;
+  };
+
+  const drainPendingSaveAcks = (): void => {
+    for (const pending of pendingSaveAcks.values()) {
+      sendAckedUpdate(pending);
+    }
+  };
+
+  const acknowledgeSave = (ackId: string): void => {
+    const pending = pendingSaveAcks.get(ackId);
+    if (!pending) return;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    pendingSaveAcks.delete(ackId);
+    publishSaveState();
+  };
+
+  const trackLocalUpdate = (update: Uint8Array): void => {
+    const ackId = `${saveAckPrefix}:${++nextSaveAckSeq}`;
+    const pending: PendingSaveAck = {
+      ackId,
+      update,
+      timedOut: false,
+    };
+    pendingSaveAcks.set(ackId, pending);
+    sendAckedUpdate(pending);
+    publishSaveState();
+  };
+
+  const clearPendingSaveAcks = (): void => {
+    for (const pending of pendingSaveAcks.values()) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+    }
+    pendingSaveAcks.clear();
+  };
 
   const sendSync = (write: (encoder: encoding.Encoder) => void): void => {
     if (socket.readyState !== WebSocket.OPEN) return;
@@ -71,9 +171,7 @@ export function createDemoDocumentProvider(
 
   const updateHandler = (update: Uint8Array, origin: unknown): void => {
     if (origin === socket || destroyed) return;
-    sendSync((encoder) => {
-      syncProtocol.writeUpdate(encoder, update);
-    });
+    trackLocalUpdate(update);
   };
 
   doc.on('update', updateHandler);
@@ -83,6 +181,7 @@ export function createDemoDocumentProvider(
     sendSync((encoder) => {
       syncProtocol.writeSyncStep1(encoder, doc);
     });
+    drainPendingSaveAcks();
   });
 
   socket.addEventListener('message', (event) => {
@@ -98,6 +197,12 @@ export function createDemoDocumentProvider(
         if (event) {
           options.onSessionEvent?.(event);
         }
+        return;
+      }
+
+      if (messageType === MESSAGE_SYNC_UPDATE_ACK) {
+        const ack = decodeSyncUpdateAck(decoder);
+        if (ack) acknowledgeSave(ack.ackId);
         return;
       }
 
@@ -138,11 +243,14 @@ export function createDemoDocumentProvider(
     doc,
     text,
     destroy: () => {
+      const finalSaveState = saveStateOnDestroy();
       destroyed = true;
+      clearPendingSaveAcks();
       doc.off('update', updateHandler);
       socket.close(1000, 'Editor unmounted');
       doc.destroy();
       options.onStatus?.('closed');
+      return finalSaveState;
     },
   };
 }

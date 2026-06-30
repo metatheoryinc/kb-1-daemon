@@ -22,6 +22,7 @@ import {
   DEMO_DOCUMENT_TEXT_NAME,
   DEMO_DOCUMENT_YJS_PATH,
   isDemoDocumentProviderOpenError,
+  type DemoDocumentProviderSaveState,
 } from './demo-document-provider';
 
 const messageSync = 0;
@@ -84,7 +85,11 @@ describe('demo document provider', () => {
     const port = (server.address() as AddressInfo).port;
 
     const url = `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`;
-    const provider = createDemoDocumentProvider({ url });
+    const saveStates: DemoDocumentProviderSaveState[] = [];
+    const provider = createDemoDocumentProvider({
+      url,
+      onSaveState: (state) => saveStates.push(state),
+    });
     const raw = await connectRawYjsClient(url);
 
     await waitForContent(
@@ -103,6 +108,12 @@ describe('demo document provider', () => {
     await waitForDiskContent(
       filePath,
       (content) => content.includes('provider edit') && content.includes('raw client edit'),
+    );
+    await waitUntil(
+      () =>
+        saveStates.some((state) => state.status === 'saving') &&
+        saveStates[saveStates.length - 1]?.status === 'saved',
+      () => `Timed out waiting for ack-backed save state: ${JSON.stringify(saveStates)}`
     );
 
     raw.close();
