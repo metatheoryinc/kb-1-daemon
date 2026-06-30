@@ -44,6 +44,40 @@ export interface SearchHit {
   };
 }
 
+export type FileHistoryOperation = "create" | "update" | "move" | "rename";
+
+export type FileHistoryActor = {
+  kind: string;
+  id?: string;
+  name?: string;
+  client?: string;
+  avatarUrl?: string | null;
+};
+
+export interface FileHistoryEntry {
+  id: string;
+  path: string;
+  operation: FileHistoryOperation;
+  actor: FileHistoryActor;
+  integrationId?: string;
+  createdAt: string;
+  updatedAt: string;
+  content: string;
+  size: number;
+  contentHash: string;
+}
+
+export interface FileHistoryPage {
+  entries: FileHistoryEntry[];
+  hasMore: boolean;
+}
+
+export interface ListNoteHistoryOptions {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
+}
+
 /**
  * Maps a daemon service error code to a friendly message. Unknown codes
  * fall back to the raw message the daemon supplied. The optional
@@ -129,6 +163,15 @@ async function request<T extends { ok: true } = { ok: true }>(
 /** Build the scoped data-route prefix for a vault. */
 function vaultBase(vaultId: string): string {
   return `/api/vaults/${encodeURIComponent(vaultId)}`;
+}
+
+function noteHistoryQuery(options: ListNoteHistoryOptions): string {
+  const qs = new URLSearchParams();
+  if (options.before) qs.set("before", options.before);
+  if (options.beforeId) qs.set("beforeId", options.beforeId);
+  if (options.limit !== undefined) qs.set("limit", String(options.limit));
+  const query = qs.toString();
+  return query.length > 0 ? `?${query}` : "";
 }
 
 export const kbService = {
@@ -217,6 +260,17 @@ export const kbService = {
       `${vaultBase(vaultId)}/tree`,
     );
     return result.entries;
+  },
+
+  async listNoteHistory(
+    vaultId: string,
+    path: string,
+    options: ListNoteHistoryOptions = {},
+  ): Promise<FileHistoryPage> {
+    const result = await request<{ ok: true } & FileHistoryPage>(
+      `${vaultBase(vaultId)}/files/${encodeVaultPath(path)}/history${noteHistoryQuery(options)}`,
+    );
+    return { entries: result.entries, hasMore: result.hasMore };
   },
 
   async search(

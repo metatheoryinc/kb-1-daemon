@@ -3,19 +3,21 @@
    * Ported from KB-1:
    * apps/@kb-1/web/src/lib/components/app/canvas/document/DocumentByline.svelte
    *
-   * Local daemon delta: metadata/history links are intentionally omitted until
-   * those surfaces exist here. The right-side snippet lets cloud pass presence
-   * avatars while the daemon uses the same byline minus presence.
+   * Local daemon delta: metadata is still omitted until that surface exists.
+   * History now mirrors KB-1's byline affordance and opens the note-scoped
+   * history panel from the route shell.
    */
   interface Props {
     statusLabel?: string;
     statusTone?: "normal" | "error";
+    onHistory?: () => void;
     right?: import("svelte").Snippet;
   }
 
   let {
     statusLabel,
     statusTone = "normal",
+    onHistory,
     right,
   }: Props = $props();
 </script>
@@ -24,6 +26,12 @@
   <div class="left">
     {#if statusLabel}
       <span class="status" class:error={statusTone === "error"}>{statusLabel}</span>
+    {/if}
+    {#if statusLabel && onHistory}
+      <span class="sep" aria-hidden="true">·</span>
+    {/if}
+    {#if onHistory}
+      <button type="button" class="link" onclick={onHistory}>History</button>
     {/if}
   </div>
 
@@ -86,6 +94,25 @@
 
   .status.error {
     color: rgb(220 38 38);
+  }
+
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    color: var(--rd-ink-3);
+    font: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+  }
+
+  .link:hover {
+    color: var(--rd-ink-1);
+  }
+
+  .sep {
+    color: var(--rd-ink-5);
   }
 
   @media (max-width: 880px) {
