@@ -267,6 +267,126 @@ describe("vault service failure mapping", () => {
     });
   });
 
+  it("carries note history across cold and live note moves", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "browser",
+    };
+
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "one\n",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      service.appendNote({
+        path: "notes/history.md",
+        content: "two\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({ ok: true, content: "one\ntwo\n" });
+    await expect(
+      service.moveNote({
+        fromPath: "notes/history.md",
+        toPath: "archive/history.md",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      fromPath: "notes/history.md",
+      toPath: "archive/history.md",
+      audit: { operation: "move", actor: marcus },
+    });
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [],
+      hasMore: false,
+    });
+    await expect(service.listNoteHistory({ path: "archive/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          path: "archive/history.md",
+          operation: "move",
+          actor: marcus,
+          content: "one\ntwo\n",
+        },
+        {
+          path: "archive/history.md",
+          operation: "update",
+          actor: olivia,
+          content: "one\ntwo\n",
+        },
+        {
+          path: "archive/history.md",
+          operation: "create",
+          actor: marcus,
+          content: "one\n",
+        },
+      ],
+      hasMore: false,
+    });
+
+    await expect(
+      service.createNote({
+        path: "live/rename.md",
+        content: "live\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await sessions.getSession("live/rename.md").open();
+    await expect(
+      service.moveNote({
+        fromPath: "live/rename.md",
+        toPath: "live/renamed.md",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      fromPath: "live/rename.md",
+      toPath: "live/renamed.md",
+      live: true,
+      audit: { operation: "move", actor: marcus },
+    });
+    await expect(service.listNoteHistory({ path: "live/rename.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [],
+      hasMore: false,
+    });
+    await expect(service.listNoteHistory({ path: "live/renamed.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          path: "live/renamed.md",
+          operation: "rename",
+          actor: marcus,
+          content: "live\n",
+        },
+        {
+          path: "live/renamed.md",
+          operation: "create",
+          actor: olivia,
+          content: "live\n",
+        },
+      ],
+      hasMore: false,
+    });
+  });
+
   it("keeps service writes best-effort when file history metadata is malformed", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const service = createVaultService({

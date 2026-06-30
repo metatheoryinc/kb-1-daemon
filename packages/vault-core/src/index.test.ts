@@ -38,6 +38,7 @@ import { onVaultAudit } from "./audit.js";
 import {
   historyOperationFromAudit,
   listFileHistory,
+  moveFileHistory,
   recordFileHistory,
 } from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
@@ -346,6 +347,114 @@ describe("vault-core filesystem operations", () => {
       "alpha/sorted.md",
       "notes/history.md",
     ]);
+  });
+
+  it("carries path-keyed file history across file moves and renames", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+
+    await recordFileHistory(root, {
+      path: "notes/original.md",
+      operation: "create",
+      actor,
+      content: "one\n",
+      now: new Date("2026-06-30T00:00:00.000Z"),
+    });
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "notes/original.md",
+        toPath: "notes/renamed.md",
+        actor,
+        content: "one\n",
+        now: new Date("2026-06-30T00:01:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        path: "notes/renamed.md",
+        operation: "rename",
+        actor,
+        content: "one\n",
+      },
+    });
+    await expect(listFileHistory(root, { path: "notes/original.md" })).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [], hasMore: false },
+    });
+    await expect(listFileHistory(root, { path: "notes/renamed.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { path: "notes/renamed.md", operation: "rename", content: "one\n" },
+          { path: "notes/renamed.md", operation: "create", content: "one\n" },
+        ],
+      },
+    });
+
+    await recordFileHistory(root, {
+      path: "move/source.md",
+      operation: "create",
+      actor,
+      content: "move me\n",
+      now: new Date("2026-06-30T00:01:30.000Z"),
+    });
+    await recordFileHistory(root, {
+      path: "archive/source.md",
+      operation: "create",
+      actor: { kind: "system" },
+      content: "unrelated target\n",
+      now: new Date("2026-06-30T00:01:40.000Z"),
+    });
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "move/source.md",
+        toPath: "archive/source.md",
+        actor,
+        content: "move me\n",
+        now: new Date("2026-06-30T00:01:45.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { operation: "move", path: "archive/source.md" },
+    });
+    await expect(listFileHistory(root, { path: "archive/source.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, content: "move me\n" },
+          { operation: "create", actor, content: "move me\n" },
+        ],
+      },
+    });
+
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "../outside.md",
+        toPath: "notes/nope.md",
+        actor,
+        content: "",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+
+    await writeRawFileHistory(root, { files: { "empty.md": [] } });
+    await expect(listFileHistory(root, { path: "empty.md" })).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [], hasMore: false },
+    });
+
+    await writeRawFileHistory(root, "files: [");
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "notes/a.md",
+        toPath: "notes/b.md",
+        actor,
+        content: "",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "metadata_parse_failed" });
   });
 
   it("rejects invalid history inputs and malformed durable metadata", async () => {

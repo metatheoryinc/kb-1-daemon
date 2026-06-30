@@ -39,6 +39,14 @@ export interface ListFileHistoryInput {
   limit?: number;
 }
 
+export interface MoveFileHistoryInput {
+  fromPath: string;
+  toPath: string;
+  actor?: VaultActor;
+  content: string;
+  now?: Date;
+}
+
 export interface FileHistoryPage {
   entries: FileHistoryEntry[];
   hasMore: boolean;
@@ -183,6 +191,57 @@ export async function listFileHistory(
       hasMore: limited.length > entries.length,
     },
   };
+}
+
+export async function moveFileHistory(
+  root: string,
+  input: MoveFileHistoryInput,
+): Promise<VaultResult<FileHistoryEntry>> {
+  let from: string;
+  let to: string;
+  try {
+    from = validateVaultPath(input.fromPath, "file");
+    to = validateVaultPath(input.toPath, "file");
+  } catch (error) {
+    if (error instanceof Error) {
+      return fail("invalid_path", error.message);
+    }
+    /* v8 ignore next -- validateVaultPath throws Error instances; non-Error throws are defensive rethrows. */
+    throw error;
+  }
+
+  return await withFileHistoryMutation(root, async () => {
+    const map = await readFileHistoryMap(root);
+    if (!map.ok) return map;
+
+    const movedEntries = (map.value[from] ?? []).map((entry) => ({
+      ...entry,
+      path: to,
+    }));
+    const actor = cloneActor(input.actor ?? { kind: "unknown" });
+    const integrationId = integrationIdForActor(actor);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const contentHash = await hashContent(input.content);
+    const size = new TextEncoder().encode(input.content).byteLength;
+    const entry: FileHistoryEntry = {
+      id: randomUUID(),
+      path: to,
+      operation: moveOperationForPaths(from, to),
+      actor,
+      ...(integrationId !== undefined ? { integrationId } : {}),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      content: input.content,
+      size,
+      contentHash,
+    };
+
+    const nextMap = { ...map.value };
+    delete nextMap[from];
+    nextMap[to] = [...movedEntries, entry];
+    await writeFileHistoryMap(root, nextMap);
+    return { ok: true, value: cloneFileHistoryEntry(entry) };
+  });
 }
 
 export function historyOperationFromAudit(operation: AuditOperation): FileHistoryOperation | undefined {
@@ -421,6 +480,15 @@ function actorKey(actor: VaultActor): string {
 
 function integrationIdForActor(actor: VaultActor): string | undefined {
   return actor.client;
+}
+
+function moveOperationForPaths(
+  fromPath: string,
+  toPath: string,
+): "move" | "rename" {
+  return path.posix.dirname(fromPath) === path.posix.dirname(toPath)
+    ? "rename"
+    : "move";
 }
 
 function applyHistoryCursor(

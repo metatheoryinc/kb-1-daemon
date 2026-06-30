@@ -19,6 +19,7 @@ import {
   listFolderMetadata as listVaultFolderMetadata,
   listVaultTree,
   makeVaultFolder,
+  moveFileHistory,
   moveVaultPath,
   onVaultAudit,
   prependContent,
@@ -268,6 +269,27 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     if (!read.ok) return;
     await recordHistory(event.path, 'update', actor, read.value.content);
   };
+  const carryHistoryAfterFileMove = async (moved: {
+    fromPath: string;
+    toPath: string;
+    audit: AuditEntry;
+  }): Promise<void> => {
+    try {
+      const read = await readVaultFile(ctx(), moved.toPath);
+      if (!read.ok) return;
+      const result = await moveFileHistory(options.vaultRoot, {
+        fromPath: moved.fromPath,
+        toPath: moved.toPath,
+        actor: moved.audit.actor,
+        content: read.value.content,
+      });
+      if (!result.ok) {
+        throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to carry file history after note move.', error);
+    }
+  };
 
   return {
     onEvent(handler) {
@@ -503,6 +525,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
       if (movedLive.value) {
+        await carryHistoryAfterFileMove(moved!);
         return { ok: true, ...moved!, live: true };
       }
       const result = serviceResult(await moveVaultPath(ctx(input.actor), {
@@ -510,6 +533,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         fromPath: input.fromPath,
         toPath: input.toPath
       }));
+      if (result.ok) {
+        await carryHistoryAfterFileMove(result);
+      }
       return result;
     },
 
