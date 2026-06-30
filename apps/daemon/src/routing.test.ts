@@ -442,6 +442,51 @@ describe("daemon routing", () => {
     const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
     expect(historyAgain.status).toBe(200);
     await expect(readRawFileHistory(vaultRoot)).resolves.toBe(rawHistory);
+
+    const moved = await app.request(`${filePath("notes/attributed.md")}/move`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-kb1-actor": JSON.stringify(suppliedActor),
+      },
+      body: JSON.stringify({ to: "archive/attributed.md" }),
+    });
+    expect(moved.status).toBe(200);
+    await expect(moved.json()).resolves.toMatchObject({
+      ok: true,
+      fromPath: "notes/attributed.md",
+      toPath: "archive/attributed.md",
+      audit: { actor: suppliedActor },
+    });
+
+    const oldHistory = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(oldHistory.status).toBe(200);
+    await expect(oldHistory.json()).resolves.toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [],
+    });
+
+    const movedHistory = await app.request(`${filePath("archive/attributed.md")}/history`);
+    expect(movedHistory.status).toBe(200);
+    await expect(movedHistory.json()).resolves.toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [
+        {
+          operation: "move",
+          path: "archive/attributed.md",
+          actor: suppliedActor,
+          content: "attributed\n",
+        },
+        {
+          operation: "create",
+          path: "archive/attributed.md",
+          actor: suppliedActor,
+          content: "attributed\n",
+        },
+      ],
+    });
   });
 
   it.each([

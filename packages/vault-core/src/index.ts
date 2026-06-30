@@ -15,11 +15,13 @@ export {
 export {
   historyOperationFromAudit,
   listFileHistory,
+  moveFileHistory,
   recordFileHistory,
   type FileHistoryEntry,
   type FileHistoryOperation,
   type FileHistoryPage,
   type ListFileHistoryInput,
+  type MoveFileHistoryInput,
   type RecordFileHistoryInput,
 } from "./file-history.js";
 export { isNodeError, statOrNull } from "./fs.js";
