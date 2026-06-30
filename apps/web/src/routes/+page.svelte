@@ -9,6 +9,7 @@
   } from '$lib/yjs/demo-document-provider';
   import type {
     DemoDocumentProvider,
+    DemoDocumentProviderSaveState,
     DemoDocumentProviderStatus,
   } from '$lib/yjs/demo-document-provider';
   import {
@@ -20,6 +21,7 @@
   } from '@kb-2/editor';
   import {
     ConfirmDialog,
+    DocumentByline,
     DocumentNotFoundState,
     EditorSaveNotifications,
     EmptyVaultsState,
@@ -161,6 +163,7 @@
   let providerGeneration = 0;
   let providerSynced = $state(false);
   let status = $state<DemoDocumentProviderStatus>('connecting');
+  let saveState = $state<DemoDocumentProviderSaveState>({ status: 'saved', pending: 0 });
   let error = $state<string | null>(null);
   let externalMergeVisible = $state(false);
   let externalChangeVisible = $state(false);
@@ -454,11 +457,14 @@
           ? 'Daemon · error'
           : 'Daemon · closed',
   );
+  const saveFailureActive = $derived(saveState.status === 'failed');
   const daemonStatus = $derived<'open' | 'connecting' | 'closed' | 'error'>(
-    persistFailureActive || status === 'error'
+    persistFailureActive || saveFailureActive || status === 'error'
       ? 'error'
       : status === 'open'
-        ? 'open'
+        ? saveState.status === 'saving'
+          ? 'connecting'
+          : 'open'
         : status === 'connecting' || status === 'syncing'
           ? 'connecting'
           : 'closed',
@@ -477,7 +483,7 @@
   // no label either.
   const statusLabel = $derived.by<string | undefined>(() => {
     if (viewingFolder) return undefined;
-    if (persistFailureActive) return 'Not saving';
+    if (persistFailureActive || saveFailureActive) return 'Not saving';
     switch (status) {
       // Success + optimistic states stay silent — nothing rendered.
       case 'open':
@@ -491,6 +497,31 @@
         return 'Disconnected';
     }
   });
+
+  const bylineStatusLabel = $derived.by<string | undefined>(() => {
+    if (viewingFolder) return undefined;
+    if (persistFailureActive || saveFailureActive) return 'Not saving';
+    switch (status) {
+      case 'open':
+        return saveState.status === 'saving' ? 'Saving…' : 'Saved';
+      case 'syncing':
+      case 'connecting':
+        return 'Connecting…';
+      case 'error':
+        return 'Connection error';
+      default:
+        return 'Disconnected';
+    }
+  });
+
+  const bylineStatusTone = $derived<'normal' | 'error'>(
+    persistFailureActive ||
+    saveFailureActive ||
+    status === 'error' ||
+    status === 'closed'
+      ? 'error'
+      : 'normal',
+  );
 
   // The document header breadcrumb trail. Built in the app from the
   // active path so the package stays free of path-parsing policy
@@ -639,6 +670,7 @@
     providerGeneration = generation;
     providerSynced = false;
     status = 'connecting';
+    saveState = { status: 'saved', pending: 0 };
     error = null;
     notFoundPath = null;
     docDeleted = false;
@@ -658,6 +690,10 @@
           return;
         }
         error = caught instanceof Error ? caught.message : String(caught);
+      },
+      onSaveState: (nextSaveState) => {
+        if (generation !== providerGeneration) return;
+        saveState = nextSaveState;
       },
       onSessionEvent: (event) => {
         if (generation !== providerGeneration) return;
@@ -733,6 +769,7 @@
     provider = null;
     providerSynced = false;
     status = 'connecting';
+    saveState = { status: 'saved', pending: 0 };
     notFoundPath = null;
     docDeleted = false;
   }
@@ -1553,6 +1590,7 @@
       provider?.destroy();
       provider = null;
       providerSynced = false;
+      saveState = { status: 'saved', pending: 0 };
     };
   });
 </script>
@@ -1569,7 +1607,7 @@
   <EditorSaveNotifications
     externalMergeVisible={externalMergeVisible}
     externalChangeVisible={externalChangeVisible}
-    persistFailureActive={persistFailureActive}
+    persistFailureActive={persistFailureActive || saveFailureActive}
     persistRecoveredVisible={persistRecoveredVisible}
     docDeleted={docDeleted}
     copy={editorSaveNotificationCopy}
@@ -1620,6 +1658,10 @@
           <DocumentNotFoundState path={documentPath} />
         {:else if provider && providerSynced}
           <div class="doc-column">
+            <DocumentByline
+              statusLabel={bylineStatusLabel}
+              statusTone={bylineStatusTone}
+            />
             {#key provider}
               <PlaintextEditor
                 ydoc={provider.doc}
@@ -1855,10 +1897,6 @@
      band. */
   .doc-body :global(.vault-editor) {
     background: transparent;
-  }
-
-  .doc-body :global(.plaintext-editor .cm-content) {
-    padding-top: 28px;
   }
 
   .loading {
