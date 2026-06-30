@@ -294,6 +294,15 @@ function registerVaultDataRoutes(
   router.get(`${basePath}/files/*`, async (context) => {
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
+    if (context.req.path.endsWith('/history')) {
+      const filePath = filePathParam(context.req.path, scope.filesPrefix(context), '/history');
+      return mapServiceResult(context, await resolved.service.listNoteHistory({
+        path: filePath,
+        before: context.req.query('before'),
+        beforeId: context.req.query('beforeId'),
+        limit: queryNumber(context, 'limit')
+      }));
+    }
     const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
     return mapServiceResult(context, await resolved.service.readNote({ path: filePath }));
   });

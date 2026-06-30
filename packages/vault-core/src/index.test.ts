@@ -35,6 +35,11 @@ import {
   type VaultContext,
 } from "./vault-ops.js";
 import { onVaultAudit } from "./audit.js";
+import {
+  historyOperationFromAudit,
+  listFileHistory,
+  recordFileHistory,
+} from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
 import { validateVaultPath } from "./path.js";
 import { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";
@@ -207,6 +212,348 @@ describe("vault-core filesystem operations", () => {
     expect(auditLines[1]).toMatchObject({
       operation: "write",
       path: "notes/a.md",
+    });
+  });
+
+  it("persists per-file history with actor integration coalescing and newest-first paging", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "user-1",
+      name: "Ada Lovelace",
+      client: "cloud-web",
+    };
+    const otherClient = { ...actor, client: "agent-client" };
+    const otherActor = {
+      kind: "integration" as const,
+      id: "user-1",
+      name: "Ada Bot",
+      client: "cloud-web",
+    };
+
+    await expect(
+      recordFileHistory(root, {
+        path: "notes/history.md",
+        operation: "create",
+        actor,
+        content: "first",
+        now: new Date("2026-06-30T00:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { operation: "create", actor, content: "first" },
+    });
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor,
+      content: "second",
+      now: new Date("2026-06-30T00:01:00.000Z"),
+    });
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherClient,
+      content: "third",
+      now: new Date("2026-06-30T00:02:00.000Z"),
+    });
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherActor,
+      content: "fourth",
+      now: new Date("2026-06-30T00:03:00.000Z"),
+    });
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherActor,
+      content: "fifth",
+      now: new Date("2026-06-30T00:10:00.000Z"),
+    });
+
+    const firstPage = await listFileHistory(root, {
+      path: "notes/history.md",
+      limit: 2,
+    });
+    expect(firstPage).toMatchObject({
+      ok: true,
+      value: {
+        hasMore: true,
+        entries: [
+          { content: "fifth", actor: otherActor },
+          { content: "fourth", actor: otherActor },
+        ],
+      },
+    });
+    if (!firstPage.ok) throw new Error("expected history page");
+    const cursor = firstPage.value.entries.at(-1);
+    if (!cursor) throw new Error("expected cursor entry");
+    await expect(
+      listFileHistory(root, {
+        path: "notes/history.md",
+        before: cursor.createdAt,
+        beforeId: cursor.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          { content: "third", actor: otherClient },
+          { operation: "create", content: "second", actor },
+        ],
+      },
+    });
+
+    await expect(readRawFileHistory(root)).resolves.toMatchObject({
+      parsed: {
+        files: {
+          "notes/history.md": [
+            expect.objectContaining({
+              operation: "create",
+              actor,
+              content: "second",
+            }),
+            expect.objectContaining({
+              operation: "update",
+              actor: otherClient,
+              content: "third",
+            }),
+            expect.objectContaining({
+              operation: "update",
+              actor: otherActor,
+              content: "fourth",
+            }),
+            expect.objectContaining({
+              operation: "update",
+              actor: otherActor,
+              content: "fifth",
+            }),
+          ],
+        },
+      },
+    });
+
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "create",
+      actor,
+      content: "sorted",
+      now: new Date("2026-06-30T00:20:00.000Z"),
+    });
+    const sortedRaw = await readRawFileHistory(root);
+    expect(Object.keys((sortedRaw.parsed as { files: Record<string, unknown> }).files)).toEqual([
+      "alpha/sorted.md",
+      "notes/history.md",
+    ]);
+  });
+
+  it("rejects invalid history inputs and malformed durable metadata", async () => {
+    await expect(
+      listFileHistory(root, { path: "notes/missing.md" }),
+    ).resolves.toEqual({
+      ok: true,
+      value: { entries: [], hasMore: false },
+    });
+    await expect(
+      recordFileHistory(root, {
+        path: "../escape.md",
+        operation: "create",
+        content: "bad",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+    await expect(
+      listFileHistory(root, { path: "../escape.md" }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+
+    await recordFileHistory(root, {
+      path: "notes/unknown.md",
+      operation: "create",
+      content: "unknown",
+      now: new Date("2026-06-30T01:00:00.000Z"),
+      coalesceWindowMs: -1,
+    });
+    await expect(
+      listFileHistory(root, {
+        path: "notes/unknown.md",
+        before: "not-a-date",
+        limit: 999,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [{ actor: { kind: "unknown" }, content: "unknown" }],
+      },
+    });
+
+    const validEntry = {
+      id: "entry-1",
+      operation: "create",
+      actor: { kind: "user" },
+      createdAt: "2026-06-30T01:00:00.000Z",
+      updatedAt: "2026-06-30T01:00:00.000Z",
+      content: "x",
+      size: 1,
+      contentHash: "hash",
+    };
+    const malformedCases: unknown[] = [
+      "files: [",
+      { files: [] },
+      { files: { "../bad.md": [] } },
+      { files: { "notes/a.md": {} } },
+      { files: { "notes/a.md": ["bad"] } },
+      { files: { "notes/a.md": [{ ...validEntry, id: 1 }] } },
+      { files: { "notes/a.md": [{ ...validEntry, integrationId: 42 }] } },
+      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "person" } }] } },
+      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", id: 42 } }] } },
+      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", name: 42 } }] } },
+      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", client: 42 } }] } },
+    ];
+
+    for (const malformed of malformedCases) {
+      await writeRawFileHistory(root, malformed);
+      await expect(
+        listFileHistory(root, { path: "notes/a.md" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "metadata_parse_failed",
+      });
+    }
+
+    await writeRawFileHistory(root, { files: [] });
+    await expect(
+      recordFileHistory(root, {
+        path: "notes/a.md",
+        operation: "create",
+        content: "x",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "metadata_parse_failed",
+    });
+
+    await writeRawFileHistory(root, {
+      files: { "notes/renamed.md": [{ ...validEntry, operation: "rename" }] },
+    });
+    await expect(
+      listFileHistory(root, { path: "notes/renamed.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ operation: "rename" }] },
+    });
+  });
+
+  it("honors zero coalescing windows and cursor tie-breaks entries with equal timestamps", async () => {
+    const at = new Date("2026-06-30T02:00:00.000Z");
+    const actor = { kind: "user" as const, id: "same", client: "browser" };
+
+    await recordFileHistory(root, {
+      path: "notes/zero.md",
+      operation: "update",
+      actor,
+      content: "first",
+      now: at,
+      coalesceWindowMs: 0,
+    });
+    await recordFileHistory(root, {
+      path: "notes/zero.md",
+      operation: "update",
+      actor,
+      content: "second",
+      now: new Date(at.getTime() + 1),
+      coalesceWindowMs: 0,
+    });
+    await expect(
+      listFileHistory(root, { path: "notes/zero.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ content: "second" }, { content: "first" }] },
+    });
+
+    await recordFileHistory(root, {
+      path: "notes/anonymous.md",
+      operation: "update",
+      actor: { kind: "system" },
+      content: "first",
+      now: at,
+    });
+    await recordFileHistory(root, {
+      path: "notes/anonymous.md",
+      operation: "update",
+      actor: { kind: "system" },
+      content: "second",
+      now: new Date(at.getTime() + 1),
+    });
+    await expect(
+      listFileHistory(root, { path: "notes/anonymous.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ actor: { kind: "system" }, content: "second" }] },
+    });
+
+    await recordFileHistory(root, {
+      path: "notes/tie.md",
+      operation: "update",
+      actor: { kind: "user", id: "left" },
+      content: "left",
+      now: at,
+    });
+    await recordFileHistory(root, {
+      path: "notes/tie.md",
+      operation: "update",
+      actor: { kind: "user", id: "right" },
+      content: "right",
+      now: at,
+    });
+    const page = await listFileHistory(root, { path: "notes/tie.md" });
+    if (!page.ok) throw new Error("expected history page");
+    expect(page.value.entries).toHaveLength(2);
+    expect(page.value.entries[0]!.createdAt).toBe(page.value.entries[1]!.createdAt);
+    await expect(
+      listFileHistory(root, {
+        path: "notes/tie.md",
+        before: page.value.entries[0]!.createdAt,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [] },
+    });
+    await expect(
+      listFileHistory(root, {
+        path: "notes/tie.md",
+        before: page.value.entries[0]!.createdAt,
+        beforeId: page.value.entries[0]!.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [page.value.entries[1]] },
+    });
+    await expect(
+      listFileHistory(root, {
+        path: "notes/tie.md",
+        before: "2026-06-29T00:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [] },
+    });
+  });
+
+  it("maps file audit operations into file history operations only", () => {
+    expect(historyOperationFromAudit("create")).toBe("create");
+    expect(historyOperationFromAudit("write")).toBe("update");
+    expect(historyOperationFromAudit("splice")).toBe("update");
+    expect(historyOperationFromAudit("append")).toBe("update");
+    expect(historyOperationFromAudit("prepend")).toBe("update");
+    expect(historyOperationFromAudit("move")).toBe("move");
+    expect(historyOperationFromAudit("mkdir")).toBeUndefined();
+    expect(historyOperationFromAudit("delete")).toBeUndefined();
+  });
+
+  it("rethrows unexpected file-history.yml read errors instead of converting them to defaults", async () => {
+    await mkdir(path.join(root, ".kb2", "file-history.yml"), { recursive: true });
+    await expect(listFileHistory(root, { path: "notes/a.md" })).rejects.toMatchObject({
+      code: "EISDIR",
     });
   });
 
@@ -1396,6 +1743,22 @@ async function readRawFolderMetadata(
 ): Promise<{ raw: string; parsed: unknown }> {
   const raw = await readFile(path.join(root, ".kb2/folders.yml"), "utf8");
   return { raw, parsed: parseYaml(raw) };
+}
+
+async function readRawFileHistory(
+  root: string,
+): Promise<{ raw: string; parsed: unknown }> {
+  const raw = await readFile(path.join(root, ".kb2/file-history.yml"), "utf8");
+  return { raw, parsed: parseYaml(raw) };
+}
+
+async function writeRawFileHistory(root: string, content: unknown): Promise<void> {
+  await mkdir(path.join(root, ".kb2"), { recursive: true });
+  await writeFile(
+    path.join(root, ".kb2/file-history.yml"),
+    typeof content === "string" ? content : JSON.stringify(content),
+    "utf8",
+  );
 }
 
 async function writeFileWithParents(

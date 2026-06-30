@@ -25,6 +25,7 @@ export interface DocumentSessionEvent {
   ts: number;
   fromPath?: string;
   toPath?: string;
+  attribution?: DocumentUpdateAttribution;
 }
 
 export interface AckedSyncUpdate {

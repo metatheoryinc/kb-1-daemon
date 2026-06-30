@@ -12,6 +12,16 @@ export {
   normalizeFolderMetadataColor,
   type FolderMetadataColor,
 } from "./folder-metadata-options.js";
+export {
+  historyOperationFromAudit,
+  listFileHistory,
+  recordFileHistory,
+  type FileHistoryEntry,
+  type FileHistoryOperation,
+  type FileHistoryPage,
+  type ListFileHistoryInput,
+  type RecordFileHistoryInput,
+} from "./file-history.js";
 export { isNodeError, statOrNull } from "./fs.js";
 export {
   InvalidPathError,

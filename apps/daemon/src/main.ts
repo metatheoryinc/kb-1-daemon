@@ -59,7 +59,9 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // and mutable at runtime (create/rename/soft-delete) with no restart.
   await mkdir(config.vaultsHome, { recursive: true });
   const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
-  const registry = await VaultRegistry.load(config.vaultsHome, trashHome);
+  const registry = await VaultRegistry.load(config.vaultsHome, trashHome, {
+    historyCoalesceWindowMs: config.historyCoalesceWindowMs
+  });
 
   // First boot: with no legacy vault to migrate and nothing discovered, stand up
   // a single starter vault seeded from the bundled kit. `create` performs the
