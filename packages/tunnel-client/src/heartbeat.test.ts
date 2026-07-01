@@ -97,6 +97,31 @@ describe('TunnelClient control heartbeat', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  it('advertises optional daemon version metadata on control hello', async () => {
+    const { TunnelClient } = await import('./index.js');
+    const client = new TunnelClient({
+      relayUrl: new URL('http://relay.example/t/dev1'),
+      daemonUrl: new URL('http://127.0.0.1:9891'),
+      token: 'token-1',
+      daemonVersion: '0.1.0',
+      daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+      logger: { log: vi.fn() },
+    });
+
+    client.start();
+    const firstControl = MockWebSocket.instances[0];
+    firstControl.open();
+
+    expect(sentText(firstControl, 0)).toBe(encodeTunnelMessage({
+      type: 'control.hello',
+      version: 2,
+      token: 'token-1',
+      daemonVersion: '0.1.0',
+      daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+      features: [TUNNEL_FEATURES.RELAY_FRAMES_V1],
+    }));
+  });
+
   it('keeps connect and disconnect idempotent for lifecycle callers', async () => {
     const { TunnelClient } = await import('./index.js');
     const client = new TunnelClient({

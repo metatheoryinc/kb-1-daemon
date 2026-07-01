@@ -345,6 +345,13 @@ export class VaultRegistry {
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  async storageUsageBytes(): Promise<number> {
+    return (
+      await directorySizeBytes(this.vaultsHome) +
+      await directorySizeBytes(this.trashHome)
+    );
+  }
+
   /** Resolve a vault's live instance by slug, or `undefined` when unknown. */
   get(id: string): VaultInstance | undefined {
     return this.instances.get(id);
@@ -663,6 +670,31 @@ async function isDirectory(target: string): Promise<boolean> {
     if (isNodeErrorCode(error, 'ENOENT')) {
       return false;
     }
+    throw error;
+  }
+}
+
+async function directorySizeBytes(path: string): Promise<number> {
+  const entries = await readDirectoryEntries(path);
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySizeBytes(child);
+      continue;
+    }
+    const info = await stat(child);
+    if (info.isFile()) total += info.size;
+  }
+  return total;
+}
+
+async function readDirectoryEntries(path: string) {
+  try {
+    return await readdir(path, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) return [];
     throw error;
   }
 }

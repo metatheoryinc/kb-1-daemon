@@ -39,6 +39,8 @@ export interface DaemonConfig {
 export interface DaemonRelayConfig {
   relayUrl: string;
   token: string;
+  daemonVersion?: string;
+  daemonBuild?: string;
 }
 
 export interface ResolveConfigOptions {
@@ -99,8 +101,15 @@ export function resolveRelayConfig(env: NodeJS.ProcessEnv = process.env): Daemon
 
   return {
     relayUrl: new URL(relayUrl).href,
-    token
+    token,
+    ...(optionalEnv(env.KB2_DAEMON_VERSION) ? { daemonVersion: optionalEnv(env.KB2_DAEMON_VERSION) } : {}),
+    ...(optionalEnv(env.KB2_DAEMON_BUILD) ? { daemonBuild: optionalEnv(env.KB2_DAEMON_BUILD) } : {})
   };
+}
+
+function optionalEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function resolveActorDefault(env: NodeJS.ProcessEnv = process.env): ActorDefault {

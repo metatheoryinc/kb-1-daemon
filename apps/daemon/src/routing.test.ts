@@ -378,6 +378,21 @@ describe("daemon routing", () => {
     });
   });
 
+  it("reports storage bytes used by active and soft-deleted vault data", async () => {
+    const { app, vaultRoot } = await setupScopedVault();
+    await writeFile(join(vaultRoot, "active.md"), "active-bytes");
+    const trashed = join(kb2Home, VAULT_TRASH_DIRNAME, "old-vault");
+    await mkdir(trashed, { recursive: true });
+    await writeFile(join(trashed, "old.md"), "trash-bytes");
+
+    const response = await app.request("/api/storage");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok?: unknown; usedBytes?: unknown };
+    expect(body.ok).toBe(true);
+    expect(typeof body.usedBytes).toBe("number");
+    expect(body.usedBytes).toBeGreaterThanOrEqual("active-bytes".length + "trash-bytes".length);
+  });
+
   it("attributes REST writes from the x-kb1-actor header in responses and audit JSONL", async () => {
     const { app, vaultRoot } = await setupScopedVault();
     const suppliedActor = {
