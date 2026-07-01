@@ -13,15 +13,20 @@ export {
   type FolderMetadataColor,
 } from "./folder-metadata-options.js";
 export {
+  flushFileHistory,
   historyOperationFromAudit,
   listFileHistory,
   moveFileHistory,
+  moveFolderHistory,
   recordFileHistory,
   type FileHistoryEntry,
   type FileHistoryOperation,
   type FileHistoryPage,
+  type FlushFileHistoryInput,
+  type FlushFileHistoryValue,
   type ListFileHistoryInput,
   type MoveFileHistoryInput,
+  type MoveFolderHistoryInput,
   type RecordFileHistoryInput,
 } from "./file-history.js";
 export { isNodeError, statOrNull } from "./fs.js";

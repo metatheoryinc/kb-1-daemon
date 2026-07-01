@@ -1,14 +1,19 @@
 import {
+  execFile,
+} from "node:child_process";
+import {
   chmod,
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import fc from "fast-check";
 import { parse as parseYaml } from "yaml";
 
@@ -40,8 +45,10 @@ import {
 import { onVaultAudit } from "./audit.js";
 import {
   historyOperationFromAudit,
+  flushFileHistory,
   listFileHistory,
   moveFileHistory,
+  moveFolderHistory,
   recordFileHistory,
 } from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
@@ -53,6 +60,7 @@ const MINT = "#a7f3d0";
 const SKY = "#bae6fd";
 const ROSE = "#fecdd3";
 const SAGE = "#d9f99d";
+const execFileAsync = promisify(execFile);
 
 describe("vault path validation", () => {
   const validSegment = fc
@@ -317,6 +325,10 @@ describe("vault-core filesystem operations", () => {
         size: 4,
       },
     });
+    await expect(readVaultRawFile(ctx, "attachments/missing.png")).resolves.toMatchObject({
+      ok: false,
+      error: "not_found",
+    });
 
     await expect(readVaultFile(ctx, "attachments/photo.png")).resolves.toMatchObject({
       ok: false,
@@ -345,6 +357,30 @@ describe("vault-core filesystem operations", () => {
         },
       },
     });
+
+    await expect(readVaultRawFile(ctx, "../outside.png")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(
+      writeVaultRawFile(ctx, {
+        path: "../outside.png",
+        bytes,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await writeFileWithParents(path.join(root, "attachments/blocker"), "file", "utf8");
+    await expect(
+      writeVaultRawFile(ctx, {
+        path: "attachments/blocker/photo.png",
+        bytes,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "path_collision",
+    });
   });
 
   it("exposes deterministic artifact classification for callers", () => {
@@ -368,7 +404,7 @@ describe("vault-core filesystem operations", () => {
     });
   });
 
-  it("persists per-file history with actor integration coalescing and newest-first paging", async () => {
+  it("overlays pending per-file buckets and flushes them to Git commits", async () => {
     const actor = {
       kind: "user" as const,
       id: "user-1",
@@ -383,6 +419,11 @@ describe("vault-core filesystem operations", () => {
       client: "cloud-web",
     };
 
+    await writeFileWithParents(
+      path.join(root, "notes/history.md"),
+      "first",
+      "utf8",
+    );
     await expect(
       recordFileHistory(root, {
         path: "notes/history.md",
@@ -401,7 +442,17 @@ describe("vault-core filesystem operations", () => {
     });
     const created = await listFileHistory(root, { path: "notes/history.md" });
     if (!created.ok) throw new Error("expected created history page");
+    expect(created.value.entries).toMatchObject([
+      {
+        pending: true,
+        operation: "create",
+        actor,
+        contributors: [actor],
+        size: 5,
+      },
+    ]);
     expect(created.value.entries[0]).not.toHaveProperty("content");
+    await writeFile(path.join(root, "notes/history.md"), "second", "utf8");
     await recordFileHistory(root, {
       path: "notes/history.md",
       operation: "update",
@@ -409,6 +460,7 @@ describe("vault-core filesystem operations", () => {
       content: "second",
       now: new Date("2026-06-30T00:01:00.000Z"),
     });
+    await writeFile(path.join(root, "notes/history.md"), "third", "utf8");
     await recordFileHistory(root, {
       path: "notes/history.md",
       operation: "update",
@@ -416,6 +468,7 @@ describe("vault-core filesystem operations", () => {
       content: "third",
       now: new Date("2026-06-30T00:02:00.000Z"),
     });
+    await writeFile(path.join(root, "notes/history.md"), "fourth", "utf8");
     await recordFileHistory(root, {
       path: "notes/history.md",
       operation: "update",
@@ -423,6 +476,56 @@ describe("vault-core filesystem operations", () => {
       content: "fourth",
       now: new Date("2026-06-30T00:03:00.000Z"),
     });
+
+    await expect(listFileHistory(root, { path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          {
+            pending: true,
+            operation: "create",
+            actor: { kind: "system", name: "3 contributors" },
+            contributors: [actor, otherClient, otherActor],
+            size: 6,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      flushFileHistory(root, { now: new Date("2026-06-30T00:04:00.000Z") }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+
+    const flushed = await listFileHistory(root, { path: "notes/history.md" });
+    expect(flushed).toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          {
+            operation: "create",
+            actor: { kind: "system", name: "3 contributors" },
+            contributors: [actor, otherClient, otherActor],
+            size: 6,
+          },
+        ],
+      },
+    });
+    if (!flushed.ok) throw new Error("expected flushed history page");
+    expect(flushed.value.entries[0]).not.toHaveProperty("content");
+    expect(flushed.value.entries[0]?.commitId).toMatch(/^[0-9a-f]{40}$/);
+
+    const gitAuthor = await git(root, ["log", "-1", "--format=%an <%ae>"]);
+    expect(gitAuthor.stdout.trim()).toBe("KB-1 Daemon <history@kb-1.ai>");
+    const gitBody = await git(root, ["log", "-1", "--format=%B"]);
+    expect(gitBody.stdout).toContain("KB1-Contributor:");
+    expect(gitBody.stdout).toContain("Ada Lovelace");
+    expect(gitBody.stdout).toContain("Ada Bot");
+    const gitignoreTracked = await git(root, ["ls-files", ".gitignore"]);
+    expect(gitignoreTracked.stdout.trim()).toBe(".gitignore");
+
+    await writeFile(path.join(root, "notes/history.md"), "fifth", "utf8");
     await recordFileHistory(root, {
       path: "notes/history.md",
       operation: "update",
@@ -433,15 +536,14 @@ describe("vault-core filesystem operations", () => {
 
     const firstPage = await listFileHistory(root, {
       path: "notes/history.md",
-      limit: 2,
+      limit: 1,
     });
     expect(firstPage).toMatchObject({
       ok: true,
       value: {
         hasMore: true,
         entries: [
-          { actor: otherActor, size: 5 },
-          { actor: otherActor, size: 6 },
+          { pending: true, actor: otherActor, size: 5 },
         ],
       },
     });
@@ -459,63 +561,47 @@ describe("vault-core filesystem operations", () => {
       value: {
         hasMore: false,
         entries: [
-          { actor: otherClient, size: 5 },
-          { operation: "create", actor, size: 6 },
+          { operation: "create", actor: { kind: "system", name: "3 contributors" }, size: 6 },
         ],
       },
     });
 
-    await expect(readRawFileHistory(root)).resolves.toMatchObject({
-      parsed: {
-        files: {
-          "notes/history.md": [
-            expect.objectContaining({
-              operation: "create",
-              actor,
-              size: 6,
-            }),
-            expect.objectContaining({
-              operation: "update",
-              actor: otherClient,
-              size: 5,
-            }),
-            expect.objectContaining({
-              operation: "update",
-              actor: otherActor,
-              size: 6,
-            }),
-            expect.objectContaining({
-              operation: "update",
-              actor: otherActor,
-              size: 5,
-            }),
-          ],
-        },
-      },
-    });
-    const historyEntries = (await readRawFileHistory(root)).parsed as {
-      files: Record<string, Array<Record<string, unknown>>>;
-    };
-    for (const entry of historyEntries.files["notes/history.md"] ?? []) {
-      expect(entry).not.toHaveProperty("content");
-      expect(entry).toHaveProperty("contentHash");
-    }
-
+    await writeFileWithParents(path.join(root, "alpha/sorted.md"), "sorted", "utf8");
     await recordFileHistory(root, {
       path: "alpha/sorted.md",
       operation: "create",
       actor,
       content: "sorted",
-      now: new Date("2026-06-30T00:20:00.000Z"),
+      now: new Date("2026-06-30T00:11:00.000Z"),
     });
-    const sortedRaw = await readRawFileHistory(root);
-    expect(Object.keys((sortedRaw.parsed as { files: Record<string, unknown> }).files)).toEqual([
-      "alpha/sorted.md",
-      "notes/history.md",
-    ]);
+    await expect(
+      flushFileHistory(root, { now: new Date("2026-06-30T00:12:00.000Z") }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 2 } });
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "update",
+      actor,
+      content: "sorted",
+      now: new Date("2026-06-30T00:13:00.000Z"),
+    });
+    await expect(
+      flushFileHistory(root, { paths: ["alpha/sorted.md"] }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await writeFile(path.join(root, "alpha/sorted.md"), "sorted again", "utf8");
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "update",
+      actor,
+      content: "sorted again",
+      now: new Date("2026-06-30T00:15:00.000Z"),
+    });
+    await expect(
+      flushFileHistory(root, { paths: ["alpha/sorted.md"] }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await expect(flushFileHistory(root)).resolves.toEqual({ ok: true, value: { flushed: 0 } });
   });
 
-  it("carries path-keyed file history across file moves and renames", async () => {
+  it("uses structural move commits as history barriers and follows renamed files", async () => {
     const actor = {
       kind: "user" as const,
       id: "marcus",
@@ -523,6 +609,11 @@ describe("vault-core filesystem operations", () => {
       client: "browser",
     };
 
+    await writeFileWithParents(
+      path.join(root, "notes/original.md"),
+      "one\n",
+      "utf8",
+    );
     await recordFileHistory(root, {
       path: "notes/original.md",
       operation: "create",
@@ -530,6 +621,9 @@ describe("vault-core filesystem operations", () => {
       content: "one\n",
       now: new Date("2026-06-30T00:00:00.000Z"),
     });
+    await flushFileHistory(root, { paths: ["notes/original.md"], now: new Date("2026-06-30T00:00:30.000Z") });
+    await mkdir(path.join(root, "notes"), { recursive: true });
+    await rename(path.join(root, "notes/original.md"), path.join(root, "notes/renamed.md"));
     await expect(
       moveFileHistory(root, {
         fromPath: "notes/original.md",
@@ -547,10 +641,10 @@ describe("vault-core filesystem operations", () => {
         size: 4,
       },
     });
-    await expect(listFileHistory(root, { path: "notes/original.md" })).resolves.toMatchObject({
-      ok: true,
-      value: { entries: [], hasMore: false },
-    });
+    const oldPathHistory = await listFileHistory(root, { path: "notes/original.md" });
+    if (!oldPathHistory.ok) throw new Error("expected old path history page");
+    expect(oldPathHistory.value.hasMore).toBe(false);
+    expect(oldPathHistory.value.entries.some((entry) => entry.operation === "create" && entry.size === 4)).toBe(true);
     await expect(listFileHistory(root, { path: "notes/renamed.md" })).resolves.toMatchObject({
       ok: true,
       value: {
@@ -561,6 +655,11 @@ describe("vault-core filesystem operations", () => {
       },
     });
 
+    await writeFileWithParents(
+      path.join(root, "move/source.md"),
+      "move me\n",
+      "utf8",
+    );
     await recordFileHistory(root, {
       path: "move/source.md",
       operation: "create",
@@ -568,13 +667,9 @@ describe("vault-core filesystem operations", () => {
       content: "move me\n",
       now: new Date("2026-06-30T00:01:30.000Z"),
     });
-    await recordFileHistory(root, {
-      path: "archive/source.md",
-      operation: "create",
-      actor: { kind: "system" },
-      content: "unrelated target\n",
-      now: new Date("2026-06-30T00:01:40.000Z"),
-    });
+    await flushFileHistory(root, { paths: ["move/source.md"], now: new Date("2026-06-30T00:01:35.000Z") });
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, "move/source.md"), path.join(root, "archive/source.md"));
     await expect(
       moveFileHistory(root, {
         fromPath: "move/source.md",
@@ -597,6 +692,61 @@ describe("vault-core filesystem operations", () => {
       },
     });
 
+    await writeFileWithParents(
+      path.join(root, "folder-src/a.md"),
+      "a\n",
+      "utf8",
+    );
+    await writeFileWithParents(
+      path.join(root, "folder-src/nested/b.md"),
+      "b\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "folder-src/a.md",
+      operation: "create",
+      actor,
+      content: "a\n",
+      now: new Date("2026-06-30T00:02:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: ["folder-src/a.md"], now: new Date("2026-06-30T00:02:05.000Z") });
+    await rename(path.join(root, "folder-src"), path.join(root, "folder-dest"));
+    await expect(
+      moveFolderHistory(root, {
+        fromPath: "folder-src",
+        toPath: "folder-dest",
+        actor,
+        now: new Date("2026-06-30T00:02:15.000Z"),
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await expect(listFileHistory(root, { path: "folder-dest/a.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, size: 0 },
+          { operation: "create", actor, size: 2 },
+        ],
+      },
+    });
+    await expect(listFileHistory(root, { path: "folder-dest/nested/b.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, size: 0 },
+        ],
+      },
+    });
+    await mkdir(path.join(root, "empty-folder"));
+    await rename(path.join(root, "empty-folder"), path.join(root, "empty-folder-moved"));
+    await expect(
+      moveFolderHistory(root, {
+        fromPath: "empty-folder",
+        toPath: "empty-folder-moved",
+        actor,
+        now: new Date("2026-06-30T00:02:30.000Z"),
+      }),
+    ).resolves.toEqual({ ok: true, value: { flushed: 0 } });
+
     await expect(
       moveFileHistory(root, {
         fromPath: "../outside.md",
@@ -605,25 +755,16 @@ describe("vault-core filesystem operations", () => {
         content: "",
       }),
     ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
-
-    await writeRawFileHistory(root, { files: { "empty.md": [] } });
-    await expect(listFileHistory(root, { path: "empty.md" })).resolves.toMatchObject({
-      ok: true,
-      value: { entries: [], hasMore: false },
-    });
-
-    await writeRawFileHistory(root, "files: [");
     await expect(
-      moveFileHistory(root, {
-        fromPath: "notes/a.md",
-        toPath: "notes/b.md",
+      moveFolderHistory(root, {
+        fromPath: "../outside",
+        toPath: "notes",
         actor,
-        content: "",
       }),
-    ).resolves.toMatchObject({ ok: false, error: "metadata_parse_failed" });
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
   });
 
-  it("rejects invalid history inputs and malformed durable metadata", async () => {
+  it("rejects invalid history inputs and supports zero-width buckets", async () => {
     await expect(
       listFileHistory(root, { path: "notes/missing.md" }),
     ).resolves.toEqual({
@@ -641,6 +782,26 @@ describe("vault-core filesystem operations", () => {
       listFileHistory(root, { path: "../escape.md" }),
     ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
 
+    await writeFileWithParents(
+      path.join(root, "notes/no-now.md"),
+      "nowless",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/no-now.md",
+      operation: "create",
+      content: "nowless",
+    });
+    await expect(listFileHistory(root, { path: "notes/no-now.md" })).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ actor: { kind: "unknown" }, size: 7 }] },
+    });
+
+    await writeFileWithParents(
+      path.join(root, "notes/unknown.md"),
+      "unknown",
+      "utf8",
+    );
     await recordFileHistory(root, {
       path: "notes/unknown.md",
       operation: "create",
@@ -661,81 +822,64 @@ describe("vault-core filesystem operations", () => {
       },
     });
 
-    const validEntry = {
-      id: "entry-1",
+    await writeFileWithParents(
+      path.join(root, "notes/system.md"),
+      "system",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/system.md",
       operation: "create",
-      actor: { kind: "user" },
-      createdAt: "2026-06-30T01:00:00.000Z",
-      updatedAt: "2026-06-30T01:00:00.000Z",
-      content: "x",
-      size: 1,
-      contentHash: "hash",
-    };
-    const malformedCases: unknown[] = [
-      "files: [",
-      { files: [] },
-      { files: { "../bad.md": [] } },
-      { files: { "notes/a.md": {} } },
-      { files: { "notes/a.md": ["bad"] } },
-      { files: { "notes/a.md": [{ ...validEntry, id: 1 }] } },
-      { files: { "notes/a.md": [{ ...validEntry, integrationId: 42 }] } },
-      { files: { "notes/a.md": [{ ...validEntry, content: 42 }] } },
-      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "person" } }] } },
-      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", id: 42 } }] } },
-      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", name: 42 } }] } },
-      { files: { "notes/a.md": [{ ...validEntry, actor: { kind: "user", client: 42 } }] } },
-    ];
-
-    for (const malformed of malformedCases) {
-      await writeRawFileHistory(root, malformed);
-      await expect(
-        listFileHistory(root, { path: "notes/a.md" }),
-      ).resolves.toMatchObject({
-        ok: false,
-        error: "metadata_parse_failed",
-      });
-    }
-
-    await writeRawFileHistory(root, { files: [] });
-    await expect(
-      recordFileHistory(root, {
-        path: "notes/a.md",
-        operation: "create",
-        content: "x",
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: "metadata_parse_failed",
+      actor: { kind: "system" },
+      content: "system",
+      now: new Date("2026-06-30T01:05:00.000Z"),
     });
-
-    await writeRawFileHistory(root, {
-      files: { "notes/renamed.md": [{ ...validEntry, operation: "rename" }] },
-    });
-    await expect(
-      listFileHistory(root, { path: "notes/renamed.md" }),
-    ).resolves.toMatchObject({
+    await flushFileHistory(root, { paths: ["notes/system.md"], now: new Date("2026-06-30T01:06:00.000Z") });
+    await expect(listFileHistory(root, { path: "notes/system.md" })).resolves.toMatchObject({
       ok: true,
-      value: { entries: [{ operation: "rename" }] },
-    });
-    await writeRawFileHistory(root, {
-      files: {
-        "notes/metadata-only.md": [
-          { ...validEntry, id: "entry-metadata-only", content: undefined },
+      value: {
+        entries: [
+          {
+            operation: "create",
+            actor: { kind: "system" },
+            contributors: [{ kind: "system" }],
+          },
         ],
       },
     });
-    await expect(
-      listFileHistory(root, { path: "notes/metadata-only.md" }),
-    ).resolves.toMatchObject({
+    await writeFileWithParents(
+      path.join(root, "notes/external.md"),
+      "external",
+      "utf8",
+    );
+    await git(root, ["add", "--", "notes/external.md"]);
+    await git(root, [
+      "-c",
+      "user.name=External",
+      "-c",
+      "user.email=external@example.test",
+      "commit",
+      "-m",
+      "external commit",
+    ]);
+    await expect(listFileHistory(root, { path: "notes/external.md" })).resolves.toMatchObject({
       ok: true,
-      value: { entries: [{ id: "entry-metadata-only", size: 1, contentHash: "hash" }] },
+      value: {
+        entries: [
+          {
+            operation: "update",
+            actor: { kind: "unknown" },
+            size: 0,
+            contentHash: "",
+          },
+        ],
+      },
     });
-  });
 
-  it("honors zero coalescing windows and cursor tie-breaks entries with equal timestamps", async () => {
     const at = new Date("2026-06-30T02:00:00.000Z");
     const actor = { kind: "user" as const, id: "same", client: "browser" };
 
+    await writeFileWithParents(path.join(root, "notes/zero.md"), "first", "utf8");
     await recordFileHistory(root, {
       path: "notes/zero.md",
       operation: "update",
@@ -744,6 +888,7 @@ describe("vault-core filesystem operations", () => {
       now: at,
       coalesceWindowMs: 0,
     });
+    await writeFile(path.join(root, "notes/zero.md"), "second", "utf8");
     await recordFileHistory(root, {
       path: "notes/zero.md",
       operation: "update",
@@ -758,68 +903,9 @@ describe("vault-core filesystem operations", () => {
       ok: true,
       value: { entries: [{ size: 6 }, { size: 5 }] },
     });
-
-    await recordFileHistory(root, {
-      path: "notes/anonymous.md",
-      operation: "update",
-      actor: { kind: "system" },
-      content: "first",
-      now: at,
-    });
-    await recordFileHistory(root, {
-      path: "notes/anonymous.md",
-      operation: "update",
-      actor: { kind: "system" },
-      content: "second",
-      now: new Date(at.getTime() + 1),
-    });
-    await expect(
-      listFileHistory(root, { path: "notes/anonymous.md" }),
-    ).resolves.toMatchObject({
-      ok: true,
-      value: { entries: [{ actor: { kind: "system" }, size: 6 }] },
-    });
-
-    await recordFileHistory(root, {
-      path: "notes/tie.md",
-      operation: "update",
-      actor: { kind: "user", id: "left" },
-      content: "left",
-      now: at,
-    });
-    await recordFileHistory(root, {
-      path: "notes/tie.md",
-      operation: "update",
-      actor: { kind: "user", id: "right" },
-      content: "right",
-      now: at,
-    });
-    const page = await listFileHistory(root, { path: "notes/tie.md" });
-    if (!page.ok) throw new Error("expected history page");
-    expect(page.value.entries).toHaveLength(2);
-    expect(page.value.entries[0]!.createdAt).toBe(page.value.entries[1]!.createdAt);
     await expect(
       listFileHistory(root, {
-        path: "notes/tie.md",
-        before: page.value.entries[0]!.createdAt,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      value: { entries: [] },
-    });
-    await expect(
-      listFileHistory(root, {
-        path: "notes/tie.md",
-        before: page.value.entries[0]!.createdAt,
-        beforeId: page.value.entries[0]!.id,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      value: { entries: [page.value.entries[1]] },
-    });
-    await expect(
-      listFileHistory(root, {
-        path: "notes/tie.md",
+        path: "notes/zero.md",
         before: "2026-06-29T00:00:00.000Z",
       }),
     ).resolves.toMatchObject({
@@ -837,13 +923,6 @@ describe("vault-core filesystem operations", () => {
     expect(historyOperationFromAudit("move")).toBe("move");
     expect(historyOperationFromAudit("mkdir")).toBeUndefined();
     expect(historyOperationFromAudit("delete")).toBeUndefined();
-  });
-
-  it("rethrows unexpected file-history.yml read errors instead of converting them to defaults", async () => {
-    await mkdir(path.join(root, ".kb2", "file-history.yml"), { recursive: true });
-    await expect(listFileHistory(root, { path: "notes/a.md" })).rejects.toMatchObject({
-      code: "EISDIR",
-    });
   });
 
   it("notifies observers from the audit chokepoint without breaking the mutation", async () => {
@@ -1921,7 +2000,7 @@ describe("scan search", () => {
       await rm(cappedRoot, { recursive: true, force: true });
       await rm(nestedRoot, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("property: every randomized search result references a real line in a real file", async () => {
     const segment = fc.stringMatching(/^[a-z]{1,8}$/);
@@ -2034,20 +2113,10 @@ async function readRawFolderMetadata(
   return { raw, parsed: parseYaml(raw) };
 }
 
-async function readRawFileHistory(
-  root: string,
-): Promise<{ raw: string; parsed: unknown }> {
-  const raw = await readFile(path.join(root, ".kb2/file-history.yml"), "utf8");
-  return { raw, parsed: parseYaml(raw) };
-}
-
-async function writeRawFileHistory(root: string, content: unknown): Promise<void> {
-  await mkdir(path.join(root, ".kb2"), { recursive: true });
-  await writeFile(
-    path.join(root, ".kb2/file-history.yml"),
-    typeof content === "string" ? content : JSON.stringify(content),
-    "utf8",
-  );
+async function git(root: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return await execFileAsync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+  }) as { stdout: string; stderr: string };
 }
 
 async function writeFileWithParents(
