@@ -9,6 +9,7 @@ import {
   InvalidPathError,
   appendContent,
   applyAnchoredSplice,
+  classifyArtifactPath,
   deleteVaultFile,
   deleteVaultFolder,
   emitVaultAudit,
@@ -23,24 +24,30 @@ import {
   moveVaultPath,
   onVaultAudit,
   prependContent,
+  readVaultRawFile,
   readVaultFile,
   recordFileHistory,
   searchVaultFiles,
   setFolderMetadata as setVaultFolderMetadata,
   validateVaultPath,
+  writeVaultRawFile,
   writeVaultFile,
   type AnchoredSpliceRequest,
   type AuditChangeEventOptions,
   type AuditEntry,
+  type ArtifactInfo,
   type FileHistoryEntry,
   type FolderMetadataInput,
+  type ReadRawFileValue,
   type VaultEntry,
   type VaultActor,
   type VaultErrorCode,
-  type VaultResult
+  type VaultResult,
+  type WriteRawFileValue
 } from '@kb-2/vault-core';
 
 export type { AuditEntry, VaultActor };
+export type { ArtifactInfo };
 export type { FileHistoryEntry };
 
 export type ServiceErrorCode =
@@ -110,6 +117,8 @@ export interface LocalMcpVaultService {
   listFolderMetadata(): Promise<ServiceResult>;
   getFolderMetadata(input: { path: string }): Promise<ServiceResult>;
   setFolderMetadata(input: { path: string; metadata: FolderMetadataInput; actor: VaultActor }): Promise<ServiceResult>;
+  readRawFile(input: { path: string }): Promise<ServiceResult<ReadRawFileValue>>;
+  writeRawFile(input: { path: string; bytes: Uint8Array; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult<WriteRawFileValue>>;
   readNote(input: { path: string }): Promise<ServiceResult>;
   createNote(input: { path: string; content: string; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult>;
   editNote(input: EditNoteInput & { actor: VaultActor }): Promise<ServiceResult>;
@@ -349,11 +358,25 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
     },
 
+    async readRawFile(input) {
+      return serviceResult(await readVaultRawFile(ctx(), input.path));
+    },
+
+    async writeRawFile(input) {
+      return serviceResult(await writeVaultRawFile(ctx(input.actor), {
+        path: input.path,
+        bytes: input.bytes,
+        overwrite: input.overwrite
+      }));
+    },
+
     async listNoteHistory(input) {
       return serviceResult(await listFileHistory(options.vaultRoot, input));
     },
 
     async createNote(input) {
+      const validPath = validateServiceFilePath(input.path);
+      if (!validPath.ok) return validPath;
       const liveSession = options.documentSessions.getOpenSession(input.path);
       if (liveSession) {
         if (!input.overwrite) {
@@ -743,7 +766,12 @@ function assertNever(value: never): never {
 
 function validateServiceFilePath(filePath: string): ServiceResult<{ path: string }> {
   try {
-    return { ok: true, path: validateVaultPath(filePath, 'file') };
+    const path = validateVaultPath(filePath, 'file');
+    const artifact = classifyArtifactPath(path);
+    if (!artifact.editable) {
+      return failure('not_editable', 'file is not an editable text artifact');
+    }
+    return { ok: true, path };
   } catch (error) {
     if (error instanceof InvalidPathError) {
       return failure('invalid_path', error.message);

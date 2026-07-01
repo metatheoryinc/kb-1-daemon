@@ -21,6 +21,7 @@ import {
   prependContent,
 } from "./splice.js";
 import {
+  classifyArtifactPath,
   deleteVaultFile,
   deleteVaultFolder,
   getFolderMetadata,
@@ -29,8 +30,10 @@ import {
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  readVaultRawFile,
   readVaultFile,
   setFolderMetadata,
+  writeVaultRawFile,
   writeVaultFile,
   type VaultContext,
 } from "./vault-ops.js";
@@ -80,6 +83,7 @@ describe("vault path validation", () => {
     ["/absolute.md", "file"],
     ["nested//file.md", "file"],
     ["nested/", "folder"],
+    ["nested/../asset", "artifact"],
     [".", "folder"],
     ["..", "folder"],
     ["nested/../file.md", "file"],
@@ -88,6 +92,7 @@ describe("vault path validation", () => {
     ["folder/.hidden", "file"],
     ["folder/trailing.", "file"],
     [".kb2/audit.md", "file"],
+    [".kb2/audit.bin", "artifact"],
     [`${"a".repeat(256)}.md`, "file"],
     [`${"a".repeat(1025)}.md`, "file"],
   ] as const)("rejects invalid %s as %s", (input, kind) => {
@@ -98,6 +103,8 @@ describe("vault path validation", () => {
     ["note.md", "file"],
     ["nested/note.md", "file"],
     ["nested/deep", "folder"],
+    ["attachments/photo.png", "artifact"],
+    ["attachments/extensionless", "artifact"],
   ] as const)("accepts %s as %s", (input, kind) => {
     expect(validateVaultPath(input, kind)).toBe(input);
   });
@@ -213,6 +220,151 @@ describe("vault-core filesystem operations", () => {
     expect(auditLines[1]).toMatchObject({
       operation: "write",
       path: "notes/a.md",
+    });
+  });
+
+  it("classifies copied-in filesystem artifacts without required metadata", async () => {
+    await writeFileWithParents(path.join(root, "notes/a.md"), "# A\n", "utf8");
+    await writeFileWithParents(
+      path.join(root, "scripts/app.ts"),
+      "export {};\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, "attachments"), { recursive: true });
+    await writeFile(path.join(root, "attachments/photo.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(path.join(root, "attachments/blob"), new Uint8Array([1, 2, 3]));
+
+    const tree = await listVaultTree(ctx, { depth: Number.MAX_SAFE_INTEGER });
+    expect(tree).toMatchObject({ ok: true });
+    if (!tree.ok) throw new Error("expected tree");
+    expect(tree.value.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: "notes/a.md",
+        kind: "file",
+        artifact: {
+          kind: "text",
+          contentType: "text/markdown; charset=utf-8",
+          editable: true,
+          preview: "markdown",
+        },
+      }),
+      expect.objectContaining({
+        path: "scripts/app.ts",
+        kind: "file",
+        artifact: {
+          kind: "text",
+          contentType: "text/typescript; charset=utf-8",
+          editable: true,
+          preview: "text",
+        },
+      }),
+      expect.objectContaining({
+        path: "attachments/photo.png",
+        kind: "file",
+        artifact: {
+          kind: "attachment",
+          contentType: "image/png",
+          editable: false,
+          preview: "image",
+        },
+      }),
+      expect.objectContaining({
+        path: "attachments/blob",
+        kind: "file",
+        artifact: {
+          kind: "attachment",
+          contentType: "application/octet-stream",
+          editable: false,
+          preview: "download",
+        },
+      }),
+    ]));
+  });
+
+  it("round-trips raw bytes without the editable text path", async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255]);
+    const created = await writeVaultRawFile(ctx, {
+      path: "attachments/photo.png",
+      bytes,
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      value: {
+        path: "attachments/photo.png",
+        size: 4,
+        artifact: {
+          kind: "attachment",
+          contentType: "image/png",
+          editable: false,
+          preview: "image",
+        },
+      },
+    });
+    await expect(readFile(path.join(root, "attachments/photo.png"))).resolves.toEqual(Buffer.from(bytes));
+
+    const duplicate = await writeVaultRawFile(ctx, {
+      path: "attachments/photo.png",
+      bytes: new Uint8Array([9]),
+    });
+    expect(duplicate).toMatchObject({ ok: false, error: "already_exists" });
+
+    const raw = await readVaultRawFile(ctx, "attachments/photo.png");
+    expect(raw).toMatchObject({
+      ok: true,
+      value: {
+        path: "attachments/photo.png",
+        filePath: path.join(root, "attachments/photo.png"),
+        size: 4,
+      },
+    });
+
+    await expect(readVaultFile(ctx, "attachments/photo.png")).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+    await expect(writeVaultFile(ctx, {
+      path: "attachments/photo.png",
+      content: "not png",
+      overwrite: true,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+
+    const extensionless = await writeVaultRawFile(ctx, {
+      path: "attachments/blob",
+      bytes,
+    });
+    expect(extensionless).toMatchObject({
+      ok: true,
+      value: {
+        artifact: {
+          kind: "attachment",
+          contentType: "application/octet-stream",
+          preview: "download",
+        },
+      },
+    });
+  });
+
+  it("exposes deterministic artifact classification for callers", () => {
+    expect(classifyArtifactPath("notes/a.md")).toEqual({
+      kind: "text",
+      contentType: "text/markdown; charset=utf-8",
+      editable: true,
+      preview: "markdown",
+    });
+    expect(classifyArtifactPath("assets/clip.mp3")).toEqual({
+      kind: "attachment",
+      contentType: "audio/mpeg",
+      editable: false,
+      preview: "audio",
+    });
+    expect(classifyArtifactPath("assets/unknown")).toEqual({
+      kind: "attachment",
+      contentType: "application/octet-stream",
+      editable: false,
+      preview: "download",
     });
   });
 

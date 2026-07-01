@@ -48,6 +48,7 @@ export {
   type SearchResult,
 } from "./search.js";
 export {
+  classifyArtifactPath,
   deleteVaultFile,
   deleteVaultFolder,
   getFolderMetadata,
@@ -56,9 +57,14 @@ export {
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  readVaultRawFile,
   readVaultFile,
   setFolderMetadata,
+  writeVaultRawFile,
   writeVaultFile,
+  type ArtifactInfo,
+  type ArtifactKind,
+  type ArtifactPreview,
   type DeleteValue,
   type FolderMetadata,
   type FolderMetadataInput,
@@ -66,11 +72,13 @@ export {
   type FolderMetadataValue,
   type MoveValue,
   type ReadFileValue,
+  type ReadRawFileValue,
   type VaultContext,
   type VaultEntry,
   type VaultErrorCode,
   type VaultInfo,
   type VaultResult,
   type WriteFileValue,
+  type WriteRawFileValue,
 } from "./vault-ops.js";
 export { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";

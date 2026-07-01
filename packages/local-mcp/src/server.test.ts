@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { fileURLToPath } from "node:url";
 
 import { createLocalMcpEndpoint } from "./server.js";
 import type {
@@ -10,6 +11,8 @@ import type {
 
 const CORAL = "#fda4af";
 const MINT = "#a7f3d0";
+type ServiceInput<Name extends keyof LocalMcpVaultService> =
+  Parameters<LocalMcpVaultService[Name]>[0];
 
 describe("local MCP server", () => {
   it("rejects requests that do not carry or initialize a valid MCP session", async () => {
@@ -42,6 +45,7 @@ describe("local MCP server", () => {
 
   it("registers every tier-1 tool and forwards calls to the injected service with initialize attribution", async () => {
     const mutationActors: VaultActor[] = [];
+    const fixturePath = fileURLToPath(new URL("./server.test.ts", import.meta.url));
     const service: LocalMcpVaultService = {
       vaultInfo: async () => ({
         ok: true,
@@ -49,7 +53,7 @@ describe("local MCP server", () => {
         fileCount: 1,
         folderCount: 1,
       }),
-      listFiles: async (input) => ({
+      listFiles: async (input: ServiceInput<"listFiles">) => ({
         ok: true,
         entries: [
           {
@@ -57,20 +61,44 @@ describe("local MCP server", () => {
             kind: input.under ? "folder" : "file",
             size: 4,
             mtimeMs: 1,
+            artifact: input.under
+              ? undefined
+              : {
+                  kind: "text",
+                  contentType: "text/markdown; charset=utf-8",
+                  editable: true,
+                  preview: "markdown",
+                },
             metadata: input.under ? { color: CORAL } : undefined,
           },
+          ...(input.under
+            ? []
+            : [
+                {
+                  path: "assets/pixel.png",
+                  kind: "file" as const,
+                  size: 8,
+                  mtimeMs: 2,
+                  artifact: {
+                    kind: "attachment" as const,
+                    contentType: "image/png",
+                    editable: false,
+                    preview: "image",
+                  },
+                },
+              ]),
         ],
       }),
       listFolderMetadata: async () => ({
         ok: true,
         folders: { notes: { color: CORAL } },
       }),
-      getFolderMetadata: async (input) => ({
+      getFolderMetadata: async (input: ServiceInput<"getFolderMetadata">) => ({
         ok: true,
         path: input.path,
         metadata: { color: CORAL },
       }),
-      setFolderMetadata: async (input) =>
+      setFolderMetadata: async (input: ServiceInput<"setFolderMetadata">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
@@ -87,13 +115,40 @@ describe("local MCP server", () => {
         size: 10,
         mtimeMs: 1,
       }),
-      createNote: async (input) =>
+      readRawFile: async (input: ServiceInput<"readRawFile">) => ({
+        ok: true,
+        path: input.path,
+        filePath: fixturePath,
+        size: 8,
+        mtimeMs: 2,
+        artifact: {
+          kind: "attachment",
+          contentType: "image/png",
+          editable: false,
+          preview: "image",
+        },
+      }),
+      writeRawFile: async (input: ServiceInput<"writeRawFile">) =>
+        recordActor(mutationActors, input.actor, {
+          ok: true,
+          path: input.path,
+          size: input.bytes.byteLength,
+          mtimeMs: 3,
+          artifact: {
+            kind: "attachment" as const,
+            contentType: "image/png",
+            editable: false,
+            preview: "image" as const,
+          },
+          audit: audit(input.actor, "create"),
+        }),
+      createNote: async (input: ServiceInput<"createNote">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
           audit: audit(input.actor, "create"),
         }),
-      editNote: async (input) =>
+      editNote: async (input: ServiceInput<"editNote">) =>
         recordActor(
           mutationActors,
           input.actor,
@@ -113,7 +168,7 @@ describe("local MCP server", () => {
                 audit: audit(input.actor, "splice"),
               },
         ),
-      appendNote: async (input) =>
+      appendNote: async (input: ServiceInput<"appendNote">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
@@ -121,7 +176,7 @@ describe("local MCP server", () => {
           baseline: "b3",
           audit: audit(input.actor, "append"),
         }),
-      prependNote: async (input) =>
+      prependNote: async (input: ServiceInput<"prependNote">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
@@ -129,14 +184,14 @@ describe("local MCP server", () => {
           baseline: "b4",
           audit: audit(input.actor, "prepend"),
         }),
-      deleteNote: async (input) =>
+      deleteNote: async (input: ServiceInput<"deleteNote">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
           permanent: input.permanent,
           audit: audit(input.actor, "delete"),
         }),
-      moveNote: async (input) =>
+      moveNote: async (input: ServiceInput<"moveNote">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           fromPath: input.fromPath,
@@ -144,13 +199,13 @@ describe("local MCP server", () => {
           kind: "file",
           audit: audit(input.actor, "move"),
         }),
-      createFolder: async (input) =>
+      createFolder: async (input: ServiceInput<"createFolder">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
           audit: audit(input.actor, "mkdir"),
         }),
-      deleteFolder: async (input) =>
+      deleteFolder: async (input: ServiceInput<"deleteFolder">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           path: input.path,
@@ -158,7 +213,7 @@ describe("local MCP server", () => {
           liveDeleted: [],
           audit: audit(input.actor, "delete"),
         }),
-      moveFolder: async (input) =>
+      moveFolder: async (input: ServiceInput<"moveFolder">) =>
         recordActor(mutationActors, input.actor, {
           ok: true,
           fromPath: input.fromPath,
@@ -202,14 +257,17 @@ describe("local MCP server", () => {
       "delete_note",
       "edit_note",
       "get_folder_metadata",
+      "list_attachments",
       "list_files",
       "list_vaults",
       "move_folder",
       "move_note",
       "prepend_note",
+      "read_attachment",
       "read_note",
       "search",
       "set_folder_metadata",
+      "upload_attachment",
       "vault_info",
     ]);
 
@@ -244,6 +302,12 @@ describe("local MCP server", () => {
       entries: [{ path: "notes", metadata: { color: CORAL } }],
     });
     expect(
+      await toolJson(client, "list_attachments", { vaultId: V }),
+    ).toMatchObject({
+      ok: true,
+      attachments: [{ path: "assets/pixel.png", preview: "image" }],
+    });
+    expect(
       await toolJson(client, "get_folder_metadata", {
         vaultId: V,
         path: "notes",
@@ -259,6 +323,19 @@ describe("local MCP server", () => {
     expect(
       await toolJson(client, "read_note", { vaultId: V, path: "note.md" }),
     ).toMatchObject({ ok: true, baseline: "b1" });
+    expect(
+      await toolJson(client, "read_attachment", {
+        vaultId: V,
+        path: "assets/pixel.png",
+      }),
+    ).toMatchObject({ ok: true, path: "assets/pixel.png", preview: "image" });
+    expect(
+      await toolJson(client, "upload_attachment", {
+        vaultId: V,
+        path: "assets/agent.png",
+        content_base64: Buffer.from("tiny").toString("base64"),
+      }),
+    ).toMatchObject({ ok: true, path: "assets/agent.png", size: 4 });
     expect(
       await toolJson(client, "create_note", {
         vaultId: V,
@@ -358,7 +435,7 @@ describe("local MCP server", () => {
       'edit_note rejected: {"ok":false,"error":"stale_doc","message":"document changed since the provided baseline","current_content":"alpha beta","baseline":"fresh"}',
     );
 
-    expect(mutationActors).toHaveLength(11);
+    expect(mutationActors).toHaveLength(12);
     expect(
       mutationActors.every(
         (actor) =>
@@ -457,7 +534,17 @@ function recordActor<T extends ServiceResult>(
   return result;
 }
 
-function audit(actor: VaultActor, operation: string) {
+type AuditOperation =
+  | "create"
+  | "write"
+  | "mkdir"
+  | "delete"
+  | "move"
+  | "splice"
+  | "append"
+  | "prepend";
+
+function audit(actor: VaultActor, operation: AuditOperation) {
   return {
     id: `${operation}-1`,
     ts: "2026-06-11T00:00:00.000Z",
@@ -471,9 +558,36 @@ function audit(actor: VaultActor, operation: string) {
 
 function emptyService(): LocalMcpVaultService {
   const ok = async (): Promise<ServiceResult> => ({ ok: true });
+  const actor: VaultActor = { kind: "system" };
   return {
     vaultInfo: ok,
     listFiles: ok,
+    readRawFile: async (input) => ({
+      ok: true,
+      path: input.path,
+      filePath: fileURLToPath(new URL("./server.test.ts", import.meta.url)),
+      size: 1,
+      mtimeMs: 1,
+      artifact: {
+        kind: "attachment",
+        contentType: "application/octet-stream",
+        editable: false,
+        preview: "download",
+      },
+    }),
+    writeRawFile: async (input) => ({
+      ok: true,
+      path: input.path,
+      size: input.bytes.byteLength,
+      mtimeMs: 1,
+      artifact: {
+        kind: "attachment",
+        contentType: "application/octet-stream",
+        editable: false,
+        preview: "download",
+      },
+      audit: audit(actor, "write"),
+    }),
     readNote: ok,
     createNote: ok,
     listFolderMetadata: ok,
