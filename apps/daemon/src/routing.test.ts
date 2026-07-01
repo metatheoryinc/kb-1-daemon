@@ -616,25 +616,26 @@ describe("daemon routing", () => {
 
     const history = await app.request(`${filePath("notes/attributed.md")}/history`);
     expect(history.status).toBe(200);
-    await expect(history.json()).resolves.toMatchObject({
+    const historyBody = await history.json();
+    expect(historyBody).toMatchObject({
       ok: true,
       hasMore: false,
       entries: [
         {
+          pending: true,
           operation: "create",
           path: "notes/attributed.md",
           actor: suppliedActor,
+          contributors: [suppliedActor],
           size: 11,
         },
       ],
     });
-    const rawHistory = await readRawFileHistory(vaultRoot);
-    expect(rawHistory).toContain("Ada Lovelace");
-    expect(rawHistory).not.toContain("\n    content:");
+    expect(JSON.stringify(historyBody)).not.toContain("attributed\\n");
 
     const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
     expect(historyAgain.status).toBe(200);
-    await expect(readRawFileHistory(vaultRoot)).resolves.toBe(rawHistory);
+    await expect(historyAgain.json()).resolves.toEqual(historyBody);
 
     const moved = await app.request(`${filePath("notes/attributed.md")}/move`, {
       method: "POST",
@@ -2515,10 +2516,6 @@ async function readAuditRows(
 
 async function readRawFolderMetadata(root: string): Promise<string> {
   return readFile(join(root, ".kb2/folders.yml"), "utf8");
-}
-
-async function readRawFileHistory(root: string): Promise<string> {
-  return readFile(join(root, ".kb2/file-history.yml"), "utf8");
 }
 
 async function writeFileWithParents(

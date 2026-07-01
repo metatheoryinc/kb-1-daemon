@@ -13,6 +13,7 @@ import {
   deleteVaultFile,
   deleteVaultFolder,
   emitVaultAudit,
+  flushFileHistory,
   historyOperationFromAudit,
   getFolderMetadata as getVaultFolderMetadata,
   getVaultInfo,
@@ -21,6 +22,7 @@ import {
   listVaultTree,
   makeVaultFolder,
   moveFileHistory,
+  moveFolderHistory,
   moveVaultPath,
   onVaultAudit,
   prependContent,
@@ -272,6 +274,16 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       console.warn('KB-2 failed to record file history for service write.', error);
     }
   };
+  const flushPendingHistory = async (paths?: string[]): Promise<void> => {
+    try {
+      const result = await flushFileHistory(options.vaultRoot, paths === undefined ? {} : { paths });
+      if (!result.ok) {
+        throw new Error(`Failed to flush file history: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to flush file history.', error);
+    }
+  };
   const recordPersistedSessionHistory = async (event: DocumentSessionEvent): Promise<void> => {
     const actor = vaultActorFromDocumentAttribution(event.attribution);
     const read = await readVaultFile(ctx(), event.path);
@@ -291,12 +303,31 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         toPath: moved.toPath,
         actor: moved.audit.actor,
         content: read.value.content,
+        coalesceWindowMs: options.historyCoalesceWindowMs,
       });
       if (!result.ok) {
         throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
       }
     } catch (error: unknown) {
       console.warn('KB-2 failed to carry file history after note move.', error);
+    }
+  };
+  const carryHistoryAfterFolderMove = async (moved: {
+    fromPath: string;
+    toPath: string;
+    audit: AuditEntry;
+  }): Promise<void> => {
+    try {
+      const result = await moveFolderHistory(options.vaultRoot, {
+        fromPath: moved.fromPath,
+        toPath: moved.toPath,
+        actor: moved.audit.actor,
+      });
+      if (!result.ok) {
+        throw new Error(`Failed to move folder history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to carry file history after folder move.', error);
     }
   };
 
@@ -313,6 +344,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     async flushDirtySessions() {
       const result = await mapWriteFailure(() => options.documentSessions.flushDirtySessions());
       if (!result.ok) return result;
+      await flushPendingHistory();
       return {
         ok: true,
         flushed: result.value.flushed,
@@ -371,6 +403,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async listNoteHistory(input) {
+      const read = await readVaultFile(ctx(), input.path);
+      if (!read.ok && read.error === 'not_found') {
+        return { ok: true, entries: [], hasMore: false };
+      }
       return serviceResult(await listFileHistory(options.vaultRoot, input));
     },
 
@@ -538,6 +574,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     async moveNote(input) {
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      await flushPendingHistory([input.fromPath]);
       const moveOnDisk = async () => {
         moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
           kind: 'file',
@@ -583,6 +620,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     async moveFolder(input) {
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      await flushPendingHistory();
       const moveOnDisk = async () => {
         moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
           kind: 'folder',
@@ -592,6 +630,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
+      await carryHistoryAfterFolderMove(moved!);
       return { ok: true, ...moved!, liveMoved: movedLive.value };
     },
 

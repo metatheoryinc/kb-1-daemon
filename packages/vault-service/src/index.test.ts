@@ -157,6 +157,16 @@ describe("vault service failure mapping", () => {
     await expect(
       readFile(join(root, "moved-folder", "child.md"), "utf8"),
     ).resolves.toBe("child\n");
+    await expect(service.listNoteHistory({ path: "moved-folder/child.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "move",
+          actor: { kind: "user" },
+          contributors: [{ kind: "user" }],
+        },
+      ],
+    });
     await expect(
       service.deleteFolder({
         path: "moved-folder",
@@ -225,6 +235,7 @@ describe("vault service failure mapping", () => {
       ok: true,
       entries: [
         {
+          pending: true,
           operation: "create",
           actor: marcus,
           size: 4,
@@ -232,12 +243,14 @@ describe("vault service failure mapping", () => {
       ],
       hasMore: false,
     });
-    const rawAfterRead = await readRawFileHistory(root);
     await expect(service.readNote({ path: "notes/history.md" })).resolves.toMatchObject({
       ok: true,
       content: "two\n",
     });
-    await expect(readRawFileHistory(root)).resolves.toBe(rawAfterRead);
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [{ pending: true, operation: "create", actor: marcus, size: 4 }],
+    });
 
     await expect(
       service.appendNote({
@@ -254,17 +267,29 @@ describe("vault service failure mapping", () => {
       ok: true,
       entries: [
         {
-          operation: "update",
-          actor: olivia,
-          size: 10,
-        },
-        {
+          pending: true,
           operation: "create",
-          actor: marcus,
-          size: 4,
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 10,
         },
       ],
     });
+    await expect(service.flushDirtySessions()).resolves.toMatchObject({ ok: true });
+    const flushed = await service.listNoteHistory({ path: "notes/history.md" });
+    expect(flushed).toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "create",
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 10,
+        },
+      ],
+    });
+    if (!flushed.ok) throw new Error("expected flushed history");
+    expect(flushed.entries[0]).not.toHaveProperty("pending");
   });
 
   it("carries note history across cold and live note moves", async () => {
@@ -327,15 +352,10 @@ describe("vault service failure mapping", () => {
         },
         {
           path: "archive/history.md",
-          operation: "update",
-          actor: olivia,
-          size: 8,
-        },
-        {
-          path: "archive/history.md",
           operation: "create",
-          actor: marcus,
-          size: 4,
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 8,
         },
       ],
       hasMore: false,
@@ -387,7 +407,7 @@ describe("vault service failure mapping", () => {
     });
   });
 
-  it("keeps service writes best-effort when file history metadata is malformed", async () => {
+  it("keeps service writes best-effort when retired file-history metadata is malformed", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const service = createVaultService({
       vaultRoot: root,
@@ -451,10 +471,16 @@ describe("vault service failure mapping", () => {
         }),
       ).resolves.toMatchObject({ ok: true, content: "zero\nthree\nfour\n" });
       await expect(service.listNoteHistory({ path: "notes/corrupt-history.md" })).resolves.toMatchObject({
-        ok: false,
-        error: "metadata_parse_failed",
+        ok: true,
+        entries: [
+          {
+            pending: true,
+            operation: "create",
+            actor,
+            size: 16,
+          },
+        ],
       });
-      expect(warn).toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }
@@ -490,20 +516,20 @@ describe("vault service failure mapping", () => {
 
     await waitUntil(async () => {
       const history = await service.listNoteHistory({ path: "notes/socket.md" });
-      return history.ok && history.entries.length === 2 && history.entries[0]?.actor.id === "olivia";
-    }, () => "expected Yjs-attributed history entry to be recorded");
+      const contributors = history.ok ? history.entries[0]?.contributors ?? [] : [];
+      return history.ok &&
+        history.entries.length === 1 &&
+        contributors.some((actor) => actor.id === "olivia");
+    }, () => "expected Yjs-attributed history contributor to be recorded");
     await expect(service.listNoteHistory({ path: "notes/socket.md" })).resolves.toMatchObject({
       ok: true,
       entries: [
         {
-          operation: "update",
-          actor: olivia,
-          size: 7,
-        },
-        {
+          pending: true,
           operation: "create",
-          actor: marcus,
-          size: 5,
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 7,
         },
       ],
     });
