@@ -203,6 +203,8 @@ function createRelayLifecycleController(
     relayUrl: new URL(config.relay.relayUrl),
     daemonUrl,
     token: config.relay.token,
+    daemonVersion: config.relay.daemonVersion,
+    daemonBuild: config.relay.daemonBuild,
     logger: daemonRelayLogger,
   });
   let unsubscribeVaultEvents: (() => void) | undefined;

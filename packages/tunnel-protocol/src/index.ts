@@ -351,6 +351,8 @@ export type TunnelControlClientHello = {
   type: "control.hello";
   version: TunnelProtocolVersion;
   token: string;
+  daemonVersion?: string;
+  daemonBuild?: string;
   features?: readonly TunnelFeature[];
 };
 

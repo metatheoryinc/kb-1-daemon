@@ -101,10 +101,14 @@ describe('daemon config', () => {
   it('normalizes relay URL when supplied', () => {
     expect(resolveRelayConfig({
       KB2_RELAY_URL: ' http://127.0.0.1:9920/t/dev1 ',
-      KB2_RELAY_TOKEN: ' test-token '
+      KB2_RELAY_TOKEN: ' test-token ',
+      KB2_DAEMON_VERSION: ' 0.1.0 ',
+      KB2_DAEMON_BUILD: ' registry.fly.io/kb1@sha256:abc123 '
     })).toEqual({
       relayUrl: 'http://127.0.0.1:9920/t/dev1',
-      token: 'test-token'
+      token: 'test-token',
+      daemonVersion: '0.1.0',
+      daemonBuild: 'registry.fly.io/kb1@sha256:abc123'
     });
   });
 

@@ -128,6 +128,13 @@ export function createApp(options: CreateAppOptions): Hono {
       return context.json({ ok: true, vaults: registry.list() });
     });
 
+    api.get('/storage', async (context) => {
+      return context.json({
+        ok: true,
+        usedBytes: await registry.storageUsageBytes()
+      });
+    });
+
     api.post('/vaults', async (context) => {
       const body = await readJsonObject(context.req.raw);
       if (!body.ok) return mapServiceResult(context, body);
