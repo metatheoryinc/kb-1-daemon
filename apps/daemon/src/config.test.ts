@@ -4,7 +4,9 @@ import {
   DEFAULT_HOST,
   DEFAULT_PORT,
   createDaemonConfig,
+  DEFAULT_HISTORY_COALESCE_WINDOW_MS,
   resolveActorDefault,
+  resolveHistoryCoalesceWindowMs,
   resolveKb2Home,
   resolvePort,
   resolveRelayConfig,
@@ -56,6 +58,7 @@ describe('daemon config', () => {
         token: 'test-token'
       },
       actorDefault: 'user',
+      historyCoalesceWindowMs: DEFAULT_HISTORY_COALESCE_WINDOW_MS,
       kb2Home,
       daemonHome: join(kb2Home, 'daemon'),
       vaultsHome: join(kb2Home, 'vaults'),
@@ -72,6 +75,7 @@ describe('daemon config', () => {
     expect(config.host).toBe(DEFAULT_HOST);
     expect(config.port).toBe(DEFAULT_PORT);
     expect(config.actorDefault).toBe('user');
+    expect(config.historyCoalesceWindowMs).toBe(DEFAULT_HISTORY_COALESCE_WINDOW_MS);
   });
 
   it('rejects invalid ports', () => {
@@ -97,10 +101,14 @@ describe('daemon config', () => {
   it('normalizes relay URL when supplied', () => {
     expect(resolveRelayConfig({
       KB2_RELAY_URL: ' http://127.0.0.1:9920/t/dev1 ',
-      KB2_RELAY_TOKEN: ' test-token '
+      KB2_RELAY_TOKEN: ' test-token ',
+      KB2_DAEMON_VERSION: ' 0.1.0 ',
+      KB2_DAEMON_BUILD: ' registry.fly.io/kb1@sha256:abc123 '
     })).toEqual({
       relayUrl: 'http://127.0.0.1:9920/t/dev1',
-      token: 'test-token'
+      token: 'test-token',
+      daemonVersion: '0.1.0',
+      daemonBuild: 'registry.fly.io/kb1@sha256:abc123'
     });
   });
 
@@ -109,5 +117,13 @@ describe('daemon config', () => {
     expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: ' unknown ' })).toBe('unknown');
     expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: 'user' })).toBe('user');
     expect(() => resolveActorDefault({ KB2_ACTOR_DEFAULT: 'system' })).toThrow(/KB2_ACTOR_DEFAULT/);
+  });
+
+  it('resolves the history coalescing window', () => {
+    expect(resolveHistoryCoalesceWindowMs({})).toBe(DEFAULT_HISTORY_COALESCE_WINDOW_MS);
+    expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: ' 0 ' })).toBe(0);
+    expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: '120000' })).toBe(120000);
+    expect(() => resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: '-1' })).toThrow(/KB2_HISTORY_COALESCE_WINDOW_MS/);
+    expect(() => resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: 'five' })).toThrow(/KB2_HISTORY_COALESCE_WINDOW_MS/);
   });
 });

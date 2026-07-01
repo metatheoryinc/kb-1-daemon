@@ -32,6 +32,7 @@ export type { AuditEntry, VaultActor };
 export type VaultErrorCode =
   | "invalid_path"
   | "invalid_metadata"
+  | "not_editable"
   | "not_found"
   | "already_exists"
   | "path_collision"
@@ -53,6 +54,7 @@ export interface VaultEntry {
   kind: "file" | "folder";
   size: number;
   mtimeMs: number;
+  artifact?: ArtifactInfo;
   metadata?: FolderMetadata;
 }
 
@@ -73,6 +75,40 @@ export interface WriteFileValue {
   path: string;
   size: number;
   mtimeMs: number;
+  audit: AuditEntry;
+}
+
+export type ArtifactKind = "text" | "attachment";
+
+export type ArtifactPreview =
+  | "markdown"
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "pdf"
+  | "download";
+
+export interface ArtifactInfo {
+  kind: ArtifactKind;
+  contentType: string;
+  editable: boolean;
+  preview: ArtifactPreview;
+}
+
+export interface ReadRawFileValue {
+  path: string;
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  artifact: ArtifactInfo;
+}
+
+export interface WriteRawFileValue {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  artifact: ArtifactInfo;
   audit: AuditEntry;
 }
 
@@ -177,6 +213,104 @@ function isHiddenMetadataPath(relPath: string): boolean {
   return relPath === ".kb2" || relPath.startsWith(".kb2/");
 }
 
+const TEXT_ARTIFACT_EXTENSIONS: Record<string, { contentType: string; preview: ArtifactPreview }> = {
+  ".md": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
+  ".markdown": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
+  ".mdown": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
+  ".mkdn": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
+  ".txt": { contentType: "text/plain; charset=utf-8", preview: "text" },
+  ".log": { contentType: "text/plain; charset=utf-8", preview: "text" },
+  ".csv": { contentType: "text/csv; charset=utf-8", preview: "text" },
+  ".tsv": { contentType: "text/tab-separated-values; charset=utf-8", preview: "text" },
+  ".html": { contentType: "text/html; charset=utf-8", preview: "text" },
+  ".htm": { contentType: "text/html; charset=utf-8", preview: "text" },
+  ".css": { contentType: "text/css; charset=utf-8", preview: "text" },
+  ".js": { contentType: "text/javascript; charset=utf-8", preview: "text" },
+  ".jsx": { contentType: "text/javascript; charset=utf-8", preview: "text" },
+  ".ts": { contentType: "text/typescript; charset=utf-8", preview: "text" },
+  ".tsx": { contentType: "text/typescript; charset=utf-8", preview: "text" },
+  ".json": { contentType: "application/json; charset=utf-8", preview: "text" },
+  ".yml": { contentType: "application/yaml; charset=utf-8", preview: "text" },
+  ".yaml": { contentType: "application/yaml; charset=utf-8", preview: "text" },
+  ".xml": { contentType: "application/xml; charset=utf-8", preview: "text" },
+  ".toml": { contentType: "application/toml; charset=utf-8", preview: "text" },
+  ".ini": { contentType: "text/plain; charset=utf-8", preview: "text" },
+  ".sh": { contentType: "text/x-shellscript; charset=utf-8", preview: "text" },
+  ".py": { contentType: "text/x-python; charset=utf-8", preview: "text" },
+  ".rb": { contentType: "text/x-ruby; charset=utf-8", preview: "text" },
+  ".go": { contentType: "text/x-go; charset=utf-8", preview: "text" },
+  ".rs": { contentType: "text/x-rust; charset=utf-8", preview: "text" },
+  ".java": { contentType: "text/x-java-source; charset=utf-8", preview: "text" },
+  ".c": { contentType: "text/x-c; charset=utf-8", preview: "text" },
+  ".cpp": { contentType: "text/x-c++; charset=utf-8", preview: "text" },
+  ".h": { contentType: "text/x-c; charset=utf-8", preview: "text" },
+  ".hpp": { contentType: "text/x-c++; charset=utf-8", preview: "text" },
+};
+
+const ATTACHMENT_ARTIFACT_EXTENSIONS: Record<string, { contentType: string; preview: ArtifactPreview }> = {
+  ".png": { contentType: "image/png", preview: "image" },
+  ".jpg": { contentType: "image/jpeg", preview: "image" },
+  ".jpeg": { contentType: "image/jpeg", preview: "image" },
+  ".gif": { contentType: "image/gif", preview: "image" },
+  ".webp": { contentType: "image/webp", preview: "image" },
+  ".avif": { contentType: "image/avif", preview: "image" },
+  ".apng": { contentType: "image/apng", preview: "image" },
+  ".svg": { contentType: "application/octet-stream", preview: "download" },
+  ".mp3": { contentType: "audio/mpeg", preview: "audio" },
+  ".wav": { contentType: "audio/wav", preview: "audio" },
+  ".ogg": { contentType: "audio/ogg", preview: "audio" },
+  ".flac": { contentType: "audio/flac", preview: "audio" },
+  ".m4a": { contentType: "audio/mp4", preview: "audio" },
+  ".aac": { contentType: "audio/aac", preview: "audio" },
+  ".mp4": { contentType: "video/mp4", preview: "video" },
+  ".webm": { contentType: "video/webm", preview: "video" },
+  ".mov": { contentType: "video/quicktime", preview: "video" },
+  ".m4v": { contentType: "video/x-m4v", preview: "video" },
+  ".pdf": { contentType: "application/pdf", preview: "pdf" },
+  ".zip": { contentType: "application/zip", preview: "download" },
+  ".gz": { contentType: "application/gzip", preview: "download" },
+  ".tgz": { contentType: "application/gzip", preview: "download" },
+  ".tar": { contentType: "application/x-tar", preview: "download" },
+};
+
+export function classifyArtifactPath(relPath: string): ArtifactInfo {
+  const extension = path.posix.extname(relPath).toLowerCase();
+  const text = TEXT_ARTIFACT_EXTENSIONS[extension];
+  if (text) {
+    return {
+      kind: "text",
+      contentType: text.contentType,
+      editable: true,
+      preview: text.preview,
+    };
+  }
+
+  const attachment = ATTACHMENT_ARTIFACT_EXTENSIONS[extension];
+  if (attachment) {
+    return {
+      kind: "attachment",
+      contentType: attachment.contentType,
+      editable: false,
+      preview: attachment.preview,
+    };
+  }
+
+  return {
+    kind: "attachment",
+    contentType: "application/octet-stream",
+    editable: false,
+    preview: "download",
+  };
+}
+
+function ensureEditableArtifact(relPath: string): VaultResult<ArtifactInfo> {
+  const artifact = classifyArtifactPath(relPath);
+  if (!artifact.editable) {
+    return fail("not_editable", "file is not an editable text artifact");
+  }
+  return { ok: true, value: artifact };
+}
+
 async function walkEntries(
   root: string,
   relDir: string,
@@ -205,6 +339,7 @@ async function walkEntries(
         kind: "file",
         size: s.size,
         mtimeMs: s.mtimeMs,
+        artifact: classifyArtifactPath(rel),
       });
       if (entries.length >= cap) throw new EntryCapExceededError();
     }
@@ -597,6 +732,8 @@ export async function readVaultFile(
 ): Promise<VaultResult<ReadFileValue>> {
   try {
     const rel = validateVaultPath(filePath, "file");
+    const artifact = ensureEditableArtifact(rel);
+    if (!artifact.ok) return artifact;
     const abs = vaultPath(ctx.root, rel);
     const s = await statOrNull(abs);
     if (!s || !s.isFile()) return fail("not_found", "file not found");
@@ -624,6 +761,8 @@ export async function writeVaultFile(
 ): Promise<VaultResult<WriteFileValue>> {
   try {
     const rel = validateVaultPath(input.path, "file");
+    const artifact = ensureEditableArtifact(rel);
+    if (!artifact.ok) return artifact;
     const abs = vaultPath(ctx.root, rel);
     const existsAlready = await exists(abs);
     if (existsAlready && input.overwrite !== true) {
@@ -643,6 +782,77 @@ export async function writeVaultFile(
     return {
       ok: true,
       value: { path: rel, size: s.size, mtimeMs: s.mtimeMs, audit },
+    };
+  } catch (err) {
+    const pathResult = classifyPathError(err);
+    /* v8 ignore next -- Defensive false branch rethrows unexpected mkdir errors; invalid-path classification is covered. */
+    if (pathResult) return pathResult;
+    const collisionResult = classifyFsCollision(err);
+    if (collisionResult) return collisionResult;
+    /* v8 ignore next -- Defensive rethrow for unexpected write failures outside classified path/collision errors. */
+    throw err;
+  }
+}
+
+export async function readVaultRawFile(
+  ctx: VaultContext,
+  filePath: string,
+): Promise<VaultResult<ReadRawFileValue>> {
+  try {
+    const rel = validateVaultPath(filePath, "artifact");
+    const abs = vaultPath(ctx.root, rel);
+    const s = await statOrNull(abs);
+    if (!s || !s.isFile()) return fail("not_found", "file not found");
+    return {
+      ok: true,
+      value: {
+        path: rel,
+        filePath: abs,
+        size: s.size,
+        mtimeMs: s.mtimeMs,
+        artifact: classifyArtifactPath(rel),
+      },
+    };
+  } catch (err) {
+    const pathResult = classifyPathError(err);
+    /* v8 ignore next -- Defensive false branch rethrows unexpected read errors; invalid-path classification is covered. */
+    if (pathResult) return pathResult;
+    /* v8 ignore next -- Defensive rethrow for unexpected read failures outside classified path/not-found errors. */
+    throw err;
+  }
+}
+
+export async function writeVaultRawFile(
+  ctx: VaultContext,
+  input: { path: string; bytes: Uint8Array; overwrite?: boolean },
+): Promise<VaultResult<WriteRawFileValue>> {
+  try {
+    const rel = validateVaultPath(input.path, "artifact");
+    const abs = vaultPath(ctx.root, rel);
+    const existsAlready = await exists(abs);
+    if (existsAlready && input.overwrite !== true) {
+      return fail("already_exists", "file already exists");
+    }
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, input.bytes);
+    const s = await stat(abs);
+    const audit = await emitVaultAudit({
+      root: ctx.root,
+      actor: ctx.actor,
+      operation: existsAlready ? "write" : "create",
+      entityKind: "file",
+      path: rel,
+      summary: existsAlready ? `Wrote ${rel}` : `Created ${rel}`,
+    });
+    return {
+      ok: true,
+      value: {
+        path: rel,
+        size: s.size,
+        mtimeMs: s.mtimeMs,
+        artifact: classifyArtifactPath(rel),
+        audit,
+      },
     };
   } catch (err) {
     const pathResult = classifyPathError(err);

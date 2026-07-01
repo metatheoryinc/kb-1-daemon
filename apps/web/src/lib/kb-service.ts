@@ -22,10 +22,29 @@ export interface VaultSummary {
   metadata?: { color?: string };
 }
 
+export type ArtifactKind = "text" | "attachment";
+
+export type ArtifactPreview =
+  | "markdown"
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "pdf"
+  | "download";
+
+export interface ArtifactInfo {
+  kind: ArtifactKind;
+  contentType: string;
+  editable: boolean;
+  preview: ArtifactPreview;
+}
+
 export interface TreeEntry {
   path: string;
   kind: "file" | "folder";
   metadata?: { color?: string };
+  artifact?: ArtifactInfo;
 }
 
 export interface VaultInfo {
@@ -42,6 +61,40 @@ export interface SearchHit {
     before?: string[];
     after?: string[];
   };
+}
+
+export type FileHistoryOperation = "create" | "update" | "move" | "rename";
+
+export type FileHistoryActor = {
+  kind: string;
+  id?: string;
+  name?: string;
+  client?: string;
+  avatarUrl?: string | null;
+};
+
+export interface FileHistoryEntry {
+  id: string;
+  path: string;
+  operation: FileHistoryOperation;
+  actor: FileHistoryActor;
+  integrationId?: string;
+  createdAt: string;
+  updatedAt: string;
+  content?: string;
+  size: number;
+  contentHash: string;
+}
+
+export interface FileHistoryPage {
+  entries: FileHistoryEntry[];
+  hasMore: boolean;
+}
+
+export interface ListNoteHistoryOptions {
+  before?: string;
+  beforeId?: string;
+  limit?: number;
 }
 
 /**
@@ -85,6 +138,8 @@ function messageForError(
       return "That item no longer exists.";
     case "invalid_path":
       return "That name contains characters that are not allowed.";
+    case "not_editable":
+      return "That file is not editable as a text document.";
     case "invalid_metadata":
       return "That folder customization is not valid.";
     case "stale_doc":
@@ -129,6 +184,90 @@ async function request<T extends { ok: true } = { ok: true }>(
 /** Build the scoped data-route prefix for a vault. */
 function vaultBase(vaultId: string): string {
   return `/api/vaults/${encodeURIComponent(vaultId)}`;
+}
+
+function noteHistoryQuery(options: ListNoteHistoryOptions): string {
+  const qs = new URLSearchParams();
+  if (options.before) qs.set("before", options.before);
+  if (options.beforeId) qs.set("beforeId", options.beforeId);
+  if (options.limit !== undefined) qs.set("limit", String(options.limit));
+  const query = qs.toString();
+  return query.length > 0 ? `?${query}` : "";
+}
+
+function rawOverwriteQuery(overwrite: boolean): string {
+  return overwrite ? "?overwrite=true" : "";
+}
+
+type RawFileBody = Blob | ArrayBuffer | Uint8Array;
+
+const IMAGE_TYPE_EXTENSIONS: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+
+function isBlob(body: RawFileBody): body is Blob {
+  return typeof Blob !== "undefined" && body instanceof Blob;
+}
+
+function rawRequestBody(body: RawFileBody): BodyInit {
+  if (isBlob(body)) return body;
+  if (body instanceof ArrayBuffer) return body;
+  const copy = new Uint8Array(body.byteLength);
+  copy.set(body);
+  return copy.buffer;
+}
+
+function parentOf(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index === -1 ? "" : path.slice(0, index);
+}
+
+function joinPath(parent: string, child: string): string {
+  return parent ? `${parent}/${child}` : child;
+}
+
+function extensionForFile(file: File): string {
+  const normalizedType = file.type.split(";")[0]?.trim().toLowerCase() ?? "";
+  return IMAGE_TYPE_EXTENSIONS[normalizedType] ?? "";
+}
+
+function uploadFilename(file: File): string {
+  const fallbackExtension = extensionForFile(file) || ".bin";
+  const rawName = file.name.trim() || `image${fallbackExtension}`;
+  const basename = rawName.split(/[\\/]/).filter(Boolean).at(-1) ?? rawName;
+  const lastDot = basename.lastIndexOf(".");
+  const stem = sanitizeFilenamePart(lastDot > 0 ? basename.slice(0, lastDot) : basename);
+  const rawExtension = lastDot > 0 ? basename.slice(lastDot).toLowerCase() : "";
+  const extension = rawExtension || fallbackExtension;
+  return `${stem}${extension}`;
+}
+
+function sanitizeFilenamePart(input: string): string {
+  const cleaned = input
+    .toLowerCase()
+    .replace(/[\u0000-\u001f\u007f/\\]/g, "-")
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .replace(/^\.+$/, "")
+    .trim();
+  if (cleaned.length === 0 || cleaned === ".kb2") return "image";
+  return cleaned;
+}
+
+function collisionSafeName(filename: string, index: number): string {
+  if (index === 1) return filename;
+  const dot = filename.lastIndexOf(".");
+  if (dot <= 0) return `${filename}-${index}`;
+  return `${filename.slice(0, dot)}-${index}${filename.slice(dot)}`;
+}
+
+function markdownPathForUpload(documentPath: string, filename: string): string {
+  void documentPath;
+  return filename;
 }
 
 export const kbService = {
@@ -217,6 +356,59 @@ export const kbService = {
       `${vaultBase(vaultId)}/tree`,
     );
     return result.entries;
+  },
+
+  rawSrc(vaultId: string, path: string): string {
+    return `${vaultBase(vaultId)}/raw/${encodeVaultPath(path)}`;
+  },
+
+  async writeRawFile(
+    vaultId: string,
+    path: string,
+    body: RawFileBody,
+    overwrite = false,
+  ): Promise<void> {
+    await request(
+      `${vaultBase(vaultId)}/raw/${encodeVaultPath(path)}${rawOverwriteQuery(overwrite)}`,
+      {
+        method: "PUT",
+        body: rawRequestBody(body),
+      },
+    );
+  },
+
+  async uploadAttachment(
+    vaultId: string,
+    documentPath: string,
+    file: File,
+  ): Promise<{ path: string; vaultPath: string }> {
+    const folder = parentOf(documentPath);
+    const filename = uploadFilename(file);
+    const existing = new Set((await kbService.tree(vaultId)).map((entry) => entry.path));
+
+    for (let index = 1; index <= 100; index += 1) {
+      const candidateName = collisionSafeName(filename, index);
+      const candidatePath = joinPath(folder, candidateName);
+      if (existing.has(candidatePath)) continue;
+      await kbService.writeRawFile(vaultId, candidatePath, file, false);
+      return {
+        path: markdownPathForUpload(documentPath, candidateName),
+        vaultPath: candidatePath,
+      };
+    }
+
+    throw new Error("Could not find an available attachment filename.");
+  },
+
+  async listNoteHistory(
+    vaultId: string,
+    path: string,
+    options: ListNoteHistoryOptions = {},
+  ): Promise<FileHistoryPage> {
+    const result = await request<{ ok: true } & FileHistoryPage>(
+      `${vaultBase(vaultId)}/files/${encodeVaultPath(path)}/history${noteHistoryQuery(options)}`,
+    );
+    return { entries: result.entries, hasMore: result.hasMore };
   },
 
   async search(

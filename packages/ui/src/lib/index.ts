@@ -45,6 +45,8 @@ export type {
   HealthResponse,
 } from "./layout/LocalStatusShell.svelte";
 export { default as DocumentSaveBanner } from "./notifications/DocumentSaveBanner.svelte";
+export { default as DocumentByline } from "./local-editor/DocumentByline.svelte";
+export { default as DocumentHistoryPanel } from "./local-editor/DocumentHistoryPanel.svelte";
 export { default as DocumentHeader } from "./local-editor/DocumentHeader.svelte";
 export { default as DocumentHeaderMenu } from "./local-editor/DocumentHeaderMenu.svelte";
 export { default as FolderCanvas } from "./local-editor/FolderCanvas.svelte";

@@ -89,6 +89,9 @@ describe("daemon routing", () => {
   /** Path to a scoped file route for the lone test vault. */
   const filePath = (vaultPath: string): string =>
     `/api/vaults/${VAULT}/files/${vaultPath}`;
+  /** Path to a scoped raw-file route for the lone test vault. */
+  const rawPath = (vaultPath: string): string =>
+    `/api/vaults/${VAULT}/raw/${vaultPath}`;
   /** Path to a scoped folder route for the lone test vault. */
   const folderPath = (vaultPath?: string): string =>
     vaultPath === undefined
@@ -368,6 +371,180 @@ describe("daemon routing", () => {
     expect(audit[1]).toMatchObject({ operation: "write", path: "notes/a.md" });
   });
 
+  it("classifies copied-in text and attachment artifacts in the scoped tree route", async () => {
+    const { app, vaultRoot } = await setupScopedVault();
+    await writeFileWithParents(join(vaultRoot, "notes/a.md"), "# A\n");
+    await writeFileWithParents(join(vaultRoot, "scripts/app.ts"), "export {};\n");
+    await mkdir(join(vaultRoot, "attachments"), { recursive: true });
+    await writeFile(join(vaultRoot, "attachments/photo.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(join(vaultRoot, "attachments/icon.svg"), "<svg />");
+    await writeFile(join(vaultRoot, "attachments/blob"), new Uint8Array([1, 2, 3]));
+
+    const response = await app.request(`/api/vaults/${VAULT}/tree`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      entries: expect.arrayContaining([
+        {
+          path: "notes/a.md",
+          kind: "file",
+          size: 4,
+          mtimeMs: expect.any(Number),
+          artifact: {
+            kind: "text",
+            contentType: "text/markdown; charset=utf-8",
+            editable: true,
+            preview: "markdown",
+          },
+        },
+        {
+          path: "scripts/app.ts",
+          kind: "file",
+          size: 11,
+          mtimeMs: expect.any(Number),
+          artifact: {
+            kind: "text",
+            contentType: "text/typescript; charset=utf-8",
+            editable: true,
+            preview: "text",
+          },
+        },
+        {
+          path: "attachments/photo.png",
+          kind: "file",
+          size: 4,
+          mtimeMs: expect.any(Number),
+          artifact: {
+            kind: "attachment",
+            contentType: "image/png",
+            editable: false,
+            preview: "image",
+          },
+        },
+        {
+          path: "attachments/icon.svg",
+          kind: "file",
+          size: 7,
+          mtimeMs: expect.any(Number),
+          artifact: {
+            kind: "attachment",
+            contentType: "application/octet-stream",
+            editable: false,
+            preview: "download",
+          },
+        },
+        {
+          path: "attachments/blob",
+          kind: "file",
+          size: 3,
+          mtimeMs: expect.any(Number),
+          artifact: {
+            kind: "attachment",
+            contentType: "application/octet-stream",
+            editable: false,
+            preview: "download",
+          },
+        },
+      ]),
+    });
+  });
+
+  it("round-trips raw bytes with content headers, ETag caching, and audit rows", async () => {
+    const { app, vaultRoot } = await setupScopedVault();
+    const bytes = new Uint8Array([0, 1, 2, 255]);
+
+    const created = await app.request(rawPath("attachments/photo.png"), {
+      method: "PUT",
+      body: new Blob([bytes]),
+    });
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ok: true,
+      path: "attachments/photo.png",
+      size: 4,
+      artifact: {
+        kind: "attachment",
+        contentType: "image/png",
+        editable: false,
+        preview: "image",
+      },
+    });
+    await expect(readFile(join(vaultRoot, "attachments/photo.png"))).resolves.toEqual(Buffer.from(bytes));
+
+    const duplicate = await app.request(rawPath("attachments/photo.png"), {
+      method: "PUT",
+      body: new Blob([new Uint8Array([9])]),
+    });
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      ok: false,
+      error: "already_exists",
+    });
+
+    const read = await app.request(rawPath("attachments/photo.png"));
+    expect(read.status).toBe(200);
+    expect(read.headers.get("content-type")).toBe("image/png");
+    expect(read.headers.get("content-length")).toBe("4");
+    expect(read.headers.get("content-security-policy")).toBe("sandbox");
+    expect(read.headers.get("x-content-type-options")).toBe("nosniff");
+    const etag = read.headers.get("etag");
+    expect(etag).toMatch(/^W\/"\d+-\d+"$/);
+    expect([...new Uint8Array(await read.arrayBuffer())]).toEqual([...bytes]);
+
+    const notModified = await app.request(rawPath("attachments/photo.png"), {
+      headers: { "if-none-match": etag ?? "" },
+    });
+    expect(notModified.status).toBe(304);
+
+    const overwritten = await app.request(`${rawPath("attachments/photo.png")}?overwrite=true`, {
+      method: "PUT",
+      body: new Blob([new Uint8Array([5, 6])]),
+    });
+    expect(overwritten.status).toBe(200);
+    await expect(overwritten.json()).resolves.toMatchObject({
+      ok: true,
+      path: "attachments/photo.png",
+      size: 2,
+    });
+    await expect(readFile(join(vaultRoot, "attachments/photo.png"))).resolves.toEqual(Buffer.from([5, 6]));
+
+    const audit = await readAuditRows(vaultRoot);
+    expect(audit.map((row) => row.operation)).toEqual(["create", "write"]);
+    expect(audit.map((row) => row.path)).toEqual([
+      "attachments/photo.png",
+      "attachments/photo.png",
+    ]);
+  });
+
+  it("keeps binary attachments out of the text document route", async () => {
+    const { app } = await setupScopedVault();
+    const bytes = new Uint8Array([0, 1, 2, 255]);
+
+    const created = await app.request(rawPath("attachments/photo.png"), {
+      method: "PUT",
+      body: new Blob([bytes]),
+    });
+    expect(created.status).toBe(201);
+
+    const readAsText = await app.request(filePath("attachments/photo.png"));
+    expect(readAsText.status).toBe(415);
+    await expect(readAsText.json()).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+
+    const writeAsText = await app.request(`${filePath("attachments/photo.png")}?overwrite=true`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain" },
+      body: "not png",
+    });
+    expect(writeAsText.status).toBe(415);
+    await expect(writeAsText.json()).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+  });
+
   it("returns a clean 404 for a scoped data route addressing an unknown vault", async () => {
     const { app } = await setupScopedVault();
     const response = await app.request("/api/vaults/does-not-exist/tree");
@@ -376,6 +553,21 @@ describe("daemon routing", () => {
       ok: false,
       error: "not_found",
     });
+  });
+
+  it("reports storage bytes used by active and soft-deleted vault data", async () => {
+    const { app, vaultRoot } = await setupScopedVault();
+    await writeFile(join(vaultRoot, "active.md"), "active-bytes");
+    const trashed = join(kb2Home, VAULT_TRASH_DIRNAME, "old-vault");
+    await mkdir(trashed, { recursive: true });
+    await writeFile(join(trashed, "old.md"), "trash-bytes");
+
+    const response = await app.request("/api/storage");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok?: unknown; usedBytes?: unknown };
+    expect(body.ok).toBe(true);
+    expect(typeof body.usedBytes).toBe("number");
+    expect(body.usedBytes).toBeGreaterThanOrEqual("active-bytes".length + "trash-bytes".length);
   });
 
   it("attributes REST writes from the x-kb1-actor header in responses and audit JSONL", async () => {
@@ -413,6 +605,81 @@ describe("daemon routing", () => {
       entityKind: "file",
       path: "notes/attributed.md",
       actor: suppliedActor,
+    });
+
+    const read = await app.request(filePath("notes/attributed.md"));
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({
+      ok: true,
+      content: "attributed\n",
+    });
+
+    const history = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(history.status).toBe(200);
+    const historyBody = await history.json();
+    expect(historyBody).toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [
+        {
+          pending: true,
+          operation: "create",
+          path: "notes/attributed.md",
+          actor: suppliedActor,
+          contributors: [suppliedActor],
+          size: 11,
+        },
+      ],
+    });
+    expect(JSON.stringify(historyBody)).not.toContain("attributed\\n");
+
+    const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(historyAgain.status).toBe(200);
+    await expect(historyAgain.json()).resolves.toEqual(historyBody);
+
+    const moved = await app.request(`${filePath("notes/attributed.md")}/move`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-kb1-actor": JSON.stringify(suppliedActor),
+      },
+      body: JSON.stringify({ to: "archive/attributed.md" }),
+    });
+    expect(moved.status).toBe(200);
+    await expect(moved.json()).resolves.toMatchObject({
+      ok: true,
+      fromPath: "notes/attributed.md",
+      toPath: "archive/attributed.md",
+      audit: { actor: suppliedActor },
+    });
+
+    const oldHistory = await app.request(`${filePath("notes/attributed.md")}/history`);
+    expect(oldHistory.status).toBe(200);
+    await expect(oldHistory.json()).resolves.toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [],
+    });
+
+    const movedHistory = await app.request(`${filePath("archive/attributed.md")}/history`);
+    expect(movedHistory.status).toBe(200);
+    await expect(movedHistory.json()).resolves.toMatchObject({
+      ok: true,
+      hasMore: false,
+      entries: [
+        {
+          operation: "move",
+          path: "archive/attributed.md",
+          actor: suppliedActor,
+          size: 11,
+        },
+        {
+          operation: "create",
+          path: "archive/attributed.md",
+          actor: suppliedActor,
+          size: 11,
+        },
+      ],
     });
   });
 
@@ -464,6 +731,12 @@ describe("daemon routing", () => {
         operation: "create",
         path: "notes/defaulted.md",
         actor: expectedActor,
+      });
+      const history = await app.request(`${filePath("notes/defaulted.md")}/history`);
+      expect(history.status).toBe(200);
+      await expect(history.json()).resolves.toMatchObject({
+        ok: true,
+        entries: [{ operation: "create", actor: expectedActor }],
       });
       await registry.close();
     },

@@ -9,33 +9,48 @@ import {
   InvalidPathError,
   appendContent,
   applyAnchoredSplice,
+  classifyArtifactPath,
   deleteVaultFile,
   deleteVaultFolder,
   emitVaultAudit,
+  flushFileHistory,
+  historyOperationFromAudit,
   getFolderMetadata as getVaultFolderMetadata,
   getVaultInfo,
+  listFileHistory,
   listFolderMetadata as listVaultFolderMetadata,
   listVaultTree,
   makeVaultFolder,
+  moveFileHistory,
+  moveFolderHistory,
   moveVaultPath,
   onVaultAudit,
   prependContent,
+  readVaultRawFile,
   readVaultFile,
+  recordFileHistory,
   searchVaultFiles,
   setFolderMetadata as setVaultFolderMetadata,
   validateVaultPath,
+  writeVaultRawFile,
   writeVaultFile,
   type AnchoredSpliceRequest,
   type AuditChangeEventOptions,
   type AuditEntry,
+  type ArtifactInfo,
+  type FileHistoryEntry,
   type FolderMetadataInput,
+  type ReadRawFileValue,
   type VaultEntry,
   type VaultActor,
   type VaultErrorCode,
-  type VaultResult
+  type VaultResult,
+  type WriteRawFileValue
 } from '@kb-2/vault-core';
 
 export type { AuditEntry, VaultActor };
+export type { ArtifactInfo };
+export type { FileHistoryEntry };
 
 export type ServiceErrorCode =
   | VaultErrorCode
@@ -104,6 +119,8 @@ export interface LocalMcpVaultService {
   listFolderMetadata(): Promise<ServiceResult>;
   getFolderMetadata(input: { path: string }): Promise<ServiceResult>;
   setFolderMetadata(input: { path: string; metadata: FolderMetadataInput; actor: VaultActor }): Promise<ServiceResult>;
+  readRawFile(input: { path: string }): Promise<ServiceResult<ReadRawFileValue>>;
+  writeRawFile(input: { path: string; bytes: Uint8Array; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult<WriteRawFileValue>>;
   readNote(input: { path: string }): Promise<ServiceResult>;
   createNote(input: { path: string; content: string; overwrite?: boolean; actor: VaultActor }): Promise<ServiceResult>;
   editNote(input: EditNoteInput & { actor: VaultActor }): Promise<ServiceResult>;
@@ -118,6 +135,7 @@ export interface LocalMcpVaultService {
 }
 
 export interface VaultService extends LocalMcpVaultService {
+  listNoteHistory(input: { path: string; before?: string; beforeId?: string; limit?: number }): Promise<ServiceResult<{ entries: FileHistoryEntry[]; hasMore: boolean }>>;
   flushDirtySessions(): Promise<ServiceResult<{ flushed: number; durableAsOf: string }>>;
   onEvent(handler: VaultChangeEventHandler): () => void;
 }
@@ -125,6 +143,7 @@ export interface VaultService extends LocalMcpVaultService {
 export interface VaultServiceOptions {
   vaultRoot: string;
   documentSessions: DocumentSessionManager;
+  historyCoalesceWindowMs?: number;
 }
 
 export function createVaultService(options: VaultServiceOptions): VaultService {
@@ -216,7 +235,101 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   options.documentSessions.onEvent((event) => {
     const change = changeEventFromDocumentSessionEvent(event);
     if (change) emitChange(change);
+    if (
+      event.kind === 'content-persisted' &&
+      event.attribution !== undefined &&
+      !isServiceWriteAttribution(event.attribution)
+    ) {
+      void recordPersistedSessionHistory(event).catch((error: unknown) => {
+        console.warn('KB-2 failed to record file history for persisted document session.', error);
+      });
+    }
   });
+  const recordHistory = async (
+    path: string,
+    operation: 'create' | 'update',
+    actor: VaultActor,
+    content: string
+  ): Promise<void> => {
+    const result = await recordFileHistory(options.vaultRoot, {
+      path,
+      operation,
+      actor,
+      content,
+      coalesceWindowMs: options.historyCoalesceWindowMs
+    });
+    if (!result.ok) {
+      throw new Error(`Failed to record file history for ${path}: ${result.message}`);
+    }
+  };
+  const recordHistoryFromAudit = async (audit: AuditEntry, content: string): Promise<void> => {
+    const operation = historyOperationFromAudit(audit.operation);
+    if (operation !== 'create' && operation !== 'update') return;
+    await recordHistory(audit.path, operation, audit.actor, content);
+  };
+  const recordServiceHistoryFromAudit = async (audit: AuditEntry, content: string): Promise<void> => {
+    try {
+      await recordHistoryFromAudit(audit, content);
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to record file history for service write.', error);
+    }
+  };
+  const flushPendingHistory = async (paths?: string[]): Promise<void> => {
+    try {
+      const result = await flushFileHistory(options.vaultRoot, paths === undefined ? {} : { paths });
+      if (!result.ok) {
+        throw new Error(`Failed to flush file history: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to flush file history.', error);
+    }
+  };
+  const recordPersistedSessionHistory = async (event: DocumentSessionEvent): Promise<void> => {
+    const actor = vaultActorFromDocumentAttribution(event.attribution);
+    const read = await readVaultFile(ctx(), event.path);
+    if (!read.ok) return;
+    await recordHistory(event.path, 'update', actor, read.value.content);
+  };
+  const carryHistoryAfterFileMove = async (moved: {
+    fromPath: string;
+    toPath: string;
+    audit: AuditEntry;
+  }): Promise<void> => {
+    try {
+      const read = await readVaultFile(ctx(), moved.toPath);
+      if (!read.ok) return;
+      const result = await moveFileHistory(options.vaultRoot, {
+        fromPath: moved.fromPath,
+        toPath: moved.toPath,
+        actor: moved.audit.actor,
+        content: read.value.content,
+        coalesceWindowMs: options.historyCoalesceWindowMs,
+      });
+      if (!result.ok) {
+        throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to carry file history after note move.', error);
+    }
+  };
+  const carryHistoryAfterFolderMove = async (moved: {
+    fromPath: string;
+    toPath: string;
+    audit: AuditEntry;
+  }): Promise<void> => {
+    try {
+      const result = await moveFolderHistory(options.vaultRoot, {
+        fromPath: moved.fromPath,
+        toPath: moved.toPath,
+        actor: moved.audit.actor,
+      });
+      if (!result.ok) {
+        throw new Error(`Failed to move folder history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+      }
+    } catch (error: unknown) {
+      console.warn('KB-2 failed to carry file history after folder move.', error);
+    }
+  };
 
   return {
     onEvent(handler) {
@@ -231,6 +344,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     async flushDirtySessions() {
       const result = await mapWriteFailure(() => options.documentSessions.flushDirtySessions());
       if (!result.ok) return result;
+      await flushPendingHistory();
       return {
         ok: true,
         flushed: result.value.flushed,
@@ -276,7 +390,29 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
     },
 
+    async readRawFile(input) {
+      return serviceResult(await readVaultRawFile(ctx(), input.path));
+    },
+
+    async writeRawFile(input) {
+      return serviceResult(await writeVaultRawFile(ctx(input.actor), {
+        path: input.path,
+        bytes: input.bytes,
+        overwrite: input.overwrite
+      }));
+    },
+
+    async listNoteHistory(input) {
+      const read = await readVaultFile(ctx(), input.path);
+      if (!read.ok && read.error === 'not_found') {
+        return { ok: true, entries: [], hasMore: false };
+      }
+      return serviceResult(await listFileHistory(options.vaultRoot, input));
+    },
+
     async createNote(input) {
+      const validPath = validateServiceFilePath(input.path);
+      if (!validPath.ok) return validPath;
       const liveSession = options.documentSessions.getOpenSession(input.path);
       if (liveSession) {
         if (!input.overwrite) {
@@ -296,6 +432,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
           summary: `Wrote ${input.path}`,
           changeEvent: { skipContentPersisted: true }
         });
+        await recordServiceHistoryFromAudit(audit, applied.value);
         return {
           ok: true,
           path: input.path,
@@ -310,6 +447,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         content: input.content,
         overwrite: input.overwrite
       }));
+      if (result.ok) {
+        await recordServiceHistoryFromAudit(result.audit, input.content);
+      }
       return result;
     },
 
@@ -342,6 +482,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Spliced ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -372,6 +513,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Appended to ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -400,6 +542,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         summary: `Prepended to ${input.path}`,
         changeEvent: { skipContentPersisted: true }
       });
+      await recordServiceHistoryFromAudit(audit, result.value.content);
       return {
         ok: true,
         path: input.path,
@@ -431,6 +574,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     async moveNote(input) {
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      await flushPendingHistory([input.fromPath]);
       const moveOnDisk = async () => {
         moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
           kind: 'file',
@@ -441,6 +585,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
       if (movedLive.value) {
+        await carryHistoryAfterFileMove(moved!);
         return { ok: true, ...moved!, live: true };
       }
       const result = serviceResult(await moveVaultPath(ctx(input.actor), {
@@ -448,6 +593,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         fromPath: input.fromPath,
         toPath: input.toPath
       }));
+      if (result.ok) {
+        await carryHistoryAfterFileMove(result);
+      }
       return result;
     },
 
@@ -472,6 +620,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     async moveFolder(input) {
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
+      await flushPendingHistory();
       const moveOnDisk = async () => {
         moved = await expectOkValue(moveVaultPath(ctx(input.actor), {
           kind: 'folder',
@@ -481,6 +630,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return movedLive;
+      await carryHistoryAfterFolderMove(moved!);
       return { ok: true, ...moved!, liveMoved: movedLive.value };
     },
 
@@ -566,6 +716,33 @@ function actorAttribution(actor: VaultActor): DocumentUpdateAttribution {
   };
 }
 
+function vaultActorFromDocumentAttribution(attribution: DocumentUpdateAttribution | undefined): VaultActor {
+  const actor = attribution?.actor;
+  if (!actor || typeof actor !== 'object' || Array.isArray(actor)) {
+    return { kind: 'unknown' };
+  }
+  const candidate = actor as Record<string, unknown>;
+  if (
+    candidate.kind !== 'user' &&
+    candidate.kind !== 'mcp_client' &&
+    candidate.kind !== 'integration' &&
+    candidate.kind !== 'system' &&
+    candidate.kind !== 'unknown'
+  ) {
+    return { kind: 'unknown' };
+  }
+  return {
+    kind: candidate.kind,
+    ...(typeof candidate.id === 'string' ? { id: candidate.id } : {}),
+    ...(typeof candidate.name === 'string' ? { name: candidate.name } : {}),
+    ...(typeof candidate.client === 'string' ? { client: candidate.client } : {})
+  };
+}
+
+function isServiceWriteAttribution(attribution: DocumentUpdateAttribution): boolean {
+  return typeof attribution.operation === 'string';
+}
+
 function emitAuditChange(
   emit: VaultChangeEventHandler,
   audit: AuditEntry,
@@ -628,7 +805,12 @@ function assertNever(value: never): never {
 
 function validateServiceFilePath(filePath: string): ServiceResult<{ path: string }> {
   try {
-    return { ok: true, path: validateVaultPath(filePath, 'file') };
+    const path = validateVaultPath(filePath, 'file');
+    const artifact = classifyArtifactPath(path);
+    if (!artifact.editable) {
+      return failure('not_editable', 'file is not an editable text artifact');
+    }
+    return { ok: true, path };
   } catch (error) {
     if (error instanceof InvalidPathError) {
       return failure('invalid_path', error.message);

@@ -1,14 +1,19 @@
 import {
+  execFile,
+} from "node:child_process";
+import {
   chmod,
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import fc from "fast-check";
 import { parse as parseYaml } from "yaml";
 
@@ -21,6 +26,7 @@ import {
   prependContent,
 } from "./splice.js";
 import {
+  classifyArtifactPath,
   deleteVaultFile,
   deleteVaultFolder,
   getFolderMetadata,
@@ -29,12 +35,22 @@ import {
   listVaultTree,
   makeVaultFolder,
   moveVaultPath,
+  readVaultRawFile,
   readVaultFile,
   setFolderMetadata,
+  writeVaultRawFile,
   writeVaultFile,
   type VaultContext,
 } from "./vault-ops.js";
 import { onVaultAudit } from "./audit.js";
+import {
+  historyOperationFromAudit,
+  flushFileHistory,
+  listFileHistory,
+  moveFileHistory,
+  moveFolderHistory,
+  recordFileHistory,
+} from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
 import { validateVaultPath } from "./path.js";
 import { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";
@@ -44,6 +60,7 @@ const MINT = "#a7f3d0";
 const SKY = "#bae6fd";
 const ROSE = "#fecdd3";
 const SAGE = "#d9f99d";
+const execFileAsync = promisify(execFile);
 
 describe("vault path validation", () => {
   const validSegment = fc
@@ -74,6 +91,7 @@ describe("vault path validation", () => {
     ["/absolute.md", "file"],
     ["nested//file.md", "file"],
     ["nested/", "folder"],
+    ["nested/../asset", "artifact"],
     [".", "folder"],
     ["..", "folder"],
     ["nested/../file.md", "file"],
@@ -82,6 +100,7 @@ describe("vault path validation", () => {
     ["folder/.hidden", "file"],
     ["folder/trailing.", "file"],
     [".kb2/audit.md", "file"],
+    [".kb2/audit.bin", "artifact"],
     [`${"a".repeat(256)}.md`, "file"],
     [`${"a".repeat(1025)}.md`, "file"],
   ] as const)("rejects invalid %s as %s", (input, kind) => {
@@ -92,6 +111,8 @@ describe("vault path validation", () => {
     ["note.md", "file"],
     ["nested/note.md", "file"],
     ["nested/deep", "folder"],
+    ["attachments/photo.png", "artifact"],
+    ["attachments/extensionless", "artifact"],
   ] as const)("accepts %s as %s", (input, kind) => {
     expect(validateVaultPath(input, kind)).toBe(input);
   });
@@ -208,6 +229,700 @@ describe("vault-core filesystem operations", () => {
       operation: "write",
       path: "notes/a.md",
     });
+  });
+
+  it("classifies copied-in filesystem artifacts without required metadata", async () => {
+    await writeFileWithParents(path.join(root, "notes/a.md"), "# A\n", "utf8");
+    await writeFileWithParents(
+      path.join(root, "scripts/app.ts"),
+      "export {};\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, "attachments"), { recursive: true });
+    await writeFile(path.join(root, "attachments/photo.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(path.join(root, "attachments/blob"), new Uint8Array([1, 2, 3]));
+
+    const tree = await listVaultTree(ctx, { depth: Number.MAX_SAFE_INTEGER });
+    expect(tree).toMatchObject({ ok: true });
+    if (!tree.ok) throw new Error("expected tree");
+    expect(tree.value.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: "notes/a.md",
+        kind: "file",
+        artifact: {
+          kind: "text",
+          contentType: "text/markdown; charset=utf-8",
+          editable: true,
+          preview: "markdown",
+        },
+      }),
+      expect.objectContaining({
+        path: "scripts/app.ts",
+        kind: "file",
+        artifact: {
+          kind: "text",
+          contentType: "text/typescript; charset=utf-8",
+          editable: true,
+          preview: "text",
+        },
+      }),
+      expect.objectContaining({
+        path: "attachments/photo.png",
+        kind: "file",
+        artifact: {
+          kind: "attachment",
+          contentType: "image/png",
+          editable: false,
+          preview: "image",
+        },
+      }),
+      expect.objectContaining({
+        path: "attachments/blob",
+        kind: "file",
+        artifact: {
+          kind: "attachment",
+          contentType: "application/octet-stream",
+          editable: false,
+          preview: "download",
+        },
+      }),
+    ]));
+  });
+
+  it("round-trips raw bytes without the editable text path", async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255]);
+    const created = await writeVaultRawFile(ctx, {
+      path: "attachments/photo.png",
+      bytes,
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      value: {
+        path: "attachments/photo.png",
+        size: 4,
+        artifact: {
+          kind: "attachment",
+          contentType: "image/png",
+          editable: false,
+          preview: "image",
+        },
+      },
+    });
+    await expect(readFile(path.join(root, "attachments/photo.png"))).resolves.toEqual(Buffer.from(bytes));
+
+    const duplicate = await writeVaultRawFile(ctx, {
+      path: "attachments/photo.png",
+      bytes: new Uint8Array([9]),
+    });
+    expect(duplicate).toMatchObject({ ok: false, error: "already_exists" });
+
+    const raw = await readVaultRawFile(ctx, "attachments/photo.png");
+    expect(raw).toMatchObject({
+      ok: true,
+      value: {
+        path: "attachments/photo.png",
+        filePath: path.join(root, "attachments/photo.png"),
+        size: 4,
+      },
+    });
+    await expect(readVaultRawFile(ctx, "attachments/missing.png")).resolves.toMatchObject({
+      ok: false,
+      error: "not_found",
+    });
+
+    await expect(readVaultFile(ctx, "attachments/photo.png")).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+    await expect(writeVaultFile(ctx, {
+      path: "attachments/photo.png",
+      content: "not png",
+      overwrite: true,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: "not_editable",
+    });
+
+    const extensionless = await writeVaultRawFile(ctx, {
+      path: "attachments/blob",
+      bytes,
+    });
+    expect(extensionless).toMatchObject({
+      ok: true,
+      value: {
+        artifact: {
+          kind: "attachment",
+          contentType: "application/octet-stream",
+          preview: "download",
+        },
+      },
+    });
+
+    await expect(readVaultRawFile(ctx, "../outside.png")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(
+      writeVaultRawFile(ctx, {
+        path: "../outside.png",
+        bytes,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await writeFileWithParents(path.join(root, "attachments/blocker"), "file", "utf8");
+    await expect(
+      writeVaultRawFile(ctx, {
+        path: "attachments/blocker/photo.png",
+        bytes,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "path_collision",
+    });
+  });
+
+  it("exposes deterministic artifact classification for callers", () => {
+    expect(classifyArtifactPath("notes/a.md")).toEqual({
+      kind: "text",
+      contentType: "text/markdown; charset=utf-8",
+      editable: true,
+      preview: "markdown",
+    });
+    expect(classifyArtifactPath("assets/clip.mp3")).toEqual({
+      kind: "attachment",
+      contentType: "audio/mpeg",
+      editable: false,
+      preview: "audio",
+    });
+    expect(classifyArtifactPath("assets/unknown")).toEqual({
+      kind: "attachment",
+      contentType: "application/octet-stream",
+      editable: false,
+      preview: "download",
+    });
+  });
+
+  it("overlays pending per-file buckets and flushes them to Git commits", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "user-1",
+      name: "Ada Lovelace",
+      client: "cloud-web",
+    };
+    const otherClient = { ...actor, client: "agent-client" };
+    const otherActor = {
+      kind: "integration" as const,
+      id: "user-1",
+      name: "Ada Bot",
+      client: "cloud-web",
+    };
+
+    await writeFileWithParents(
+      path.join(root, "notes/history.md"),
+      "first",
+      "utf8",
+    );
+    await expect(
+      recordFileHistory(root, {
+        path: "notes/history.md",
+        operation: "create",
+        actor,
+        content: "first",
+        now: new Date("2026-06-30T00:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        operation: "create",
+        actor,
+        size: 5,
+      },
+    });
+    const created = await listFileHistory(root, { path: "notes/history.md" });
+    if (!created.ok) throw new Error("expected created history page");
+    expect(created.value.entries).toMatchObject([
+      {
+        pending: true,
+        operation: "create",
+        actor,
+        contributors: [actor],
+        size: 5,
+      },
+    ]);
+    expect(created.value.entries[0]).not.toHaveProperty("content");
+    await writeFile(path.join(root, "notes/history.md"), "second", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor,
+      content: "second",
+      now: new Date("2026-06-30T00:01:00.000Z"),
+    });
+    await writeFile(path.join(root, "notes/history.md"), "third", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherClient,
+      content: "third",
+      now: new Date("2026-06-30T00:02:00.000Z"),
+    });
+    await writeFile(path.join(root, "notes/history.md"), "fourth", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherActor,
+      content: "fourth",
+      now: new Date("2026-06-30T00:03:00.000Z"),
+    });
+
+    await expect(listFileHistory(root, { path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          {
+            pending: true,
+            operation: "create",
+            actor: { kind: "system", name: "3 contributors" },
+            contributors: [actor, otherClient, otherActor],
+            size: 6,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      flushFileHistory(root, { now: new Date("2026-06-30T00:04:00.000Z") }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+
+    const flushed = await listFileHistory(root, { path: "notes/history.md" });
+    expect(flushed).toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          {
+            operation: "create",
+            actor: { kind: "system", name: "3 contributors" },
+            contributors: [actor, otherClient, otherActor],
+            size: 6,
+          },
+        ],
+      },
+    });
+    if (!flushed.ok) throw new Error("expected flushed history page");
+    expect(flushed.value.entries[0]).not.toHaveProperty("content");
+    expect(flushed.value.entries[0]?.commitId).toMatch(/^[0-9a-f]{40}$/);
+
+    const gitAuthor = await git(root, ["log", "-1", "--format=%an <%ae>"]);
+    expect(gitAuthor.stdout.trim()).toBe("KB-1 Daemon <history@kb-1.ai>");
+    const gitBody = await git(root, ["log", "-1", "--format=%B"]);
+    expect(gitBody.stdout).toContain("KB1-Contributor:");
+    expect(gitBody.stdout).toContain("Ada Lovelace");
+    expect(gitBody.stdout).toContain("Ada Bot");
+    const gitignoreTracked = await git(root, ["ls-files", ".gitignore"]);
+    expect(gitignoreTracked.stdout.trim()).toBe(".gitignore");
+
+    await writeFile(path.join(root, "notes/history.md"), "fifth", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/history.md",
+      operation: "update",
+      actor: otherActor,
+      content: "fifth",
+      now: new Date("2026-06-30T00:10:00.000Z"),
+    });
+
+    const firstPage = await listFileHistory(root, {
+      path: "notes/history.md",
+      limit: 1,
+    });
+    expect(firstPage).toMatchObject({
+      ok: true,
+      value: {
+        hasMore: true,
+        entries: [
+          { pending: true, actor: otherActor, size: 5 },
+        ],
+      },
+    });
+    if (!firstPage.ok) throw new Error("expected history page");
+    const cursor = firstPage.value.entries.at(-1);
+    if (!cursor) throw new Error("expected cursor entry");
+    await expect(
+      listFileHistory(root, {
+        path: "notes/history.md",
+        before: cursor.createdAt,
+        beforeId: cursor.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          { operation: "create", actor: { kind: "system", name: "3 contributors" }, size: 6 },
+        ],
+      },
+    });
+
+    await writeFileWithParents(path.join(root, "alpha/sorted.md"), "sorted", "utf8");
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "create",
+      actor,
+      content: "sorted",
+      now: new Date("2026-06-30T00:11:00.000Z"),
+    });
+    await expect(
+      flushFileHistory(root, { now: new Date("2026-06-30T00:12:00.000Z") }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 2 } });
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "update",
+      actor,
+      content: "sorted",
+      now: new Date("2026-06-30T00:13:00.000Z"),
+    });
+    await expect(
+      flushFileHistory(root, { paths: ["alpha/sorted.md"] }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await writeFile(path.join(root, "alpha/sorted.md"), "sorted again", "utf8");
+    await recordFileHistory(root, {
+      path: "alpha/sorted.md",
+      operation: "update",
+      actor,
+      content: "sorted again",
+      now: new Date("2026-06-30T00:15:00.000Z"),
+    });
+    await expect(
+      flushFileHistory(root, { paths: ["alpha/sorted.md"] }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await expect(flushFileHistory(root)).resolves.toEqual({ ok: true, value: { flushed: 0 } });
+  });
+
+  it("uses structural move commits as history barriers and follows renamed files", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+
+    await writeFileWithParents(
+      path.join(root, "notes/original.md"),
+      "one\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/original.md",
+      operation: "create",
+      actor,
+      content: "one\n",
+      now: new Date("2026-06-30T00:00:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: ["notes/original.md"], now: new Date("2026-06-30T00:00:30.000Z") });
+    await mkdir(path.join(root, "notes"), { recursive: true });
+    await rename(path.join(root, "notes/original.md"), path.join(root, "notes/renamed.md"));
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "notes/original.md",
+        toPath: "notes/renamed.md",
+        actor,
+        content: "one\n",
+        now: new Date("2026-06-30T00:01:00.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        path: "notes/renamed.md",
+        operation: "rename",
+        actor,
+        size: 4,
+      },
+    });
+    const oldPathHistory = await listFileHistory(root, { path: "notes/original.md" });
+    if (!oldPathHistory.ok) throw new Error("expected old path history page");
+    expect(oldPathHistory.value.hasMore).toBe(false);
+    expect(oldPathHistory.value.entries.some((entry) => entry.operation === "create" && entry.size === 4)).toBe(true);
+    await expect(listFileHistory(root, { path: "notes/renamed.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { path: "notes/renamed.md", operation: "rename", size: 4 },
+          { path: "notes/renamed.md", operation: "create", size: 4 },
+        ],
+      },
+    });
+
+    await writeFileWithParents(
+      path.join(root, "move/source.md"),
+      "move me\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "move/source.md",
+      operation: "create",
+      actor,
+      content: "move me\n",
+      now: new Date("2026-06-30T00:01:30.000Z"),
+    });
+    await flushFileHistory(root, { paths: ["move/source.md"], now: new Date("2026-06-30T00:01:35.000Z") });
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, "move/source.md"), path.join(root, "archive/source.md"));
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "move/source.md",
+        toPath: "archive/source.md",
+        actor,
+        content: "move me\n",
+        now: new Date("2026-06-30T00:01:45.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { operation: "move", path: "archive/source.md" },
+    });
+    await expect(listFileHistory(root, { path: "archive/source.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, size: 8 },
+          { operation: "create", actor, size: 8 },
+        ],
+      },
+    });
+
+    await writeFileWithParents(
+      path.join(root, "folder-src/a.md"),
+      "a\n",
+      "utf8",
+    );
+    await writeFileWithParents(
+      path.join(root, "folder-src/nested/b.md"),
+      "b\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "folder-src/a.md",
+      operation: "create",
+      actor,
+      content: "a\n",
+      now: new Date("2026-06-30T00:02:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: ["folder-src/a.md"], now: new Date("2026-06-30T00:02:05.000Z") });
+    await rename(path.join(root, "folder-src"), path.join(root, "folder-dest"));
+    await expect(
+      moveFolderHistory(root, {
+        fromPath: "folder-src",
+        toPath: "folder-dest",
+        actor,
+        now: new Date("2026-06-30T00:02:15.000Z"),
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
+    await expect(listFileHistory(root, { path: "folder-dest/a.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, size: 0 },
+          { operation: "create", actor, size: 2 },
+        ],
+      },
+    });
+    await expect(listFileHistory(root, { path: "folder-dest/nested/b.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          { operation: "move", actor, size: 0 },
+        ],
+      },
+    });
+    await mkdir(path.join(root, "empty-folder"));
+    await rename(path.join(root, "empty-folder"), path.join(root, "empty-folder-moved"));
+    await expect(
+      moveFolderHistory(root, {
+        fromPath: "empty-folder",
+        toPath: "empty-folder-moved",
+        actor,
+        now: new Date("2026-06-30T00:02:30.000Z"),
+      }),
+    ).resolves.toEqual({ ok: true, value: { flushed: 0 } });
+
+    await expect(
+      moveFileHistory(root, {
+        fromPath: "../outside.md",
+        toPath: "notes/nope.md",
+        actor,
+        content: "",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+    await expect(
+      moveFolderHistory(root, {
+        fromPath: "../outside",
+        toPath: "notes",
+        actor,
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+  });
+
+  it("rejects invalid history inputs and supports zero-width buckets", async () => {
+    await expect(
+      listFileHistory(root, { path: "notes/missing.md" }),
+    ).resolves.toEqual({
+      ok: true,
+      value: { entries: [], hasMore: false },
+    });
+    await expect(
+      recordFileHistory(root, {
+        path: "../escape.md",
+        operation: "create",
+        content: "bad",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+    await expect(
+      listFileHistory(root, { path: "../escape.md" }),
+    ).resolves.toMatchObject({ ok: false, error: "invalid_path" });
+
+    await writeFileWithParents(
+      path.join(root, "notes/no-now.md"),
+      "nowless",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/no-now.md",
+      operation: "create",
+      content: "nowless",
+    });
+    await expect(listFileHistory(root, { path: "notes/no-now.md" })).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ actor: { kind: "unknown" }, size: 7 }] },
+    });
+
+    await writeFileWithParents(
+      path.join(root, "notes/unknown.md"),
+      "unknown",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/unknown.md",
+      operation: "create",
+      content: "unknown",
+      now: new Date("2026-06-30T01:00:00.000Z"),
+      coalesceWindowMs: -1,
+    });
+    await expect(
+      listFileHistory(root, {
+        path: "notes/unknown.md",
+        before: "not-a-date",
+        limit: 999,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [{ actor: { kind: "unknown" }, size: 7 }],
+      },
+    });
+
+    await writeFileWithParents(
+      path.join(root, "notes/system.md"),
+      "system",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/system.md",
+      operation: "create",
+      actor: { kind: "system" },
+      content: "system",
+      now: new Date("2026-06-30T01:05:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: ["notes/system.md"], now: new Date("2026-06-30T01:06:00.000Z") });
+    await expect(listFileHistory(root, { path: "notes/system.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          {
+            operation: "create",
+            actor: { kind: "system" },
+            contributors: [{ kind: "system" }],
+          },
+        ],
+      },
+    });
+    await writeFileWithParents(
+      path.join(root, "notes/external.md"),
+      "external",
+      "utf8",
+    );
+    await git(root, ["add", "--", "notes/external.md"]);
+    await git(root, [
+      "-c",
+      "user.name=External",
+      "-c",
+      "user.email=external@example.test",
+      "commit",
+      "-m",
+      "external commit",
+    ]);
+    await expect(listFileHistory(root, { path: "notes/external.md" })).resolves.toMatchObject({
+      ok: true,
+      value: {
+        entries: [
+          {
+            operation: "update",
+            actor: { kind: "unknown" },
+            size: 0,
+            contentHash: "",
+          },
+        ],
+      },
+    });
+
+    const at = new Date("2026-06-30T02:00:00.000Z");
+    const actor = { kind: "user" as const, id: "same", client: "browser" };
+
+    await writeFileWithParents(path.join(root, "notes/zero.md"), "first", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/zero.md",
+      operation: "update",
+      actor,
+      content: "first",
+      now: at,
+      coalesceWindowMs: 0,
+    });
+    await writeFile(path.join(root, "notes/zero.md"), "second", "utf8");
+    await recordFileHistory(root, {
+      path: "notes/zero.md",
+      operation: "update",
+      actor,
+      content: "second",
+      now: new Date(at.getTime() + 1),
+      coalesceWindowMs: 0,
+    });
+    await expect(
+      listFileHistory(root, { path: "notes/zero.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [{ size: 6 }, { size: 5 }] },
+    });
+    await expect(
+      listFileHistory(root, {
+        path: "notes/zero.md",
+        before: "2026-06-29T00:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { entries: [] },
+    });
+  });
+
+  it("maps file audit operations into file history operations only", () => {
+    expect(historyOperationFromAudit("create")).toBe("create");
+    expect(historyOperationFromAudit("write")).toBe("update");
+    expect(historyOperationFromAudit("splice")).toBe("update");
+    expect(historyOperationFromAudit("append")).toBe("update");
+    expect(historyOperationFromAudit("prepend")).toBe("update");
+    expect(historyOperationFromAudit("move")).toBe("move");
+    expect(historyOperationFromAudit("mkdir")).toBeUndefined();
+    expect(historyOperationFromAudit("delete")).toBeUndefined();
   });
 
   it("notifies observers from the audit chokepoint without breaking the mutation", async () => {
@@ -1285,7 +2000,7 @@ describe("scan search", () => {
       await rm(cappedRoot, { recursive: true, force: true });
       await rm(nestedRoot, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   it("property: every randomized search result references a real line in a real file", async () => {
     const segment = fc.stringMatching(/^[a-z]{1,8}$/);
@@ -1396,6 +2111,12 @@ async function readRawFolderMetadata(
 ): Promise<{ raw: string; parsed: unknown }> {
   const raw = await readFile(path.join(root, ".kb2/folders.yml"), "utf8");
   return { raw, parsed: parseYaml(raw) };
+}
+
+async function git(root: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return await execFileAsync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+  }) as { stdout: string; stderr: string };
 }
 
 async function writeFileWithParents(

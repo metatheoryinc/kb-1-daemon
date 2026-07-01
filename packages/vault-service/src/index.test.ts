@@ -157,6 +157,16 @@ describe("vault service failure mapping", () => {
     await expect(
       readFile(join(root, "moved-folder", "child.md"), "utf8"),
     ).resolves.toBe("child\n");
+    await expect(service.listNoteHistory({ path: "moved-folder/child.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "move",
+          actor: { kind: "user" },
+          contributors: [{ kind: "user" }],
+        },
+      ],
+    });
     await expect(
       service.deleteFolder({
         path: "moved-folder",
@@ -181,6 +191,348 @@ describe("vault service failure mapping", () => {
       "move",
       "delete",
     ]);
+  });
+
+  it("records file history for service writes while reads leave history untouched", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "browser",
+    };
+
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "one\n",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true, audit: { operation: "create" } });
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "two\n",
+        overwrite: true,
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true, audit: { operation: "write" } });
+    await expect(service.readNote({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      content: "two\n",
+    });
+
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          pending: true,
+          operation: "create",
+          actor: marcus,
+          size: 4,
+        },
+      ],
+      hasMore: false,
+    });
+    await expect(service.readNote({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      content: "two\n",
+    });
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [{ pending: true, operation: "create", actor: marcus, size: 4 }],
+    });
+
+    await expect(
+      service.appendNote({
+        path: "notes/history.md",
+        content: "three\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      content: "two\nthree\n",
+      audit: { operation: "append" },
+    });
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          pending: true,
+          operation: "create",
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 10,
+        },
+      ],
+    });
+    await expect(service.flushDirtySessions()).resolves.toMatchObject({ ok: true });
+    const flushed = await service.listNoteHistory({ path: "notes/history.md" });
+    expect(flushed).toMatchObject({
+      ok: true,
+      entries: [
+        {
+          operation: "create",
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 10,
+        },
+      ],
+    });
+    if (!flushed.ok) throw new Error("expected flushed history");
+    expect(flushed.entries[0]).not.toHaveProperty("pending");
+  });
+
+  it("carries note history across cold and live note moves", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "browser",
+    };
+
+    await expect(
+      service.createNote({
+        path: "notes/history.md",
+        content: "one\n",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      service.appendNote({
+        path: "notes/history.md",
+        content: "two\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({ ok: true, content: "one\ntwo\n" });
+    await expect(
+      service.moveNote({
+        fromPath: "notes/history.md",
+        toPath: "archive/history.md",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      fromPath: "notes/history.md",
+      toPath: "archive/history.md",
+      audit: { operation: "move", actor: marcus },
+    });
+    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [],
+      hasMore: false,
+    });
+    await expect(service.listNoteHistory({ path: "archive/history.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          path: "archive/history.md",
+          operation: "move",
+          actor: marcus,
+          size: 8,
+        },
+        {
+          path: "archive/history.md",
+          operation: "create",
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 8,
+        },
+      ],
+      hasMore: false,
+    });
+
+    await expect(
+      service.createNote({
+        path: "live/rename.md",
+        content: "live\n",
+        actor: olivia,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await sessions.getSession("live/rename.md").open();
+    await expect(
+      service.moveNote({
+        fromPath: "live/rename.md",
+        toPath: "live/renamed.md",
+        actor: marcus,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      fromPath: "live/rename.md",
+      toPath: "live/renamed.md",
+      live: true,
+      audit: { operation: "move", actor: marcus },
+    });
+    await expect(service.listNoteHistory({ path: "live/rename.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [],
+      hasMore: false,
+    });
+    await expect(service.listNoteHistory({ path: "live/renamed.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          path: "live/renamed.md",
+          operation: "rename",
+          actor: marcus,
+          size: 5,
+        },
+        {
+          path: "live/renamed.md",
+          operation: "create",
+          actor: olivia,
+          size: 5,
+        },
+      ],
+      hasMore: false,
+    });
+  });
+
+  it("keeps service writes best-effort when retired file-history metadata is malformed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const actor = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+
+    try {
+      await writeFileWithParents(join(root, ".kb2", "file-history.yml"), "paths: [");
+
+      await expect(
+        service.createNote({
+          path: "notes/corrupt-history.md",
+          content: "one\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, audit: { operation: "create" } });
+      await expect(readFile(join(root, "notes", "corrupt-history.md"), "utf8")).resolves.toBe("one\n");
+
+      const read = await service.readNote({ path: "notes/corrupt-history.md" });
+      expect(read).toMatchObject({ ok: true, content: "one\n" });
+      if (!read.ok) throw new Error("expected corrupt-history note read to succeed");
+
+      await expect(
+        service.createNote({
+          path: "notes/corrupt-history.md",
+          content: "two\n",
+          overwrite: true,
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, audit: { operation: "write" } });
+      const overwritten = await service.readNote({ path: "notes/corrupt-history.md" });
+      expect(overwritten).toMatchObject({ ok: true, content: "two\n" });
+      const overwrittenBaseline = requireBaseline(overwritten);
+      await expect(
+        service.editNote({
+          path: "notes/corrupt-history.md",
+          baseline: overwrittenBaseline,
+          oldText: "two",
+          newText: "three",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "three\n" });
+      await expect(
+        service.appendNote({
+          path: "notes/corrupt-history.md",
+          content: "four\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "three\nfour\n" });
+      await expect(
+        service.prependNote({
+          path: "notes/corrupt-history.md",
+          content: "zero\n",
+          actor,
+        }),
+      ).resolves.toMatchObject({ ok: true, content: "zero\nthree\nfour\n" });
+      await expect(service.listNoteHistory({ path: "notes/corrupt-history.md" })).resolves.toMatchObject({
+        ok: true,
+        entries: [
+          {
+            pending: true,
+            operation: "create",
+            actor,
+            size: 16,
+          },
+        ],
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records document-session persisted history with Yjs attribution", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const marcus = {
+      kind: "user" as const,
+      id: "marcus",
+      name: "Marcus",
+      client: "browser",
+    };
+    const olivia = {
+      kind: "user" as const,
+      id: "olivia",
+      name: "Olivia",
+      client: "cloud-relay",
+    };
+
+    await service.createNote({
+      path: "notes/socket.md",
+      content: "base\n",
+      actor: marcus,
+    });
+    const session = sessions.getSession("notes/socket.md");
+    await session.applyContent("socket\n", {
+      attribution: { actor: olivia },
+    });
+
+    await waitUntil(async () => {
+      const history = await service.listNoteHistory({ path: "notes/socket.md" });
+      const contributors = history.ok ? history.entries[0]?.contributors ?? [] : [];
+      return history.ok &&
+        history.entries.length === 1 &&
+        contributors.some((actor) => actor.id === "olivia");
+    }, () => "expected Yjs-attributed history contributor to be recorded");
+    await expect(service.listNoteHistory({ path: "notes/socket.md" })).resolves.toMatchObject({
+      ok: true,
+      entries: [
+        {
+          pending: true,
+          operation: "create",
+          actor: { kind: "system", name: "2 contributors" },
+          contributors: [marcus, olivia],
+          size: 7,
+        },
+      ],
+    });
   });
 
   it("routes live session writes and path transitions through the same audit-bearing response shape", async () => {
@@ -825,6 +1177,10 @@ async function readAuditRows(
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { operation: string });
+}
+
+async function readRawFileHistory(root: string): Promise<string> {
+  return readFile(join(root, ".kb2", "file-history.yml"), "utf8");
 }
 
 function requireBaseline(result: ServiceResult): string {

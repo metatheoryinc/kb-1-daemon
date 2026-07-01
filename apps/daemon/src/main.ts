@@ -7,7 +7,7 @@ import type { VaultChangeEventKind } from '@kb-2/vault-service';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { validateVaultPath, type VaultActor } from '@kb-2/vault-core';
+import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -59,7 +59,9 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // and mutable at runtime (create/rename/soft-delete) with no restart.
   await mkdir(config.vaultsHome, { recursive: true });
   const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
-  const registry = await VaultRegistry.load(config.vaultsHome, trashHome);
+  const registry = await VaultRegistry.load(config.vaultsHome, trashHome, {
+    historyCoalesceWindowMs: config.historyCoalesceWindowMs
+  });
 
   // First boot: with no legacy vault to migrate and nothing discovered, stand up
   // a single starter vault seeded from the bundled kit. `create` performs the
@@ -201,6 +203,8 @@ function createRelayLifecycleController(
     relayUrl: new URL(config.relay.relayUrl),
     daemonUrl,
     token: config.relay.token,
+    daemonVersion: config.relay.daemonVersion,
+    daemonBuild: config.relay.daemonBuild,
     logger: daemonRelayLogger,
   });
   let unsubscribeVaultEvents: (() => void) | undefined;
@@ -337,7 +341,8 @@ function parseScopedFilesPath(pathWithoutYjs: string): { id: string; rawPath: st
 
 function safeValidateFilePath(rawPath: string): string | undefined {
   try {
-    return validateVaultPath(decodeURIComponent(rawPath), 'file');
+    const filePath = validateVaultPath(decodeURIComponent(rawPath), 'file');
+    return classifyArtifactPath(filePath).editable ? filePath : undefined;
   } catch {
     return undefined;
   }

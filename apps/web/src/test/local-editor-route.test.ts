@@ -127,13 +127,98 @@ describe("local editor route", () => {
                 metadata: { color: "#fda4af" },
               },
               {
+                kind: "folder",
+                path: "attachments",
+                size: 0,
+                mtimeMs: 1,
+              },
+              {
                 kind: "file",
                 path: "projects/active/editor-shell.md",
                 size: 12,
                 mtimeMs: 1,
+                artifact: {
+                  kind: "text",
+                  contentType: "text/markdown; charset=utf-8",
+                  editable: true,
+                  preview: "markdown",
+                },
               },
-              { kind: "file", path: "hello-world.md", size: 12, mtimeMs: 1 },
+              {
+                kind: "file",
+                path: "attachments/live.png",
+                size: 4,
+                mtimeMs: 1,
+                artifact: {
+                  kind: "attachment",
+                  contentType: "image/png",
+                  editable: false,
+                  preview: "image",
+                },
+              },
+              {
+                kind: "file",
+                path: "hello-world.md",
+                size: 12,
+                mtimeMs: 1,
+                artifact: {
+                  kind: "text",
+                  contentType: "text/markdown; charset=utf-8",
+                  editable: true,
+                  preview: "markdown",
+                },
+              },
             ],
+          });
+        }
+        if (url === "/api/vaults/demo-vault/files/hello-world.md/history?limit=25") {
+          return json({
+            ok: true,
+            entries: [
+              {
+                id: "hist-2",
+                path: "hello-world.md",
+                operation: "update",
+                actor: { kind: "user", id: "marcus", name: "Marcus" },
+                integrationId: "agent-codex",
+                createdAt: "2026-06-30T05:01:00.000Z",
+                updatedAt: "2026-06-30T05:03:00.000Z",
+                size: 14,
+                contentHash: "hash-2",
+              },
+              {
+                id: "hist-1",
+                path: "hello-world.md",
+                operation: "create",
+                actor: { kind: "user", id: "olivia", name: "Olivia" },
+                createdAt: "2026-06-30T05:00:00.000Z",
+                updatedAt: "2026-06-30T05:00:00.000Z",
+                size: 13,
+                contentHash: "hash-1",
+              },
+            ],
+            hasMore: true,
+          });
+        }
+        if (
+          url ===
+          "/api/vaults/demo-vault/files/hello-world.md/history?before=2026-06-30T05%3A00%3A00.000Z&beforeId=hist-1&limit=25"
+        ) {
+          return json({
+            ok: true,
+            entries: [
+              {
+                id: "hist-0",
+                path: "hello-world.md",
+                operation: "update",
+                actor: { kind: "agent", id: "local-agent", name: "local agent" },
+                createdAt: "2026-06-30T04:55:00.000Z",
+                updatedAt: "2026-06-30T04:55:00.000Z",
+                size: 13,
+                contentHash: "hash-0",
+              },
+            ],
+            hasMore: false,
           });
         }
         return json(
@@ -190,6 +275,49 @@ describe("local editor route", () => {
     expect(treeProvider?.path).toBe("projects/active/editor-shell.md");
     expect(treeProvider?.text.toString()).toBe("typed into tree-opened file");
     expect(mocks.providers[0]?.text.toString()).toBe("content:hello-world.md");
+  });
+
+  it("opens attachment rows through the raw route instead of the document provider", async () => {
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false }) as Window);
+
+    render(AppStateHarness);
+
+    await screen.findByLabelText("Markdown editor");
+    const initialProviderCount = mocks.providers.length;
+    mocks.goto.mockClear();
+    const filesPanel = within(
+      screen.getByRole("complementary", { name: "Vault files" }),
+    );
+
+    await fireEvent.click(await filesPanel.findByText("attachments"));
+    await fireEvent.click(filesPanel.getByText("live.png"));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(mocks.goto).not.toHaveBeenCalled();
+    expect(mocks.providers).toHaveLength(initialProviderCount);
+
+    openSpy.mockRestore();
+  });
+
+  it("renders direct attachment routes as raw-file links, not editable documents", async () => {
+    setPageUrl("/demo-vault/attachments/live.png");
+    window.history.pushState(null, "", "/demo-vault/attachments/live.png");
+
+    render(AppStateHarness);
+
+    const link = await screen.findByRole("link", { name: "Open live.png" });
+    expect((link as HTMLAnchorElement).getAttribute("href")).toBe(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Markdown editor")).toBeNull();
+    });
   });
 
   it("hides the vault tree when the vault is toggled off in the filter", async () => {
@@ -250,6 +378,48 @@ describe("local editor route", () => {
       "content:projects/active/editor-shell.md",
     );
     expect(editor.value).toBe("content:projects/active/editor-shell.md");
+  });
+
+  it("opens note history from the byline and pages older entries", async () => {
+    render(AppStateHarness);
+
+    expect(await screen.findByLabelText("Markdown editor")).toBeTruthy();
+    expect(screen.queryByTestId("document-history-panel")).toBeNull();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(([url]) => String(url).includes("/history")),
+    ).toBe(false);
+    await fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    const panel = within(await screen.findByTestId("document-history-panel"));
+    expect(await panel.findByText("Marcus")).toBeTruthy();
+    expect(panel.getByText("Olivia")).toBeTruthy();
+    expect(panel.queryByText("second version")).toBeNull();
+    expect(panel.queryByText("first version")).toBeNull();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) => url === "/api/vaults/demo-vault/files/hello-world.md/history?limit=25",
+        ),
+    ).toBe(true);
+
+    await fireEvent.click(panel.getByRole("button", { name: "Load older" }));
+
+    await waitFor(() => {
+      expect(panel.getByText("local agent")).toBeTruthy();
+    });
+    expect(panel.queryByText("older version")).toBeNull();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) =>
+            url ===
+            "/api/vaults/demo-vault/files/hello-world.md/history?before=2026-06-30T05%3A00%3A00.000Z&beforeId=hist-1&limit=25",
+        ),
+    ).toBe(true);
   });
 
   it("rebinds the editor on history navigation and can land on a deleted document path", async () => {

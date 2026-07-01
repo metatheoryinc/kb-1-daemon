@@ -41,6 +41,8 @@ export type TunnelClientConfig = {
   relayUrl: URL;
   daemonUrl: URL;
   token: string;
+  daemonVersion?: string;
+  daemonBuild?: string;
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
@@ -184,6 +186,8 @@ export class TunnelClient {
         type: 'control.hello',
         version: TUNNEL_PROTOCOL_VERSION,
         token: this.config.token,
+        ...(this.config.daemonVersion ? { daemonVersion: this.config.daemonVersion } : {}),
+        ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
         features: [TUNNEL_FEATURES.RELAY_FRAMES_V1],
       }));
       this.startControlHeartbeat(control);

@@ -32,6 +32,7 @@
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
+  import { plaintextImageUpload } from './plaintext-image-upload';
   // Remote-cursor layer (cloud-014 part-6). Mounted only when the host supplies
   // both `awareness` and `noteId` — the daemon UI, which has no presence,
   // passes neither and the producer/consumer are skipped entirely.
@@ -98,6 +99,12 @@
      *  and routing stay unified. Omit when there's no navigation context
      *  (Storybook, no-vault tests) — clicks on wikilinks no-op then. */
     onWikilinkClick?: (encodedTarget: string, event: MouseEvent) => void;
+    /** Paste/drop image upload hook. Hosts decide where bytes are written;
+     *  the editor stores only the returned markdown path. */
+    uploadImage?: (file: File) => Promise<{ path: string }>;
+    onUploadStart?: () => void;
+    onUploadEnd?: () => void;
+    onError?: (err: unknown, file: File) => void;
     /** Vault-scoped awareness handle (cloud-014 part-6). When supplied
      *  (together with `noteId`), the editor publishes the local caret /
      *  selection to `awareness.cursor` and renders remote peers' carets +
@@ -122,6 +129,10 @@
     livePaths = [],
     orgPeople = [],
     onWikilinkClick,
+    uploadImage,
+    onUploadStart,
+    onUploadEnd,
+    onError,
     awareness,
     noteId,
   }: Props = $props();
@@ -447,6 +458,18 @@
       // inserts `[note name](url)`. Non-URL pastes (and URL pastes
       // that match neither rule) fall through to default CM6 paste.
       // See `plaintext-link-paste.ts` for the decision rules.
+      ...(uploadImage && !readOnly
+        ? [
+            plaintextImageUpload({
+              uploadFile: uploadImage,
+              ytext: stableText,
+              ydoc: stableDoc,
+              onUploadStart,
+              onUploadEnd,
+              onError,
+            }),
+          ]
+        : []),
       ...(!readOnly ? [plaintextLinkPaste()] : []),
       keymap.of([
         { key: 'Mod-z', run: undoCmd, preventDefault: true },
