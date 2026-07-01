@@ -127,12 +127,47 @@ describe("local editor route", () => {
                 metadata: { color: "#fda4af" },
               },
               {
+                kind: "folder",
+                path: "attachments",
+                size: 0,
+                mtimeMs: 1,
+              },
+              {
                 kind: "file",
                 path: "projects/active/editor-shell.md",
                 size: 12,
                 mtimeMs: 1,
+                artifact: {
+                  kind: "text",
+                  contentType: "text/markdown; charset=utf-8",
+                  editable: true,
+                  preview: "markdown",
+                },
               },
-              { kind: "file", path: "hello-world.md", size: 12, mtimeMs: 1 },
+              {
+                kind: "file",
+                path: "attachments/live.png",
+                size: 4,
+                mtimeMs: 1,
+                artifact: {
+                  kind: "attachment",
+                  contentType: "image/png",
+                  editable: false,
+                  preview: "image",
+                },
+              },
+              {
+                kind: "file",
+                path: "hello-world.md",
+                size: 12,
+                mtimeMs: 1,
+                artifact: {
+                  kind: "text",
+                  contentType: "text/markdown; charset=utf-8",
+                  editable: true,
+                  preview: "markdown",
+                },
+              },
             ],
           });
         }
@@ -240,6 +275,49 @@ describe("local editor route", () => {
     expect(treeProvider?.path).toBe("projects/active/editor-shell.md");
     expect(treeProvider?.text.toString()).toBe("typed into tree-opened file");
     expect(mocks.providers[0]?.text.toString()).toBe("content:hello-world.md");
+  });
+
+  it("opens attachment rows through the raw route instead of the document provider", async () => {
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false }) as Window);
+
+    render(AppStateHarness);
+
+    await screen.findByLabelText("Markdown editor");
+    const initialProviderCount = mocks.providers.length;
+    mocks.goto.mockClear();
+    const filesPanel = within(
+      screen.getByRole("complementary", { name: "Vault files" }),
+    );
+
+    await fireEvent.click(await filesPanel.findByText("attachments"));
+    await fireEvent.click(filesPanel.getByText("live.png"));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(mocks.goto).not.toHaveBeenCalled();
+    expect(mocks.providers).toHaveLength(initialProviderCount);
+
+    openSpy.mockRestore();
+  });
+
+  it("renders direct attachment routes as raw-file links, not editable documents", async () => {
+    setPageUrl("/demo-vault/attachments/live.png");
+    window.history.pushState(null, "", "/demo-vault/attachments/live.png");
+
+    render(AppStateHarness);
+
+    const link = await screen.findByRole("link", { name: "Open live.png" });
+    expect((link as HTMLAnchorElement).getAttribute("href")).toBe(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Markdown editor")).toBeNull();
+    });
   });
 
   it("hides the vault tree when the vault is toggled off in the filter", async () => {

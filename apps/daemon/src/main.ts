@@ -7,7 +7,7 @@ import type { VaultChangeEventKind } from '@kb-2/vault-service';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { validateVaultPath, type VaultActor } from '@kb-2/vault-core';
+import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-2/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -341,7 +341,8 @@ function parseScopedFilesPath(pathWithoutYjs: string): { id: string; rawPath: st
 
 function safeValidateFilePath(rawPath: string): string | undefined {
   try {
-    return validateVaultPath(decodeURIComponent(rawPath), 'file');
+    const filePath = validateVaultPath(decodeURIComponent(rawPath), 'file');
+    return classifyArtifactPath(filePath).editable ? filePath : undefined;
   } catch {
     return undefined;
   }

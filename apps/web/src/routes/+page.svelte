@@ -48,7 +48,7 @@
     ROOT_DEFAULT_COLOR,
     resolveFolderColor,
   } from '@kb-2/ui';
-  import { kbService, type FileHistoryEntry, type VaultSummary } from '$lib/kb-service';
+  import { kbService, type ArtifactInfo, type FileHistoryEntry, type VaultSummary } from '$lib/kb-service';
   import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
   import {
     useAppState,
@@ -67,6 +67,7 @@
     path: string;
     kind: 'file' | 'folder';
     metadata?: { color?: string };
+    artifact?: ArtifactInfo;
   }
 
   type TreeDirtyEventKind =
@@ -349,7 +350,7 @@
       for (const node of list) {
         if (node.kind === 'folder') {
           walk(node.children);
-        } else {
+        } else if (node.artifact?.editable !== false) {
           out.push({ path: node.path, noteId: node.path });
         }
       }
@@ -396,6 +397,11 @@
   const activeNode = $derived(findNode(tree, documentPath));
   const viewingFolder = $derived(
     documentPath === '' || activeNode?.kind === 'folder',
+  );
+  const activeAttachmentNode = $derived(
+    activeNode?.kind === 'file' && activeNode.artifact?.editable === false
+      ? activeNode
+      : undefined,
   );
   // The folder node backing the canvas — its `children` is the full
   // subtree (direct children plus descendants) the canvas renders. At
@@ -842,6 +848,28 @@
     await goto(vaultRoute(activeVaultId, path), { noScroll: true, keepFocus: true });
   }
 
+  function openRawFile(vaultId: string, path: string): void {
+    const url = kbService.rawSrc(vaultId, path);
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      window.location.assign(url);
+    }
+  }
+
+  function openFilePath(vaultId: string, path: string): void {
+    const node = findNode(vaultTrees[vaultId] ?? [], path);
+    if (node?.kind === 'file' && node.artifact?.editable === false) {
+      openRawFile(vaultId, path);
+      return;
+    }
+
+    if (vaultId !== activeVaultId) {
+      void goto(vaultRoute(vaultId, path), { noScroll: true, keepFocus: true });
+      return;
+    }
+    void openDocument(path);
+  }
+
   // Switch the active vault: navigate to its root. The derived active id
   // follows the new URL; the active-vault effect remembers it as the
   // last-opened and loads its tree if uncached.
@@ -857,11 +885,7 @@
   // Mirrors openFolder.
   function openFileFromRow(key: string): void {
     const { vaultId: keyVaultId, path } = noteKeyParts(key);
-    if (keyVaultId !== activeVaultId) {
-      void goto(vaultRoute(keyVaultId, path), { noScroll: true, keepFocus: true });
-      return;
-    }
-    void openDocument(path);
+    openFilePath(keyVaultId, path);
   }
 
   // Wikilink navigation. The editor fires with the URL-encoded target;
@@ -1454,6 +1478,7 @@
             kind: 'file',
             path: entry.path,
             name: nameFromPath(entry.path),
+            artifact: entry.artifact,
           };
       byPath.set(entry.path, node);
     }
@@ -1490,6 +1515,35 @@
   function parentOf(path: string): string {
     const index = path.lastIndexOf('/');
     return index === -1 ? '' : path.slice(0, index);
+  }
+
+  function rawAttachmentSrc(path: string): string {
+    return kbService.rawSrc(vaultId, resolveAttachmentPath(documentPath, path));
+  }
+
+  async function uploadImageAttachment(file: File): Promise<{ path: string }> {
+    const uploaded = await kbService.uploadAttachment(vaultId, documentPath, file);
+    void refreshTree();
+    return { path: uploaded.path };
+  }
+
+  function resolveAttachmentPath(fromDocumentPath: string, targetPath: string): string {
+    const documentFolder = parentOf(fromDocumentPath);
+    const joined = documentFolder ? `${documentFolder}/${targetPath}` : targetPath;
+    return normalizeVaultRelativePath(joined);
+  }
+
+  function normalizeVaultRelativePath(input: string): string {
+    const segments: string[] = [];
+    for (const segment of input.split('/')) {
+      if (segment.length === 0 || segment === '.') continue;
+      if (segment === '..') {
+        segments.pop();
+        continue;
+      }
+      segments.push(segment);
+    }
+    return segments.join('/');
   }
 
   function nameFromPath(path: string): string {
@@ -1634,7 +1688,12 @@
     const path = documentPath;
     if (!id) return;
     untrack(() => {
-      if (path === '' || findNode(tree, path)?.kind === 'folder') {
+      const node = findNode(tree, path);
+      if (
+        path === '' ||
+        node?.kind === 'folder' ||
+        (node?.kind === 'file' && node.artifact?.editable === false)
+      ) {
         teardownProvider();
         return;
       }
@@ -1642,12 +1701,11 @@
     });
   });
 
-  // A folder deep-link on cold load opens a provider before the tree has
-  // loaded (the folder/file split can't be made yet). Once the tree
-  // arrives and the path resolves to a folder, tear that stray provider
-  // down — the folder canvas renders instead of the editor.
+  // A folder or attachment deep-link on cold load may open a provider before
+  // the tree has loaded. Once the tree resolves the path to non-document
+  // content, tear that stray provider down.
   $effect(() => {
-    if (!viewingFolder || !provider) return;
+    if (!(viewingFolder || activeAttachmentNode) || !provider) return;
     untrack(() => {
       provider?.destroy();
       provider = null;
@@ -1764,13 +1822,28 @@
       children={activeFolderNode?.children ?? tree}
       onOpenFile={(path) => {
         navOpen = false;
-        void openDocument(path);
+        openFilePath(vaultId, path);
       }}
       onOpenFolder={(path) => {
         navOpen = false;
         void openDocument(path);
       }}
     />
+  {:else if activeAttachmentNode}
+    <div class="doc-body-wrap">
+      <div class="doc-body">
+        <div class="attachment-open">
+          <a
+            class="attachment-open-link"
+            href={kbService.rawSrc(vaultId, activeAttachmentNode.path)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open {activeAttachmentNode.name}
+          </a>
+        </div>
+      </div>
+    </div>
   {:else}
     <!-- Document scroll structure ported from the reference DocumentCanvas:
          `.doc-body` is the full-width scroll container so the whole pane
@@ -1800,6 +1873,8 @@
                   readOnly={docDeleted}
                   scroll="external"
                   class="vault-editor"
+                  attachmentSrc={rawAttachmentSrc}
+                  uploadImage={uploadImageAttachment}
                   onWikilinkClick={handleWikilinkClick}
                 />
               {/key}
@@ -2076,6 +2151,25 @@
     padding: 24px 0;
     color: var(--rd-ink-4);
     font-size: 13px;
+  }
+
+  .attachment-open {
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 24px 0;
+  }
+
+  .attachment-open-link {
+    color: var(--rd-accent);
+    font-family: var(--rd-ui);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .attachment-open-link:hover {
+    text-decoration: underline;
   }
 
   .error {

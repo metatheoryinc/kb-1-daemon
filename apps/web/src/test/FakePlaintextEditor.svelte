@@ -2,7 +2,12 @@
   import { onMount } from 'svelte';
   import type * as Y from 'yjs';
 
-  let { readOnly = false, ydoc, ytext } = $props<{ readOnly?: boolean; ydoc?: Y.Doc; ytext?: Y.Text }>();
+  let { readOnly = false, ydoc, ytext } = $props<{
+    readOnly?: boolean;
+    ydoc?: Y.Doc;
+    ytext?: Y.Text;
+    attachmentSrc?: (path: string) => string;
+  }>();
   let binding = $state({ docGuid: '', content: '' });
 
   onMount(() => {

@@ -1,9 +1,28 @@
 import type { AccentName } from "../primitives/accent";
 
+export type LocalArtifactKind = "text" | "attachment";
+
+export type LocalArtifactPreview =
+  | "markdown"
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "pdf"
+  | "download";
+
+export interface LocalArtifactInfo {
+  kind: LocalArtifactKind;
+  contentType: string;
+  editable: boolean;
+  preview: LocalArtifactPreview;
+}
+
 export interface LocalFileNode {
   kind: "file";
   path: string;
   name: string;
+  artifact?: LocalArtifactInfo;
 }
 
 export interface LocalFolderMetadata {

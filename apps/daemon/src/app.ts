@@ -11,7 +11,9 @@ import {
   type VaultChangeEvent,
   type VaultService
 } from '@kb-2/vault-service';
+import { createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { SERVICE_NAME, type ActorDefault } from './config.js';
 import {
@@ -66,6 +68,8 @@ interface VaultRouteScope {
   resolve(context: Context): ServiceResult<{ service: VaultService }>;
   /** Prefix to strip when extracting a `/files/...` path from this scope. */
   filesPrefix(context: Context): string;
+  /** Prefix to strip when extracting a `/raw/...` path from this scope. */
+  rawPrefix(context: Context): string;
   /** Prefix to strip when extracting a `/folders/...` path from this scope. */
   foldersPrefix(context: Context): string;
 }
@@ -196,6 +200,7 @@ export function createApp(options: CreateAppOptions): Hono {
         return { ok: true, service: instance.service };
       },
       filesPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/files/`,
+      rawPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/raw/`,
       foldersPrefix: (context) => `/api/vaults/${vaultIdParam(context)}/folders/`
     };
     api.get('/vaults/:id/events', (context) => {
@@ -296,6 +301,31 @@ function registerVaultDataRoutes(
       limit: queryNumber(context, 'limit'),
       offset: queryNumber(context, 'offset')
     }));
+  });
+
+  router.get(`${basePath}/raw/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const rawPath = filePathParam(context.req.path, scope.rawPrefix(context));
+    const result = await resolved.service.readRawFile({ path: rawPath });
+    if (!result.ok) return mapServiceResult(context, result);
+    return rawFileResponse(context, result);
+  });
+
+  router.put(`${basePath}/raw/*`, async (context) => {
+    const resolved = scope.resolve(context);
+    if (!resolved.ok) return mapServiceResult(context, resolved);
+    const rawPath = filePathParam(context.req.path, scope.rawPrefix(context));
+    const actor = actorFromRequest(context, actorDefault);
+    if (!actor.ok) return mapServiceResult(context, actor);
+    const bytes = new Uint8Array(await context.req.raw.arrayBuffer());
+    const overwrite = context.req.query('overwrite') === 'true';
+    return mapServiceResult(context, await resolved.service.writeRawFile({
+      path: rawPath,
+      bytes,
+      overwrite,
+      actor: actor.actor
+    }), overwrite ? 200 : 201);
   });
 
   router.get(`${basePath}/files/*`, async (context) => {
@@ -555,6 +585,32 @@ function formatServerSentEvent(event: VaultChangeEvent): string {
   return `event: change\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+type RawFileReadResult = Awaited<ReturnType<VaultService['readRawFile']>>;
+type RawFileReadSuccess = Extract<RawFileReadResult, { ok: true }>;
+
+function rawFileResponse(context: Context, result: RawFileReadSuccess): Response {
+  const etag = rawFileEtag(result.size, result.mtimeMs);
+  const headers = new Headers({
+    'content-type': result.artifact.contentType,
+    'content-length': String(result.size),
+    etag,
+    'cache-control': 'private, max-age=3600',
+    'content-security-policy': 'sandbox',
+    'x-content-type-options': 'nosniff'
+  });
+
+  if (context.req.header('if-none-match') === etag) {
+    return new Response(null, { status: 304, headers });
+  }
+
+  const stream = Readable.toWeb(createReadStream(result.filePath)) as ReadableStream<Uint8Array>;
+  return new Response(stream, { status: 200, headers });
+}
+
+function rawFileEtag(size: number, mtimeMs: number): string {
+  return `W/"${size}-${Math.trunc(mtimeMs)}"`;
+}
+
 function mapServiceResult(
   context: Context,
   result: ServiceResult,
@@ -613,13 +669,15 @@ function statusForRegistryError(error: VaultRegistryErrorCode): 400 | 404 | 409 
   }
 }
 
-function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 500 {
+function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 | 415 | 500 {
   switch (error) {
     case 'invalid_actor':
     case 'invalid_path':
     case 'invalid_metadata':
     case 'invalid_request':
       return 400;
+    case 'not_editable':
+      return 415;
     case 'metadata_parse_failed':
       return 500;
     case 'not_found':
