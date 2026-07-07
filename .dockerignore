@@ -8,3 +8,7 @@ apps/*/dist/
 apps/*/node_modules/
 packages/*/dist/
 packages/*/node_modules/
+
+# Root .env is tracked intentionally as the Nx guard; keep local overrides out.
+.env.local
+.env.*.local
