@@ -11,5 +11,9 @@ coverage/
 docs/scratch/
 .fallow/
 
+# Root .env is tracked intentionally as the Nx guard; keep local overrides out.
+.env.local
+.env.*.local
+
 # Storybook debug output
 debug-storybook.log
