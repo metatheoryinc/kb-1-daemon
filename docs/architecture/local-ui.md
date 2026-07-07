@@ -28,7 +28,7 @@ The local UI should not include:
 - authentication
 - users
 - organizations
-- billing
+- remote account administration
 - remote sharing policy
 - remote relay setup as a prerequisite for local use
 - cursors

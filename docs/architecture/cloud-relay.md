@@ -17,7 +17,7 @@ The cloud layer owns:
 - API key and device registration
 - active tunnel registry
 - per-vault routing
-- permissions and feature gates
+- permissions and access-control policy
 - cloud MCP/API endpoints
 - web app delivery
 - ephemeral presence, cursors, selections, and follow-mode state

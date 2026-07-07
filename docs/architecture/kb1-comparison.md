@@ -63,7 +63,7 @@ The central change is custody.
 | Multi-tenancy | Shared remote storage substrate | Tenant content outside remote storage |
 | Document identity | Migrated toward stable note IDs | Path-keyed initially because files are canonical |
 | Awareness | Cloud/realtime substrate | Cloud presence plane can remain separate |
-| Data loss posture | Hosted service owns more risk | User owns storage/backup; service owns write correctness |
+| Data loss posture | Remote substrate owns content durability | User owns storage/backup; service owns write correctness |
 
 ## Why Path Identity Is Acceptable Again
 
