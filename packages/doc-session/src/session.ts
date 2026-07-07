@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 
 import diff from 'fast-diff';
 import * as Y from 'yjs';
-import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-2/vault-core';
+import { DOCUMENT_BYTES_LIMIT, isNodeError, utf8ByteLength } from '@kb-1/vault-core';
 
 import {
   LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
@@ -151,7 +151,7 @@ export class OneFileDocumentSession {
     this.watchDebounceMs = options.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
     this.watchPollMs = options.watchPollMs ?? WATCH_POLL_MS;
     this.warn = options.warn ?? ((warning) => {
-      console.warn(`KB-2 external document change detected at ${warning.filePath}; reconciling active Yjs session from disk.`);
+      console.warn(`KB-1 external document change detected at ${warning.filePath}; reconciling active Yjs session from disk.`);
     });
   }
 
@@ -426,7 +426,7 @@ export class OneFileDocumentSession {
 
     this.pendingPersistAttribution = documentUpdateAttributionFromOrigin(origin);
     this.requestPersist().catch((error: unknown) => {
-      console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
+      console.warn(`KB-1 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
     });
   };
 
@@ -595,12 +595,12 @@ export class OneFileDocumentSession {
     });
 
     this.watcher.on('error', (error) => {
-      console.warn(`KB-2 file watcher failed for ${this.filePath}; fallback polling remains active.`, error);
+      console.warn(`KB-1 file watcher failed for ${this.filePath}; fallback polling remains active.`, error);
     });
 
     this.watchPollTimer = setInterval(() => {
       this.checkForExternalChange().catch((error: unknown) => {
-        console.warn(`KB-2 fallback file poll failed for ${this.filePath}.`, error);
+        console.warn(`KB-1 fallback file poll failed for ${this.filePath}.`, error);
       });
     }, this.watchPollMs);
     this.watchPollTimer.unref?.();
@@ -629,7 +629,7 @@ export class OneFileDocumentSession {
     this.watchDebounceTimer = setTimeout(() => {
       this.watchDebounceTimer = undefined;
       this.checkForExternalChange().catch((error: unknown) => {
-        console.warn(`KB-2 file watcher check failed for ${this.filePath}.`, error);
+        console.warn(`KB-1 file watcher check failed for ${this.filePath}.`, error);
       });
     }, this.watchDebounceMs);
     this.watchDebounceTimer.unref?.();
@@ -728,7 +728,7 @@ export class OneFileDocumentSession {
       }, this);
       return true;
     } catch (error) {
-      console.warn(`KB-2 ignored invalid Yjs state snapshot for ${this.filePath}.`, error);
+      console.warn(`KB-1 ignored invalid Yjs state snapshot for ${this.filePath}.`, error);
       return false;
     }
   }
@@ -757,7 +757,7 @@ export class OneFileDocumentSession {
     const event = this.createEvent('persist-failure');
     this.activePersistFailureEvent = event;
     this.emitEvent(event);
-    console.warn(`KB-2 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
+    console.warn(`KB-1 failed to persist document update for ${this.filePath}; keeping active Yjs session open.`, error);
     return persistError;
   }
 
@@ -799,7 +799,7 @@ export class OneFileDocumentSession {
       try {
         handler(event);
       } catch (error) {
-        console.warn(`KB-2 document session event handler failed for ${this.filePath}.`, error);
+        console.warn(`KB-1 document session event handler failed for ${this.filePath}.`, error);
       }
     }
   }

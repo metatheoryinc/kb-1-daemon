@@ -1,8 +1,7 @@
 # KB-1 Local Comparison
 
 KB-1 Local preserves the original KB-1 ambition while changing the custody and
-authority model. Some implementation/package names still say KB-2 while the
-product rename is in progress; public-facing language should say KB-1 Local.
+authority model.
 
 ## KB-1 Summary
 

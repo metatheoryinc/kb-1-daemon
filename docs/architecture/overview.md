@@ -1,6 +1,6 @@
-# KB-2 Architecture Overview
+# KB-1 Architecture Overview
 
-KB-2 separates durable customer data from optional remote coordination.
+KB-1 separates durable customer data from optional remote coordination.
 
 The local server owns content operations, filesystem materialization, local
 agent access, and the first local web UI. A remote layer can later own
@@ -14,7 +14,7 @@ instead of resolved from remote D1/R2 storage.
 ```text
 Local Web UI / Local MCP / Local API
         |
-Open-source local KB-2 server
+Open-source local KB-1 server
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
@@ -29,7 +29,7 @@ Auth, relay registry, active sessions, permissions, presence
         |
 Outbound WebSocket tunnel from local server
         |
-Open-source local KB-2 server
+Open-source local KB-1 server
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
@@ -38,7 +38,7 @@ Markdown, images, attachments, .kb2 metadata
 
 ## Planes
 
-KB-2 has two main runtime planes.
+KB-1 has two main runtime planes.
 
 The content plane handles durable vault operations:
 
@@ -106,7 +106,7 @@ avoid storing content bodies in relay databases or logs.
 
 ## Relationship To KB-1
 
-KB-1 used remote D1/R2/Durable Object state as the knowledge substrate. KB-2
+KB-1 used remote D1/R2/Durable Object state as the knowledge substrate. KB-1
 uses the filesystem and local server as the substrate. Remote services can
 coordinate multi-user access, but they no longer act as the durable content
 store. The local open-source product should be useful before relay exists.

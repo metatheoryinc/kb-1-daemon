@@ -20,7 +20,7 @@ import {
   resolveNoteParentPresentation,
   type AccentName,
   type LocalTreeNode,
-} from "@kb-2/ui";
+} from "@kb-1/ui";
 import { encodeVaultPath } from "$lib/yjs/demo-document-provider";
 
 export interface StarredRow {

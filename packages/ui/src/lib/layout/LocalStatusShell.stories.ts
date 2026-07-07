@@ -3,13 +3,13 @@ import LocalStatusShell from './LocalStatusShell.svelte';
 
 const health = {
   ok: true,
-  service: '@kb-2/daemon',
+  service: '@kb-1/daemon',
   status: {
-    serviceName: '@kb-2/daemon',
+    serviceName: '@kb-1/daemon',
     startedAt: '2026-06-10T18:42:12.000Z',
-    kb2Home: '/tmp/kb2-storybook/home',
-    daemonHome: '/tmp/kb2-storybook/home/daemon',
-    statusFile: '/tmp/kb2-storybook/home/daemon/status.json',
+    kb1Home: '/tmp/kb1-storybook/home',
+    daemonHome: '/tmp/kb1-storybook/home/daemon',
+    statusFile: '/tmp/kb1-storybook/home/daemon/status.json',
     pid: 42420,
     nodeVersion: 'v25.9.2'
   }

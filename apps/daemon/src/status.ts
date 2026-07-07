@@ -5,7 +5,7 @@ import type { DaemonConfig } from './config.js';
 export interface DaemonStatus {
   serviceName: string;
   startedAt: string;
-  kb2Home: string;
+  kb1Home: string;
   daemonHome: string;
   statusFile: string;
   pid: number;
@@ -16,7 +16,7 @@ export async function writeDaemonStatus(config: DaemonConfig): Promise<DaemonSta
   const status: DaemonStatus = {
     serviceName: config.serviceName,
     startedAt: config.startedAt,
-    kb2Home: config.kb2Home,
+    kb1Home: config.kb1Home,
     daemonHome: config.daemonHome,
     statusFile: config.statusFile,
     pid: config.pid,
@@ -49,7 +49,7 @@ function isDaemonStatus(value: unknown): value is DaemonStatus {
 
   return typeof status.serviceName === 'string'
     && typeof status.startedAt === 'string'
-    && typeof status.kb2Home === 'string'
+    && typeof status.kb1Home === 'string'
     && typeof status.daemonHome === 'string'
     && typeof status.statusFile === 'string'
     && typeof status.pid === 'number'

@@ -1,17 +1,24 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-2/doc-session';
-import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
-import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
-import type { VaultChangeEventKind } from '@kb-2/vault-service';
+import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-1/doc-session';
+import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
+import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
+import type { VaultChangeEventKind } from '@kb-1/vault-service';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-2/vault-core';
+import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-1/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { ACTOR_HEADER, actorFromHeader, createApp, mcpVaultProvider, type RelayLifecycleController } from './app.js';
+import {
+  ACTOR_HEADER,
+  LEGACY_ACTOR_HEADER,
+  actorFromHeaders,
+  createApp,
+  mcpVaultProvider,
+  type RelayLifecycleController
+} from './app.js';
 import {
   createDaemonConfig,
   DEFAULT_VAULT_SLUG,
@@ -48,9 +55,13 @@ export interface StartedDaemon {
 export async function startDaemon(): Promise<StartedDaemon> {
   const config = createDaemonConfig();
 
+  for (const warning of config.deprecationWarnings) {
+    console.warn(`[${config.serviceName}] ${warning}`);
+  }
+
   // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
   await migrateLegacyVaultLayout({
-    legacyVaultDir: join(config.kb2Home, LEGACY_VAULT_DIRNAME),
+    legacyVaultDir: join(config.kb1Home, LEGACY_VAULT_DIRNAME),
     vaultsHome: config.vaultsHome,
     targetSlug: DEFAULT_VAULT_SLUG
   });
@@ -58,7 +69,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // Discover every vault into a live registry: listable, addressable by slug,
   // and mutable at runtime (create/rename/soft-delete) with no restart.
   await mkdir(config.vaultsHome, { recursive: true });
-  const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
+  const trashHome = join(config.kb1Home, VAULT_TRASH_DIRNAME);
   const registry = await VaultRegistry.load(config.vaultsHome, trashHome, {
     historyCoalesceWindowMs: config.historyCoalesceWindowMs
   });
@@ -113,9 +124,9 @@ export async function startDaemon(): Promise<StartedDaemon> {
           settled = true;
 
           console.log(`${config.serviceName} listening on http://${info.address}:${info.port}`);
-          console.log(`KB2_HOME=${config.kb2Home}`);
+          console.log(`KB1_HOME=${config.kb1Home}`);
           if (config.webProxyTarget) {
-            console.log(`KB2_WEB_PROXY_TARGET=${config.webProxyTarget}`);
+            console.log(`KB1_WEB_PROXY_TARGET=${config.webProxyTarget}`);
           }
           console.log(`status=${config.statusFile}`);
           relay?.connect();
@@ -296,7 +307,10 @@ function resolveWebSocketTarget(
 function documentUpdateAttributionFromRequest(
   request: IncomingMessage
 ): { ok: true; attribution?: DocumentUpdateAttribution } | { ok: false } {
-  const parsed = actorFromHeader(firstHeaderValue(request.headers[ACTOR_HEADER]));
+  const parsed = actorFromHeaders(
+    firstHeaderValue(request.headers[ACTOR_HEADER]),
+    firstHeaderValue(request.headers[LEGACY_ACTOR_HEADER])
+  );
   if (!parsed.ok) return { ok: false };
   return {
     ok: true,

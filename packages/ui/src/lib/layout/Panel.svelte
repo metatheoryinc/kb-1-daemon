@@ -13,7 +13,7 @@
   let { title, eyebrow, class: className, children, actions }: Props = $props();
 </script>
 
-<section class={cn('kb2-panel', className)}>
+<section class={cn('kb1-panel', className)}>
   {#if title || eyebrow || actions}
     <header class="panel-header">
       <div class="panel-title-block">
@@ -37,7 +37,7 @@
 </section>
 
 <style>
-  .kb2-panel {
+  .kb1-panel {
     border: 1px solid var(--rd-rule);
     border-radius: 8px;
     background: var(--rd-panel);

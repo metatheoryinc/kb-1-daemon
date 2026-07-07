@@ -1,6 +1,6 @@
 # Vault Format
 
-KB-2 vaults are filesystem directories. Markdown, images, attachments, and
+KB-1 vaults are filesystem directories. Markdown, images, attachments, and
 selected `.kb2` metadata are portable user-owned data. Runtime caches, local
 locks, and secrets are local implementation details.
 
@@ -33,7 +33,7 @@ Canonical durable content includes:
 - images
 - attachments
 - user-managed folder/file structure
-- durable KB-2 metadata needed to preserve product semantics
+- durable KB-1 metadata needed to preserve product semantics
 
 The server should be able to bootstrap from this data after a fresh checkout or
 restore.
@@ -64,12 +64,12 @@ metadata. A path-keyed YAML file is a simple starting point:
 folders:
   "Projects":
     color: blue
-  "Projects/KB-2":
+  "Projects/KB-1":
     color: pink
     icon: brain
 ```
 
-This allows the visible filesystem tree to remain plain while preserving KB-2 UI
+This allows the visible filesystem tree to remain plain while preserving KB-1 UI
 affordances.
 
 ## Ignored Local State

@@ -9,7 +9,7 @@ const fixtures = {
   externalMergeNotice: {
     variant: 'external-merge',
     title: 'External edit merged',
-    message: 'Merged an edit made outside KB-2.',
+    message: 'Merged an edit made outside KB-1.',
     ondismiss: noop,
   },
   externalChangeNotice: {
@@ -28,7 +28,7 @@ const fixtures = {
   persistFailureAlarm: {
     variant: 'persist-failure',
     title: 'Changes are not saving',
-    message: 'Keep this tab open. KB-2 will retry automatically when storage responds.',
+    message: 'Keep this tab open. KB-1 will retry automatically when storage responds.',
   },
   persistRecoveredConfirmation: {
     variant: 'persist-recovered',

@@ -7,7 +7,7 @@ not users, cursors, selections, follow mode, or presence. Awareness and
 collaboration affordances belong to the cloud layer.
 
 When something changes a file locally, the product surfaces a content event
-("changed outside KB-2; reloaded from disk"), with warning framing for direct
+("changed outside KB-1; reloaded from disk"), with warning framing for direct
 writes — never a presence model.
 
 ## Named Exception: Durable Actor Attribution

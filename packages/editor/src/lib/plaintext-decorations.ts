@@ -187,7 +187,7 @@ import {
   type LivePath,
   type OrgPerson,
 } from './markdown-core';
-import { accentForId } from '@kb-2/ui';
+import { accentForId } from '@kb-1/ui';
 import { MentionChipWidget, type MentionChipProps } from './plaintext-mention-widget';
 
 /* ---------------------------------------------------------------- *

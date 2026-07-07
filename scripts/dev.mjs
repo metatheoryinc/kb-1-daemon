@@ -3,23 +3,23 @@
 import { spawn } from 'node:child_process';
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const daemonHost = process.env.KB2_HOST || '127.0.0.1';
-const daemonPort = process.env.KB2_PORT || '7382';
-const webPort = process.env.KB2_WEB_PORT || '5173';
-const webProxyTarget = process.env.KB2_WEB_PROXY_TARGET || `http://127.0.0.1:${webPort}`;
+const daemonHost = envValue('KB1_HOST', 'KB2_HOST') || '127.0.0.1';
+const daemonPort = envValue('KB1_PORT', 'KB2_PORT') || '7382';
+const webPort = envValue('KB1_WEB_PORT', 'KB2_WEB_PORT') || '5173';
+const webProxyTarget = envValue('KB1_WEB_PROXY_TARGET', 'KB2_WEB_PROXY_TARGET') || `http://127.0.0.1:${webPort}`;
 
 const children = [
-  spawnProcess('web', ['--filter', '@kb-2/web', 'dev'], {
-    KB2_WEB_PORT: webPort
+  spawnProcess('web', ['--filter', '@kb-1/web', 'dev'], {
+    KB1_WEB_PORT: webPort
   }),
-  spawnProcess('daemon', ['--filter', '@kb-2/daemon', 'dev'], {
-    KB2_HOST: daemonHost,
-    KB2_PORT: daemonPort,
-    KB2_WEB_PROXY_TARGET: webProxyTarget
+  spawnProcess('daemon', ['--filter', '@kb-1/daemon', 'dev'], {
+    KB1_HOST: daemonHost,
+    KB1_PORT: daemonPort,
+    KB1_WEB_PROXY_TARGET: webProxyTarget
   })
 ];
 
-console.log(`KB-2 dev front door: http://${daemonHost}:${daemonPort}`);
+console.log(`KB-1 dev front door: http://${daemonHost}:${daemonPort}`);
 console.log(`Vite dev server: ${webProxyTarget}`);
 
 let shuttingDown = false;
@@ -72,6 +72,10 @@ function spawnProcess(name, args, env) {
   streamLines(name, child.stderr);
 
   return child;
+}
+
+function envValue(primary, legacy) {
+  return process.env[primary] || process.env[legacy];
 }
 
 function streamLines(name, stream) {

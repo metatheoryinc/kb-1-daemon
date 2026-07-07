@@ -1,12 +1,12 @@
 # Local UI
 
-The local UI is the first open-source user experience for KB-2. It is served by,
+The local UI is the first open-source user experience for KB-1. It is served by,
 or alongside, the local daemon/server and talks to the local server APIs. It
 does not read or write the filesystem directly.
 
 ## Purpose
 
-The local UI lets KB-2 become useful before remote relay, auth, org management,
+The local UI lets KB-1 become useful before remote relay, auth, org management,
 or collaboration services exist.
 
 The first local product should let a single local user:
@@ -48,7 +48,7 @@ Instead, the local UI should surface content state changes:
 
 - a service-mediated edit changed the file
 - an MCP/API caller changed the file
-- a direct filesystem write bypassed KB-2 and caused a reload
+- a direct filesystem write bypassed KB-1 and caused a reload
 - the file was moved, renamed, deleted, or recreated
 
 For direct filesystem writes, the UI should use stronger language because the

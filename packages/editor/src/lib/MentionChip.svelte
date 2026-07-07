@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Avatar, type AccentName } from '@kb-2/ui';
+  import { Avatar, type AccentName } from '@kb-1/ui';
 
   /**
    * Editor-side mention chip. Mounted via a CM6 `WidgetType` (see

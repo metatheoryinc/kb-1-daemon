@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { LocalStatusShell } from '@kb-2/ui';
-  import type { HealthResponse } from '@kb-2/ui';
+  import { LocalStatusShell } from '@kb-1/ui';
+  import type { HealthResponse } from '@kb-1/ui';
   import { onMount } from 'svelte';
 
   let { routeLabel = 'Local daemon' } = $props<{

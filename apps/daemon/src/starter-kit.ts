@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { writeVaultFile } from '@kb-2/vault-core';
+import { writeVaultFile } from '@kb-1/vault-core';
 
 /** Vault-internal directory that holds identity/state, never user content. */
 const VAULT_IDENTITY_DIR = '.kb2';

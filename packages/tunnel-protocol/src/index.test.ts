@@ -47,7 +47,7 @@ it("round-trips control hello feature advertisement", () => {
     version: TUNNEL_PROTOCOL_VERSION,
     token: "test-token",
     daemonVersion: "0.1.0",
-    daemonBuild: "registry.example/kb2d@sha256:abc123",
+    daemonBuild: "registry.example/kb1d@sha256:abc123",
     features: [TUNNEL_FEATURES.RELAY_FRAMES_V1]
   } as const;
 

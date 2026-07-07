@@ -17,7 +17,7 @@ describe('vault registry', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kb2-registry-'));
+    home = await mkdtemp(join(tmpdir(), 'kb1-registry-'));
   });
 
   afterEach(async () => {
@@ -491,7 +491,7 @@ describe('vault registry', () => {
           actor: { kind: 'user' }
         })
       }));
-      expect(warn).toHaveBeenCalledWith('KB-2 vault registry event handler failed.', expect.any(Error));
+      expect(warn).toHaveBeenCalledWith('KB-1 vault registry event handler failed.', expect.any(Error));
 
       expect(await registry.setMetadata('missing', { color: '#a855f7' }, { kind: 'user' })).toEqual({
         ok: false,

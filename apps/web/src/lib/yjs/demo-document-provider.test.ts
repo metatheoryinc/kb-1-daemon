@@ -16,7 +16,7 @@ import {
   OneFileDocumentSession,
   encodeSessionEvent,
   type DocumentSessionEvent,
-} from '@kb-2/doc-session';
+} from '@kb-1/doc-session';
 import {
   createDemoDocumentProvider,
   DEMO_DOCUMENT_TEXT_NAME,
@@ -27,14 +27,14 @@ import {
 
 const messageSync = 0;
 const DEFAULT_DEMO_DOCUMENT_CONTENT = [
-  '# Hello KB-2',
+  '# Hello KB-1',
   '',
-  'This Markdown file is served by the local KB-2 daemon.',
+  'This Markdown file is served by the local KB-1 daemon.',
   '',
 ].join('\n');
 
 describe('demo document provider', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
   let server: Server | undefined;
   let webSocketServer: WebSocketServer | undefined;
@@ -42,7 +42,7 @@ describe('demo document provider', () => {
 
   beforeEach(async () => {
     originalEnv = { ...process.env };
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-web-provider-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-web-provider-'));
     (globalThis as { WebSocket?: unknown }).WebSocket = WebSocket;
   });
 
@@ -60,12 +60,12 @@ describe('demo document provider', () => {
       session = undefined;
     }
     process.env = originalEnv;
-    await rm(kb2Home, { recursive: true, force: true });
+    await rm(kb1Home, { recursive: true, force: true });
     delete (globalThis as { WebSocket?: unknown }).WebSocket;
   });
 
   it('converges with a raw y-protocols client through the daemon and persists to disk', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
     session = new OneFileDocumentSession(filePath, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
     await session.open();
 
@@ -94,7 +94,7 @@ describe('demo document provider', () => {
 
     await waitForContent(
       [provider.text, raw.text],
-      (content) => content.includes('Hello KB-2'),
+      (content) => content.includes('Hello KB-1'),
     );
 
     provider.text.insert(provider.text.length, '\nprovider edit');
@@ -134,7 +134,7 @@ describe('demo document provider', () => {
       webSocketServer!.handleUpgrade(request, socket, head, (webSocket) => {
         webSocket.send(encodeSessionEvent({
           kind: 'external-merge',
-          path: join(kb2Home, 'demo-vault', 'hello-world.md'),
+          path: join(kb1Home, 'demo-vault', 'hello-world.md'),
           ts: 123,
         }));
       });

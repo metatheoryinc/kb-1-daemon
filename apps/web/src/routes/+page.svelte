@@ -18,7 +18,7 @@
     resolveLinkTarget,
     type LivePath,
     type OrgPerson,
-  } from '@kb-2/editor';
+  } from '@kb-1/editor';
   import {
     ConfirmDialog,
     DocumentByline,
@@ -47,9 +47,9 @@
     parentFolderPath,
     ROOT_DEFAULT_COLOR,
     resolveFolderColor,
-  } from '@kb-2/ui';
+  } from '@kb-1/ui';
   import { kbService, type ArtifactInfo, type FileHistoryEntry, type VaultSummary } from '$lib/kb-service';
-  import type { DocumentSessionEvent } from '@kb-2/doc-session/protocol';
+  import type { DocumentSessionEvent } from '@kb-1/doc-session/protocol';
   import {
     useAppState,
     ancestorKeysForPath,
@@ -474,15 +474,15 @@
   const editorSaveNotificationCopy = {
     externalMerge: {
       title: 'External edit merged',
-      message: 'Merged an edit made outside KB-2.',
+      message: 'Merged an edit made outside KB-1.',
     },
     externalChange: {
-      title: 'File changed outside KB-2',
-      message: 'This file changed outside KB-2 and was reloaded from disk.',
+      title: 'File changed outside KB-1',
+      message: 'This file changed outside KB-1 and was reloaded from disk.',
     },
     persistFailure: {
       title: 'Changes are NOT saving to disk.',
-      message: 'Keep this tab open. KB-2 will keep retrying until saving recovers.',
+      message: 'Keep this tab open. KB-1 will keep retrying until saving recovers.',
     },
     docDeleted: {
       title: 'Document deleted',
@@ -2126,7 +2126,7 @@
 </script>
 
 <svelte:head>
-  <title>KB-2 Editor</title>
+  <title>KB-1 Editor</title>
 </svelte:head>
 
 <!-- Shared canvas body. Both shells render identical content — the

@@ -8,7 +8,7 @@ describe('seedVaultFromStarterKit', () => {
   let vaultRoot: string;
 
   beforeEach(async () => {
-    vaultRoot = await mkdtemp(join(tmpdir(), 'kb2-starter-kit-'));
+    vaultRoot = await mkdtemp(join(tmpdir(), 'kb1-starter-kit-'));
   });
 
   afterEach(async () => {

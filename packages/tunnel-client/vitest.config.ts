@@ -5,7 +5,7 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: /^@kb-2\/tunnel-protocol$/,
+        find: /^@kb-1\/tunnel-protocol$/,
         replacement: fileURLToPath(
           new URL('../tunnel-protocol/src/index.ts', import.meta.url),
         ),

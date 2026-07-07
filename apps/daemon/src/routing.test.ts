@@ -10,7 +10,7 @@ import {
 import {
   DocumentSessionManager,
   type DocumentSessionEvent,
-} from "@kb-2/doc-session";
+} from "@kb-1/doc-session";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { serve } from "@hono/node-server";
@@ -21,8 +21,8 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import * as Y from "yjs";
 
-import { anchoredSpliceContractCases } from "@kb-2/vault-core";
-import type { VaultChangeEvent, VaultService } from "@kb-2/vault-service";
+import { anchoredSpliceContractCases } from "@kb-1/vault-core";
+import type { VaultChangeEvent, VaultService } from "@kb-1/vault-service";
 import {
   createApp,
   type RelayLifecycleController,
@@ -39,14 +39,14 @@ const CORAL = "#fda4af";
 const MINT = "#a7f3d0";
 
 describe("daemon routing", () => {
-  let kb2Home: string;
+  let kb1Home: string;
 
   beforeEach(async () => {
-    kb2Home = await mkdtemp(join(tmpdir(), "kb2-health-"));
+    kb1Home = await mkdtemp(join(tmpdir(), "kb1-health-"));
   });
 
   afterEach(async () => {
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   /**
@@ -62,12 +62,12 @@ describe("daemon routing", () => {
     vaultRoot: string;
     config: ReturnType<typeof createDaemonConfig>;
   }> {
-    const config = createDaemonConfig({ env: { KB2_HOME: kb2Home } });
+    const config = createDaemonConfig({ env: { KB1_HOME: kb1Home } });
     const vaultsHome = config.vaultsHome;
     await mkdir(join(vaultsHome, VAULT), { recursive: true });
     const registry = await VaultRegistry.load(
       vaultsHome,
-      join(kb2Home, VAULT_TRASH_DIRNAME),
+      join(kb1Home, VAULT_TRASH_DIRNAME),
     );
     const instance = registry.get(VAULT);
     if (!instance) throw new Error("expected the seeded vault to load");
@@ -101,7 +101,7 @@ describe("daemon routing", () => {
   it("returns daemon status read back from the configured filesystem home", async () => {
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
       now: new Date("2026-06-10T15:30:00.000Z"),
       pid: 5678,
@@ -119,11 +119,11 @@ describe("daemon routing", () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
       ok: true,
-      service: "kb2d",
+      service: "kb1d",
       status: {
-        serviceName: "kb2d",
-        kb2Home,
-        daemonHome: join(kb2Home, "daemon"),
+        serviceName: "kb1d",
+        kb1Home,
+        daemonHome: join(kb1Home, "daemon"),
         statusFile: config.statusFile,
         pid: 5678,
       },
@@ -135,7 +135,7 @@ describe("daemon routing", () => {
     const relay = fakeRelayLifecycleController();
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile, relay });
@@ -190,7 +190,7 @@ describe("daemon routing", () => {
   it("keeps relay status readable and connect explicit when relay is not configured", async () => {
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile });
@@ -225,16 +225,16 @@ describe("daemon routing", () => {
   });
 
   it("serves the UI shell for root and client route requests", async () => {
-    const webBuildDir = await mkdtemp(join(tmpdir(), "kb2-web-build-"));
+    const webBuildDir = await mkdtemp(join(tmpdir(), "kb1-web-build-"));
     await writeFile(
       join(webBuildDir, "index.html"),
-      '<!doctype html><title>KB-2 Local</title><div id="svelte">KB-2 Local UI</div>',
+      '<!doctype html><title>KB-1 Local</title><div id="svelte">KB-1 Local UI</div>',
       "utf8",
     );
 
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile, webBuildDir });
@@ -244,21 +244,21 @@ describe("daemon routing", () => {
 
     expect(rootResponse.status).toBe(200);
     expect(rootResponse.headers.get("content-type")).toContain("text/html");
-    await expect(rootResponse.text()).resolves.toContain("KB-2 Local UI");
+    await expect(rootResponse.text()).resolves.toContain("KB-1 Local UI");
 
     expect(routeResponse.status).toBe(200);
     expect(routeResponse.headers.get("content-type")).toContain("text/html");
-    await expect(routeResponse.text()).resolves.toContain("KB-2 Local UI");
+    await expect(routeResponse.text()).resolves.toContain("KB-1 Local UI");
 
     await rm(webBuildDir, { force: true, recursive: true });
   });
 
   it("serves built UI assets without routing them through the SPA fallback", async () => {
-    const webBuildDir = await mkdtemp(join(tmpdir(), "kb2-web-build-"));
+    const webBuildDir = await mkdtemp(join(tmpdir(), "kb1-web-build-"));
     await mkdir(join(webBuildDir, "_app"), { recursive: true });
     await writeFile(
       join(webBuildDir, "index.html"),
-      "<!doctype html><title>KB-2 Local</title>",
+      "<!doctype html><title>KB-1 Local</title>",
       "utf8",
     );
     await writeFile(
@@ -269,7 +269,7 @@ describe("daemon routing", () => {
 
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile, webBuildDir });
@@ -284,16 +284,16 @@ describe("daemon routing", () => {
   });
 
   it("keeps missing API routes out of the UI fallback", async () => {
-    const webBuildDir = await mkdtemp(join(tmpdir(), "kb2-web-build-"));
+    const webBuildDir = await mkdtemp(join(tmpdir(), "kb1-web-build-"));
     await writeFile(
       join(webBuildDir, "index.html"),
-      "<!doctype html><title>KB-2 Local</title>",
+      "<!doctype html><title>KB-1 Local</title>",
       "utf8",
     );
 
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile, webBuildDir });
@@ -558,7 +558,7 @@ describe("daemon routing", () => {
   it("reports storage bytes used by active and soft-deleted vault data", async () => {
     const { app, vaultRoot } = await setupScopedVault();
     await writeFile(join(vaultRoot, "active.md"), "active-bytes");
-    const trashed = join(kb2Home, VAULT_TRASH_DIRNAME, "old-vault");
+    const trashed = join(kb1Home, VAULT_TRASH_DIRNAME, "old-vault");
     await mkdir(trashed, { recursive: true });
     await writeFile(join(trashed, "old.md"), "trash-bytes");
 
@@ -683,6 +683,63 @@ describe("daemon routing", () => {
     });
   });
 
+  it("accepts the legacy x-kb2-actor header for existing clients", async () => {
+    const { app } = await setupScopedVault();
+    const legacyActor = {
+      kind: "integration",
+      id: "legacy-client",
+      name: "Legacy Client",
+      client: "kb2-client",
+    };
+
+    const created = await app.request(filePath("notes/legacy-actor.md"), {
+      method: "PUT",
+      headers: {
+        "content-type": "text/plain",
+        "x-kb2-actor": JSON.stringify(legacyActor),
+      },
+      body: "legacy actor\n",
+    });
+
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ok: true,
+      audit: { actor: legacyActor },
+    });
+  });
+
+  it("prefers x-kb1-actor when both actor headers are supplied", async () => {
+    const { app } = await setupScopedVault();
+    const kb1Actor = {
+      kind: "integration",
+      id: "kb1-client",
+      name: "KB-1 Client",
+      client: "kb1-client",
+    };
+    const legacyActor = {
+      kind: "integration",
+      id: "legacy-client",
+      name: "Legacy Client",
+      client: "kb2-client",
+    };
+
+    const created = await app.request(filePath("notes/actor-precedence.md"), {
+      method: "PUT",
+      headers: {
+        "content-type": "text/plain",
+        "x-kb1-actor": JSON.stringify(kb1Actor),
+        "x-kb2-actor": JSON.stringify(legacyActor),
+      },
+      body: "actor precedence\n",
+    });
+
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ok: true,
+      audit: { actor: kb1Actor },
+    });
+  });
+
   it.each([
     {
       name: "default user mode",
@@ -691,17 +748,17 @@ describe("daemon routing", () => {
     },
     {
       name: "configured unknown mode",
-      env: { KB2_ACTOR_DEFAULT: "unknown" },
+      env: { KB1_ACTOR_DEFAULT: "unknown" },
       expectedActor: { kind: "unknown" },
     },
   ])(
     "uses $name for REST writes without an actor header",
     async ({ env, expectedActor }) => {
-      const config = createDaemonConfig({ env: { KB2_HOME: kb2Home, ...env } });
+      const config = createDaemonConfig({ env: { KB1_HOME: kb1Home, ...env } });
       await mkdir(join(config.vaultsHome, VAULT), { recursive: true });
       const registry = await VaultRegistry.load(
         config.vaultsHome,
-        join(kb2Home, VAULT_TRASH_DIRNAME),
+        join(kb1Home, VAULT_TRASH_DIRNAME),
       );
       const vaultRoot = registry.get(VAULT)!.entry.root;
       const app = createApp({
@@ -2206,7 +2263,7 @@ describe("daemon routing", () => {
 
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({
@@ -2229,10 +2286,10 @@ describe("daemon routing", () => {
   });
 
   it("returns an instructional response when no UI build is available", async () => {
-    const webBuildDir = await mkdtemp(join(tmpdir(), "kb2-web-build-missing-"));
+    const webBuildDir = await mkdtemp(join(tmpdir(), "kb1-web-build-missing-"));
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
+        KB1_HOME: kb1Home,
       },
     });
     const app = createApp({ statusFile: config.statusFile, webBuildDir });
@@ -2241,7 +2298,7 @@ describe("daemon routing", () => {
     const body = await response.text();
 
     expect(response.status).toBe(503);
-    expect(body).toContain("KB-2 local UI is not built yet.");
+    expect(body).toContain("KB-1 local UI is not built yet.");
     expect(body).toContain("pnpm dev");
 
     await rm(webBuildDir, { force: true, recursive: true });

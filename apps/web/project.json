@@ -7,25 +7,25 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/web build"
+        "command": "pnpm --filter @kb-1/web build"
       }
     },
     "dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/web dev"
+        "command": "pnpm --filter @kb-1/web dev"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/web test"
+        "command": "pnpm --filter @kb-1/web test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/web typecheck"
+        "command": "pnpm --filter @kb-1/web typecheck"
       }
     }
   }

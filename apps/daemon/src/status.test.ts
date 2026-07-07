@@ -8,7 +8,7 @@ describe('daemon status', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'kb2-status-'));
+    tempDir = await mkdtemp(join(tmpdir(), 'kb1-status-'));
   });
 
   afterEach(async () => {
@@ -17,7 +17,7 @@ describe('daemon status', () => {
 
   it('rejects malformed status files', async () => {
     const statusFile = join(tempDir, 'status.json');
-    await writeFile(statusFile, JSON.stringify({ serviceName: 'kb2d' }), 'utf8');
+    await writeFile(statusFile, JSON.stringify({ serviceName: 'kb1d' }), 'utf8');
 
     await expect(readDaemonStatus(statusFile)).rejects.toThrow(/missing required fields/);
   });

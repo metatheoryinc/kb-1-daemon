@@ -8,10 +8,10 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-RUN pnpm --filter @kb-2/web build
-RUN pnpm --filter @kb-2/daemon... build
+RUN pnpm --filter @kb-1/web build
+RUN pnpm --filter @kb-1/daemon... build
 RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules \
-  && pnpm install --prod --frozen-lockfile --filter @kb-2/daemon...
+  && pnpm install --prod --frozen-lockfile --filter @kb-1/daemon...
 RUN mkdir -p /runtime/apps/daemon /runtime/apps/web /runtime/packages \
   && cp package.json pnpm-lock.yaml pnpm-workspace.yaml /runtime/ \
   && cp -a node_modules /runtime/node_modules \
@@ -33,13 +33,13 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV KB2_HOME=/data/kb2
-ENV KB2_HOST=0.0.0.0
-ENV KB2_PORT=7382
+ENV KB1_HOME=/data/kb1
+ENV KB1_HOST=0.0.0.0
+ENV KB1_PORT=7382
 
 COPY --from=build /runtime ./
 
-VOLUME ["/data/kb2"]
+VOLUME ["/data/kb1"]
 EXPOSE 7382
 
 CMD ["node", "apps/daemon/dist/main.js"]

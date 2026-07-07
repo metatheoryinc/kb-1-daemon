@@ -11,7 +11,7 @@ import {
   decodeSyncUpdateAck,
   encodeAckedSyncUpdate,
   type DocumentSessionEvent,
-} from '@kb-2/doc-session/protocol';
+} from '@kb-1/doc-session/protocol';
 
 export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 export const DEMO_DOCUMENT_TEXT_NAME = 'markdown';
@@ -95,7 +95,7 @@ export function createDemoDocumentProvider(
         status: 'failed',
         pending: pendingSaveAcks.size,
         message:
-          'KB-2 has not confirmed your latest edit is saved. Keep this tab open while the connection recovers.',
+          'KB-1 has not confirmed your latest edit is saved. Keep this tab open while the connection recovers.',
       };
       options.onSaveState?.(latestSaveState);
       return;

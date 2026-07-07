@@ -8,7 +8,7 @@ describe('ui static helpers', () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'kb2-ui-static-'));
+    root = await mkdtemp(join(tmpdir(), 'kb1-ui-static-'));
     await writeFile(join(root, 'index.html'), '<!doctype html><title>fallback</title>', 'utf8');
   });
 
@@ -21,7 +21,7 @@ describe('ui static helpers', () => {
 
     expect(response.status).toBe(502);
     expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8');
-    await expect(response.text()).resolves.toContain('KB-2 web dev server is unavailable at http://127.0.0.1:9.');
+    await expect(response.text()).resolves.toContain('KB-1 web dev server is unavailable at http://127.0.0.1:9.');
   });
 
   it('falls back to index for malformed or escaping paths', async () => {

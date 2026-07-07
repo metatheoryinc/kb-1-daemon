@@ -1,55 +1,105 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import {
   DEFAULT_HOST,
   DEFAULT_PORT,
+  collectConfigDeprecationWarnings,
   createDaemonConfig,
   DEFAULT_HISTORY_COALESCE_WINDOW_MS,
   resolveActorDefault,
   resolveHistoryCoalesceWindowMs,
-  resolveKb2Home,
+  resolveKb1Home,
   resolvePort,
   resolveRelayConfig,
   resolveWebProxyTarget
 } from './config.js';
 
 describe('daemon config', () => {
-  it('defaults KB2_HOME to a user-level .kb2 directory', () => {
-    const homeDir = resolve('/tmp/kb2-home-test');
+  let tempRoot: string;
 
-    expect(resolveKb2Home({}, homeDir)).toBe(join(homeDir, '.kb2'));
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'kb1-config-test-'));
   });
 
-  it('uses KB2_HOME when supplied', () => {
-    const kb2Home = resolve('/tmp/kb2-configured-home');
-
-    expect(resolveKb2Home({ KB2_HOME: kb2Home }, '/ignored')).toBe(kb2Home);
+  afterEach(async () => {
+    await rm(tempRoot, { force: true, recursive: true });
   });
 
-  it('expands a home-relative KB2_HOME override', () => {
-    const homeDir = resolve('/tmp/kb2-user-home');
+  it('defaults KB1_HOME to a user-level .kb1 directory for new installs', () => {
+    const homeDir = join(tempRoot, 'new-user-home');
 
-    expect(resolveKb2Home({ KB2_HOME: '~/workspace' }, homeDir)).toBe(join(homeDir, 'workspace'));
+    expect(resolveKb1Home({}, homeDir)).toBe(join(homeDir, '.kb1'));
+  });
+
+  it('uses KB1_HOME when supplied', () => {
+    const kb1Home = join(tempRoot, 'configured-home');
+
+    expect(resolveKb1Home({ KB1_HOME: kb1Home }, '/ignored')).toBe(kb1Home);
+  });
+
+  it('expands a home-relative KB1_HOME override', () => {
+    const homeDir = join(tempRoot, 'user-home');
+
+    expect(resolveKb1Home({ KB1_HOME: '~/workspace' }, homeDir)).toBe(join(homeDir, 'workspace'));
+  });
+
+  it('uses an existing legacy .kb2 home when no .kb1 home exists', async () => {
+    const homeDir = join(tempRoot, 'upgrade-user-home');
+    await mkdir(join(homeDir, '.kb2'), { recursive: true });
+
+    expect(resolveKb1Home({}, homeDir)).toBe(join(homeDir, '.kb2'));
+    expect(collectConfigDeprecationWarnings({}, homeDir)).toContain(
+      'Using existing legacy .kb2 home because .kb1 does not exist yet. New installs use .kb1; set KB1_HOME to choose a different location.'
+    );
+  });
+
+  it('prefers an existing .kb1 home over a legacy .kb2 home', async () => {
+    const homeDir = join(tempRoot, 'dual-home-user');
+    await mkdir(join(homeDir, '.kb1'), { recursive: true });
+    await mkdir(join(homeDir, '.kb2'), { recursive: true });
+
+    expect(resolveKb1Home({}, homeDir)).toBe(join(homeDir, '.kb1'));
+  });
+
+  it('keeps KB2_HOME as a deprecated compatibility override', () => {
+    const legacyHome = join(tempRoot, 'legacy-configured-home');
+
+    expect(resolveKb1Home({ KB2_HOME: legacyHome }, '/ignored')).toBe(legacyHome);
+    expect(collectConfigDeprecationWarnings({ KB2_HOME: legacyHome }, '/ignored')).toContain(
+      'KB2_HOME is deprecated; use KB1_HOME instead.'
+    );
+  });
+
+  it('prefers KB1_HOME over KB2_HOME when both are supplied', () => {
+    const kb1Home = join(tempRoot, 'primary-home');
+    const legacyHome = join(tempRoot, 'legacy-home');
+
+    expect(resolveKb1Home({ KB1_HOME: kb1Home, KB2_HOME: legacyHome }, '/ignored')).toBe(kb1Home);
+    expect(collectConfigDeprecationWarnings({ KB1_HOME: kb1Home, KB2_HOME: legacyHome }, '/ignored')).toContain(
+      'KB2_HOME is deprecated and ignored because KB1_HOME is set.'
+    );
   });
 
   it('resolves host, port, daemon directory, and status path', () => {
     const now = new Date('2026-06-10T15:00:00.000Z');
-    const kb2Home = resolve('/tmp/kb2-daemon-home');
+    const kb1Home = join(tempRoot, 'daemon-home');
     const config = createDaemonConfig({
       env: {
-        KB2_HOME: kb2Home,
-        KB2_HOST: '0.0.0.0',
-        KB2_PORT: '8399',
-        KB2_WEB_PROXY_TARGET: 'http://127.0.0.1:5173',
-        KB2_RELAY_URL: 'http://127.0.0.1:9920/t/dev1',
-        KB2_RELAY_TOKEN: 'test-token'
+        KB1_HOME: kb1Home,
+        KB1_HOST: '0.0.0.0',
+        KB1_PORT: '8399',
+        KB1_WEB_PROXY_TARGET: 'http://127.0.0.1:5173',
+        KB1_RELAY_URL: 'http://127.0.0.1:9920/t/dev1',
+        KB1_RELAY_TOKEN: 'test-token'
       },
       now,
       pid: 1234
     });
 
     expect(config).toEqual({
-      serviceName: 'kb2d',
+      serviceName: 'kb1d',
       host: '0.0.0.0',
       port: 8399,
       webProxyTarget: 'http://127.0.0.1:5173',
@@ -59,18 +109,19 @@ describe('daemon config', () => {
       },
       actorDefault: 'user',
       historyCoalesceWindowMs: DEFAULT_HISTORY_COALESCE_WINDOW_MS,
-      kb2Home,
-      daemonHome: join(kb2Home, 'daemon'),
-      vaultsHome: join(kb2Home, 'vaults'),
-      vaultRoot: join(kb2Home, 'vaults', 'demo-vault'),
-      statusFile: join(kb2Home, 'daemon', 'status.json'),
+      kb1Home,
+      daemonHome: join(kb1Home, 'daemon'),
+      vaultsHome: join(kb1Home, 'vaults'),
+      vaultRoot: join(kb1Home, 'vaults', 'demo-vault'),
+      statusFile: join(kb1Home, 'daemon', 'status.json'),
       startedAt: now.toISOString(),
-      pid: 1234
+      pid: 1234,
+      deprecationWarnings: []
     });
   });
 
   it('defaults to localhost and the scaffold port', () => {
-    const config = createDaemonConfig({ env: {}, homeDir: resolve('/tmp/kb2-home') });
+    const config = createDaemonConfig({ env: {}, homeDir: join(tempRoot, 'kb1-home') });
 
     expect(config.host).toBe(DEFAULT_HOST);
     expect(config.port).toBe(DEFAULT_PORT);
@@ -79,31 +130,39 @@ describe('daemon config', () => {
   });
 
   it('rejects invalid ports', () => {
-    expect(() => resolvePort({ KB2_PORT: 'abc' })).toThrow(/KB2_PORT/);
+    expect(() => resolvePort({ KB1_PORT: 'abc' })).toThrow(/KB1_PORT/);
     expect(() => resolvePort({ KB2_PORT: '0' })).toThrow(/KB2_PORT/);
   });
 
-  it('uses KB2_WEB_PROXY_TARGET when supplied', () => {
-    expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' http://127.0.0.1:5173 ' })).toBe('http://127.0.0.1:5173');
-    expect(resolveWebProxyTarget({ KB2_WEB_PROXY_TARGET: ' ' })).toBeUndefined();
+  it('uses KB1_WEB_PROXY_TARGET when supplied', () => {
+    expect(resolveWebProxyTarget({ KB1_WEB_PROXY_TARGET: ' http://127.0.0.1:5173 ' })).toBe('http://127.0.0.1:5173');
+    expect(resolveWebProxyTarget({ KB1_WEB_PROXY_TARGET: ' ' })).toBeUndefined();
+  });
+
+  it('uses KB1 values before deprecated KB2 values', () => {
+    expect(resolvePort({ KB1_PORT: '8399', KB2_PORT: '9999' })).toBe(8399);
+    expect(resolveWebProxyTarget({
+      KB1_WEB_PROXY_TARGET: 'http://127.0.0.1:5173',
+      KB2_WEB_PROXY_TARGET: 'http://127.0.0.1:9999'
+    })).toBe('http://127.0.0.1:5173');
   });
 
   it('keeps relay integration disabled by default', () => {
     expect(resolveRelayConfig({})).toBeUndefined();
-    expect(createDaemonConfig({ env: {}, homeDir: resolve('/tmp/kb2-home') }).relay).toBeUndefined();
+    expect(createDaemonConfig({ env: {}, homeDir: join(tempRoot, 'kb1-home') }).relay).toBeUndefined();
   });
 
   it('requires relay URL and token together', () => {
-    expect(() => resolveRelayConfig({ KB2_RELAY_URL: 'http://127.0.0.1:9920/t/dev1' })).toThrow(/KB2_RELAY_URL/);
+    expect(() => resolveRelayConfig({ KB1_RELAY_URL: 'http://127.0.0.1:9920/t/dev1' })).toThrow(/KB1_RELAY_URL/);
     expect(() => resolveRelayConfig({ KB2_RELAY_TOKEN: 'test-token' })).toThrow(/KB2_RELAY_URL/);
   });
 
   it('normalizes relay URL when supplied', () => {
     expect(resolveRelayConfig({
-      KB2_RELAY_URL: ' http://127.0.0.1:9920/t/dev1 ',
-      KB2_RELAY_TOKEN: ' test-token ',
-      KB2_DAEMON_VERSION: ' 0.1.0 ',
-      KB2_DAEMON_BUILD: ' registry.fly.io/kb1@sha256:abc123 '
+      KB1_RELAY_URL: ' http://127.0.0.1:9920/t/dev1 ',
+      KB1_RELAY_TOKEN: ' test-token ',
+      KB1_DAEMON_VERSION: ' 0.1.0 ',
+      KB1_DAEMON_BUILD: ' registry.fly.io/kb1@sha256:abc123 '
     })).toEqual({
       relayUrl: 'http://127.0.0.1:9920/t/dev1',
       token: 'test-token',
@@ -114,16 +173,28 @@ describe('daemon config', () => {
 
   it('resolves the REST actor default mode', () => {
     expect(resolveActorDefault({})).toBe('user');
-    expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: ' unknown ' })).toBe('unknown');
+    expect(resolveActorDefault({ KB1_ACTOR_DEFAULT: ' unknown ' })).toBe('unknown');
     expect(resolveActorDefault({ KB2_ACTOR_DEFAULT: 'user' })).toBe('user');
-    expect(() => resolveActorDefault({ KB2_ACTOR_DEFAULT: 'system' })).toThrow(/KB2_ACTOR_DEFAULT/);
+    expect(() => resolveActorDefault({ KB1_ACTOR_DEFAULT: 'system' })).toThrow(/KB1_ACTOR_DEFAULT/);
   });
 
   it('resolves the history coalescing window', () => {
     expect(resolveHistoryCoalesceWindowMs({})).toBe(DEFAULT_HISTORY_COALESCE_WINDOW_MS);
-    expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: ' 0 ' })).toBe(0);
+    expect(resolveHistoryCoalesceWindowMs({ KB1_HISTORY_COALESCE_WINDOW_MS: ' 0 ' })).toBe(0);
     expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: '120000' })).toBe(120000);
-    expect(() => resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: '-1' })).toThrow(/KB2_HISTORY_COALESCE_WINDOW_MS/);
+    expect(() => resolveHistoryCoalesceWindowMs({ KB1_HISTORY_COALESCE_WINDOW_MS: '-1' })).toThrow(/KB1_HISTORY_COALESCE_WINDOW_MS/);
     expect(() => resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: 'five' })).toThrow(/KB2_HISTORY_COALESCE_WINDOW_MS/);
+  });
+
+  it('reports deprecated KB2 env usage without duplicating notices', () => {
+    expect(collectConfigDeprecationWarnings({
+      KB2_PORT: '7382',
+      KB2_RELAY_URL: 'http://127.0.0.1:9920/t/dev1',
+      KB2_RELAY_TOKEN: 'test-token'
+    }, tempRoot)).toEqual([
+      'KB2_PORT is deprecated; use KB1_PORT instead.',
+      'KB2_RELAY_URL is deprecated; use KB1_RELAY_URL instead.',
+      'KB2_RELAY_TOKEN is deprecated; use KB1_RELAY_TOKEN instead.'
+    ]);
   });
 });

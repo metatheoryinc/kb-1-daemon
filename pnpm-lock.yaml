@@ -92,19 +92,19 @@ importers:
       '@hono/node-server':
         specifier: 2.0.4
         version: 2.0.4(hono@4.12.25)
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../../packages/doc-session
-      '@kb-2/local-mcp':
+      '@kb-1/local-mcp':
         specifier: workspace:*
         version: link:../../packages/local-mcp
-      '@kb-2/tunnel-client':
+      '@kb-1/tunnel-client':
         specifier: workspace:*
         version: link:../../packages/tunnel-client
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../../packages/vault-core
-      '@kb-2/vault-service':
+      '@kb-1/vault-service':
         specifier: workspace:*
         version: link:../../packages/vault-service
       github-slugger:
@@ -147,13 +147,13 @@ importers:
       '@fontsource/source-serif-4':
         specifier: 5.2.9
         version: 5.2.9
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../../packages/doc-session
-      '@kb-2/editor':
+      '@kb-1/editor':
         specifier: workspace:*
         version: link:../../packages/editor
-      '@kb-2/ui':
+      '@kb-1/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       '@tanstack/query-async-storage-persister':
@@ -223,7 +223,7 @@ importers:
 
   packages/doc-session:
     dependencies:
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../vault-core
       fast-diff:
@@ -284,7 +284,7 @@ importers:
       '@codemirror/view':
         specifier: 6.41.1
         version: 6.41.1
-      '@kb-2/ui':
+      '@kb-1/ui':
         specifier: workspace:*
         version: link:../ui
       '@lezer/common':
@@ -327,7 +327,7 @@ importers:
 
   packages/local-mcp:
     dependencies:
-      '@kb-2/vault-service':
+      '@kb-1/vault-service':
         specifier: workspace:*
         version: link:../vault-service
       '@modelcontextprotocol/sdk':
@@ -346,7 +346,7 @@ importers:
 
   packages/tunnel-client:
     dependencies:
-      '@kb-2/tunnel-protocol':
+      '@kb-1/tunnel-protocol':
         specifier: workspace:*
         version: link:../tunnel-protocol
       ws:
@@ -445,10 +445,10 @@ importers:
 
   packages/vault-service:
     dependencies:
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../doc-session
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../vault-core
     devDependencies:

@@ -122,6 +122,8 @@ export function createLocalMcpServer(
 ): McpServer {
   const provider = asProvider(source);
   const server = new McpServer({
+    // Coordinated wire identifier: keep byte-for-byte stable until all clients
+    // and the cloud relay are migrated together.
     name: "kb-2-local-daemon",
     version: "0.0.0",
   });

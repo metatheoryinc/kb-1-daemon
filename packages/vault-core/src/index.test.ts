@@ -1801,8 +1801,8 @@ describe("anchored splice and positioned content helpers", () => {
         (left, oldText, right, replacement, edgeBefore, edgeAfter) => {
           const splicedText = `${edgeBefore}${oldText}${edgeAfter}`;
           fc.pre(splicedText.length > 0);
-          const before = "__KB2_LEFT__";
-          const after = "__KB2_RIGHT__";
+          const before = "__KB1_LEFT__";
+          const after = "__KB1_RIGHT__";
           fc.pre(!left.includes(before + splicedText + after));
           fc.pre(!right.includes(before + splicedText + after));
           const source = `${left}${before}${splicedText}${after}${right}`;

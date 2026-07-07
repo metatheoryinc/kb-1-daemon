@@ -506,7 +506,7 @@ async function ensureGitRepository(root: string): Promise<boolean> {
     } catch (error) {
       /* v8 ignore start -- Depends on host Git availability or filesystem-level Git init failures; product behavior is best-effort unavailable history. */
       if (isGitUnavailable(error)) return false;
-      console.warn("KB-2 file history Git initialization failed.", error);
+      console.warn("KB-1 file history Git initialization failed.", error);
       return false;
       /* v8 ignore stop */
     }

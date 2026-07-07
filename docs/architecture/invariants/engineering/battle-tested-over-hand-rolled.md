@@ -4,7 +4,7 @@
 
 For algorithmic concerns with mature off-the-shelf solutions — text diffing,
 parsing, hashing, unicode handling, compression, date/time math, CRDT
-operations — KB-2 uses a battle-tested library (or adapts a KB-1-proven
+operations — KB-1 uses a battle-tested library (or adapts a KB-1-proven
 implementation) rather than writing a fresh algorithm. The ideal integration
 is a one-line call plus thin glue.
 

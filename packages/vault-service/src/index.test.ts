@@ -8,7 +8,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { DocumentSessionManager } from "@kb-2/doc-session";
+import { DocumentSessionManager } from "@kb-1/doc-session";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 

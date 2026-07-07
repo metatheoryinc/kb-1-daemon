@@ -9,7 +9,7 @@ WebSocket construction, EventSource, and daemon route paths live in apps.
 
 KB-1 proved this architecture: its entire CM6 editor makes zero API calls —
 the host supplies a Y.Doc, an upload callback, a navigation callback. That
-separation is what made the KB-2 port a transplant instead of a rewrite.
+separation is what made the KB-1 port a transplant instead of a rewrite.
 Keep it.
 
 ## This Means

@@ -8,20 +8,20 @@ set -euo pipefail
 # Defaults:
 #   KB1_REPO_URL=https://github.com/metatheoryinc/kb-1-daemon.git
 #   KB1_REPO_DIR=$HOME/repos/kb-1-daemon
-#   KB2_HOME=$HOME/.kb2
-#   KB2_HOST=127.0.0.1
-#   KB2_PORT=7382
+#   KB1_HOME=$HOME/.kb1              # legacy KB2_HOME is accepted as fallback
+#   KB1_HOST=127.0.0.1               # legacy KB2_HOST is accepted as fallback
+#   KB1_PORT=7382                    # legacy KB2_PORT is accepted as fallback
 #   KB1_RUN_CHECKS=1
 #   KB1_TAILSCALE_MODE=local-only        # local-only|auto|serve
 #   KB1_CONFIRM_TAILSCALE_EXPOSURE=0     # must be 1 for auto/serve
-#   KB1_CONFIRM_NON_LOOPBACK_BIND=0      # must be 1 for non-loopback KB2_HOST
+#   KB1_CONFIRM_NON_LOOPBACK_BIND=0      # must be 1 for non-loopback KB1_HOST
 #   KB1_TAILSCALE_HTTPS_PORT=443
 
 REPO_URL="${KB1_REPO_URL:-https://github.com/metatheoryinc/kb-1-daemon.git}"
 REPO_DIR="${KB1_REPO_DIR:-$HOME/repos/kb-1-daemon}"
-KB2_HOME="${KB2_HOME:-$HOME/.kb2}"
-KB2_HOST="${KB2_HOST:-127.0.0.1}"
-KB2_PORT="${KB2_PORT:-7382}"
+KB1_HOME="${KB1_HOME:-${KB2_HOME:-$HOME/.kb1}}"
+KB1_HOST="${KB1_HOST:-${KB2_HOST:-127.0.0.1}}"
+KB1_PORT="${KB1_PORT:-${KB2_PORT:-7382}}"
 RUN_CHECKS="${KB1_RUN_CHECKS:-1}"
 CONFIRM_NON_LOOPBACK_BIND="${KB1_CONFIRM_NON_LOOPBACK_BIND:-0}"
 TAILSCALE_MODE="${KB1_TAILSCALE_MODE:-local-only}"
@@ -38,11 +38,11 @@ warn() { printf '\nWARN: %s\n' "$*" >&2; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 1; }; }
 
 is_loopback_host() {
-  case "$KB2_HOST" in
+  case "$KB1_HOST" in
     localhost|::1|'[::1]') return 0 ;;
   esac
 
-  if [[ "$KB2_HOST" =~ ^127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+  if [[ "$KB1_HOST" =~ ^127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
     local octet
     for octet in "${BASH_REMATCH[@]:1}"; do
       if (( 10#$octet > 255 )); then
@@ -87,7 +87,7 @@ To make KB-1 reachable from a phone or laptop later:
 4. Re-run with KB1_TAILSCALE_MODE=auto KB1_CONFIRM_TAILSCALE_EXPOSURE=1 after approving exposure.
 
 Local app/API:
-   http://127.0.0.1:$KB2_PORT
+   http://127.0.0.1:$KB1_PORT
 EOF
 }
 
@@ -100,7 +100,7 @@ Connect this host, then re-run with explicit approval if private tailnet access 
    KB1_TAILSCALE_MODE=auto KB1_CONFIRM_TAILSCALE_EXPOSURE=1 bash scripts/install_kb1_daemon_user_service.sh
 
 Local app/API:
-   http://127.0.0.1:$KB2_PORT
+   http://127.0.0.1:$KB1_PORT
 EOF
 }
 
@@ -142,14 +142,14 @@ configure_tailscale_serve() {
 
   if [ "$TAILSCALE_MODE" = "local-only" ]; then
     say "Tailscale mode: local-only; not changing Tailscale"
-    echo "Local app/API: http://127.0.0.1:$KB2_PORT"
+    echo "Local app/API: http://127.0.0.1:$KB1_PORT"
     return 0
   fi
 
   if [ "$CONFIRM_TAILSCALE_EXPOSURE" != "1" ]; then
     warn "KB1_TAILSCALE_MODE=$TAILSCALE_MODE requested, but KB1_CONFIRM_TAILSCALE_EXPOSURE=1 was not set."
     warn "Leaving Tailscale unchanged because KB-1 has no application auth yet."
-    echo "Local app/API: http://127.0.0.1:$KB2_PORT"
+    echo "Local app/API: http://127.0.0.1:$KB1_PORT"
     return 0
   fi
 
@@ -172,7 +172,7 @@ EOF
     return 0
   fi
 
-  local target="http://127.0.0.1:$KB2_PORT"
+  local target="http://127.0.0.1:$KB1_PORT"
   local status_file
   status_file="$(mktemp)"
   local status_rc=0
@@ -203,7 +203,7 @@ EOF
     say "No active Tailscale Serve config detected; exposing KB-1 to the tailnet on HTTPS port $TAILSCALE_HTTPS_PORT"
     if ! tailscale serve --bg --https="$TAILSCALE_HTTPS_PORT" "$target"; then
       warn "Tailscale Serve setup failed. You may need MagicDNS and HTTPS certificates enabled."
-      echo "KB-1 is still available locally at http://127.0.0.1:$KB2_PORT"
+      echo "KB-1 is still available locally at http://127.0.0.1:$KB1_PORT"
       rm -f "$status_file"
       return 0
     fi
@@ -251,9 +251,9 @@ Type=simple
 WorkingDirectory=$REPO_DIR
 Environment=HOME=$HOME
 Environment=NODE_ENV=production
-Environment=KB2_HOME=$KB2_HOME
-Environment=KB2_HOST=$KB2_HOST
-Environment=KB2_PORT=$KB2_PORT
+Environment=KB1_HOME=$KB1_HOME
+Environment=KB1_HOST=$KB1_HOST
+Environment=KB1_PORT=$KB1_PORT
 Environment=PATH=$path_value
 ExecStart=$node_bin $REPO_DIR/apps/daemon/dist/main.js
 Restart=always
@@ -289,9 +289,9 @@ write_macos_launch_agent() {
   label_xml="$(xml_escape "$MACOS_LABEL")"
   repo_xml="$(xml_escape "$REPO_DIR")"
   node_xml="$(xml_escape "$node_bin")"
-  home_xml="$(xml_escape "$KB2_HOME")"
-  host_xml="$(xml_escape "$KB2_HOST")"
-  port_xml="$(xml_escape "$KB2_PORT")"
+  home_xml="$(xml_escape "$KB1_HOME")"
+  host_xml="$(xml_escape "$KB1_HOST")"
+  port_xml="$(xml_escape "$KB1_PORT")"
   path_xml="$(xml_escape "$path_value")"
   stdout_xml="$(xml_escape "$log_dir/kb1-daemon.out.log")"
   stderr_xml="$(xml_escape "$log_dir/kb1-daemon.err.log")"
@@ -316,11 +316,11 @@ write_macos_launch_agent() {
     <string>$(xml_escape "$HOME")</string>
     <key>NODE_ENV</key>
     <string>production</string>
-    <key>KB2_HOME</key>
+    <key>KB1_HOME</key>
     <string>$home_xml</string>
-    <key>KB2_HOST</key>
+    <key>KB1_HOST</key>
     <string>$host_xml</string>
-    <key>KB2_PORT</key>
+    <key>KB1_PORT</key>
     <string>$port_xml</string>
     <key>PATH</key>
     <string>$path_xml</string>
@@ -366,17 +366,17 @@ say "Platform: $PLATFORM; Node: $(node --version); pnpm: $(pnpm --version)"
 if ! is_loopback_host; then
   if [ "$CONFIRM_NON_LOOPBACK_BIND" != "1" ]; then
     cat >&2 <<EOF
-Refusing to bind KB-1 to non-loopback host: $KB2_HOST
+Refusing to bind KB-1 to non-loopback host: $KB1_HOST
 
-KB-1 currently has no application authentication. Keep KB2_HOST=127.0.0.1 and
+KB-1 currently has no application authentication. Keep KB1_HOST=127.0.0.1 and
 use Tailscale Serve for private tailnet access. If you intentionally accept the
 risk of binding the daemon directly to a network interface, rerun with:
 
-   KB1_CONFIRM_NON_LOOPBACK_BIND=1 KB2_HOST=$KB2_HOST bash scripts/install_kb1_daemon_user_service.sh
+   KB1_CONFIRM_NON_LOOPBACK_BIND=1 KB1_HOST=$KB1_HOST bash scripts/install_kb1_daemon_user_service.sh
 EOF
     exit 1
   fi
-  warn "Non-loopback KB2_HOST=$KB2_HOST explicitly confirmed. The daemon has no application auth."
+  warn "Non-loopback KB1_HOST=$KB1_HOST explicitly confirmed. The daemon has no application auth."
 fi
 
 say "Cloning/updating repo at $REPO_DIR"
@@ -416,8 +416,8 @@ case "$PLATFORM" in
 esac
 
 say "Waiting for local health"
-HEALTH_URL="http://$KB2_HOST:$KB2_PORT/api/health"
-VAULTS_URL="http://$KB2_HOST:$KB2_PORT/api/vaults"
+HEALTH_URL="http://$KB1_HOST:$KB1_PORT/api/health"
+VAULTS_URL="http://$KB1_HOST:$KB1_PORT/api/vaults"
 health_tmp="$(mktemp)"
 health_err="$(mktemp)"
 for i in $(seq 1 30); do
@@ -448,8 +448,8 @@ printf '\n'
 configure_tailscale_serve
 
 say "Done"
-echo "Local app/API: http://127.0.0.1:$KB2_PORT"
-echo "Local MCP:     http://127.0.0.1:$KB2_PORT/mcp"
+echo "Local app/API: http://127.0.0.1:$KB1_PORT"
+echo "Local MCP:     http://127.0.0.1:$KB1_PORT/mcp"
 if [ "$PLATFORM" = "linux" ]; then
   echo "Service:       $LINUX_SERVICE_NAME"
   echo "Logs:          journalctl --user -u $LINUX_SERVICE_NAME -f"

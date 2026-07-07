@@ -44,7 +44,7 @@ vi.mock("$app/state", async () => {
   return { page };
 });
 
-vi.mock("@kb-2/editor", async () => {
+vi.mock("@kb-1/editor", async () => {
   const { default: PlaintextEditor } =
     await import("./FakePlaintextEditor.svelte");
   return { PlaintextEditor };

@@ -7,19 +7,19 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/editor build"
+        "command": "pnpm --filter @kb-1/editor build"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/editor test"
+        "command": "pnpm --filter @kb-1/editor test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/editor typecheck"
+        "command": "pnpm --filter @kb-1/editor typecheck"
       }
     }
   }

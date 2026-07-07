@@ -9,7 +9,7 @@ no seam widens a typed failure into a loose string or `any`.
 
 ## Why
 
-KB-2 grew two dialects (`{ok:false, error}` in vault-core vs `{ok:false,
+KB-1 grew two dialects (`{ok:false, error}` in vault-core vs `{ok:false,
 rejected}` in splice/session) that were laundered through `as string` casts
 and `Record<string, unknown>` widenings at every boundary, and the same
 endpoint returned different shapes depending on whether a live session

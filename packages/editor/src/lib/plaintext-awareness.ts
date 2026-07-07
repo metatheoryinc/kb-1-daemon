@@ -17,7 +17,7 @@
  *      `cursor.noteId === noteId`. Same logical gate, relocated to where the
  *      transport carries it.
  *   2. accent color helper. KB-1 used `@kb-1/core`'s `accentHexForId`; the
- *      cloud/daemon-shared editor uses `@kb-2/ui`'s `accentHexForId` (a faithful
+ *      cloud/daemon-shared editor uses `@kb-1/ui`'s `accentHexForId` (a faithful
  *      copy of the same deterministic hash + palette).
  *   3. humans-only. The cloud presence actor schema is human-shaped (no
  *      `agentIntegration`); the agent-chip / robot-glyph rendering from the
@@ -47,7 +47,7 @@ import {
 } from '@codemirror/state';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import { accentHexForId } from '@kb-2/ui';
+import { accentHexForId } from '@kb-1/ui';
 
 /**
  * JSON-encoded `Y.RelativePosition`. Same shape `Y.relativePositionToJSON`

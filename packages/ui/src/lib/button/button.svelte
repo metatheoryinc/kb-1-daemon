@@ -18,7 +18,7 @@
     variant?: ButtonVariant;
     size?: ButtonSize;
   } = {}): string {
-    return `kb2-button variant-${variant} size-${size}`;
+    return `kb1-button variant-${variant} size-${size}`;
   }
 
   export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
@@ -69,7 +69,7 @@
 {/if}
 
 <style>
-  .kb2-button {
+  .kb1-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -91,13 +91,13 @@
       box-shadow 120ms ease;
   }
 
-  .kb2-button:focus-visible {
+  .kb1-button:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--ring) 50%, transparent);
     outline-offset: 2px;
   }
 
-  .kb2-button[disabled],
-  .kb2-button[aria-disabled='true'] {
+  .kb1-button[disabled],
+  .kb1-button[aria-disabled='true'] {
     pointer-events: none;
     opacity: 0.5;
   }

@@ -1,9 +1,9 @@
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
-import { DocumentSessionManager } from '@kb-2/doc-session';
-import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-2/vault-service';
-import { normalizeFolderMetadataColor, type VaultActor } from '@kb-2/vault-core';
+import { DocumentSessionManager } from '@kb-1/doc-session';
+import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-1/vault-service';
+import { normalizeFolderMetadataColor, type VaultActor } from '@kb-1/vault-core';
 import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
@@ -527,7 +527,7 @@ export class VaultRegistry {
         try {
           handler(registryEvent);
         } catch (error) {
-          console.warn('KB-2 vault registry event handler failed.', error);
+          console.warn('KB-1 vault registry event handler failed.', error);
         }
       }
     });
@@ -540,7 +540,7 @@ export class VaultRegistry {
       try {
         handler(registryEvent);
       } catch (error) {
-        console.warn('KB-2 vault registry event handler failed.', error);
+        console.warn('KB-1 vault registry event handler failed.', error);
       }
     }
   }

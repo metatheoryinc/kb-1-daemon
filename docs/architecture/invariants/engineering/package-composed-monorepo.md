@@ -5,7 +5,7 @@
 Apps are deployment surfaces. Packages own reusable product and runtime
 concerns.
 
-KB-2 should be composed from small, focused workspace packages with meaningful
+KB-1 should be composed from small, focused workspace packages with meaningful
 test coverage, then assembled by apps such as the daemon, local UI, and future
 cloud workers.
 

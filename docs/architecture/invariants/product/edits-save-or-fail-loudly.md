@@ -21,7 +21,7 @@ that the underlying file changed beneath them.
   subsequent write succeeds.
 - An external change to a file backing an active session is detected, the
   session state is reconciled to reflect it, all clients converge, and all
-  clients display a clear notice that the file changed outside KB-2.
+  clients display a clear notice that the file changed outside KB-1.
 - No code path swallows a write error into a server-side log alone — the log
   line exists for operators; the user-facing signal exists for the user.
 - Recovery is also visible: when saving resumes, the warning clears.

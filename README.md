@@ -1,10 +1,7 @@
 # KB-1 Local
 
 The open-source local half of KB-1: a local-first, agent-ready knowledge base
-where the user's filesystem is the durable source of truth. The repo still uses
-some `KB2_*`, `kb2d`, and `@kb-2/*` implementation names while the product
-rename finishes; public copy should call the product **KB-1 Local** or simply
-**KB-1**.
+where the user's filesystem is the durable source of truth.
 
 See `VISION.md` and `docs/architecture/` for the current product and
 architecture docs.
@@ -23,8 +20,9 @@ pnpm dev     # one command: web UI + API behind one daemon port
 | MCP | http://127.0.0.1:7382/mcp | Streamable HTTP MCP endpoint for local agents |
 | Storybook | http://localhost:6006 | `pnpm storybook`; pass `-p <port>` if 6006 is taken |
 
-Port/env overrides: `KB2_PORT` (daemon), `KB2_WEB_PORT` (internal Vite dev
-server), `KB2_HOME` (daemon state directory, defaults to `~/.kb2`).
+Port/env overrides: `KB1_PORT` (daemon), `KB1_WEB_PORT` (internal Vite dev
+server), `KB1_HOME` (daemon state directory, defaults to `~/.kb1`). Existing
+`KB2_*` overrides and `~/.kb2` homes are still accepted for in-place upgrades.
 
 ## Local API Primitives
 
@@ -54,8 +52,8 @@ The daemon hosts a streamable-HTTP MCP server at `/mcp` on the same loopback
 port as the app and API. Start the daemon, then add it to Claude Code:
 
 ```bash
-KB2_HOME=$(mktemp -d) KB2_PORT=17992 pnpm dev:daemon
-claude mcp add kb-2 --transport http http://127.0.0.1:17992/mcp
+KB1_HOME=$(mktemp -d) KB1_PORT=17992 pnpm dev:daemon
+claude mcp add kb-1 --transport http http://127.0.0.1:17992/mcp
 ```
 
 Available tools: `vault_info`, `list_files`, `read_note`, `create_note`,
@@ -83,7 +81,7 @@ pnpm docker:up     # daemon in Docker (host port 17382); pnpm docker:down to sto
 
 ## Layout
 
-- `apps/daemon` — the local server (`kb2d`), the only runtime writer
+- `apps/daemon` — the local server (`kb1d`; `kb2d` remains a compatibility alias), the only runtime writer
 - `apps/web` — the local web UI, served by the daemon
 - `packages/doc-session` — Yjs document sessions backed by Markdown files
 - `packages/ui` — component library + Storybook

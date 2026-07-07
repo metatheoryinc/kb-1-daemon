@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/editor",
+  "name": "@kb-1/editor",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -27,7 +27,7 @@
     "@codemirror/language": "6.11.3",
     "@codemirror/state": "6.6.0",
     "@codemirror/view": "6.41.1",
-    "@kb-2/ui": "workspace:*",
+    "@kb-1/ui": "workspace:*",
     "@lezer/common": "1.5.2",
     "@lezer/highlight": "1.2.3",
     "@lezer/markdown": "1.6.3",

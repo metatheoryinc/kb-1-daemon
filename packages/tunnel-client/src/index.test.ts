@@ -7,7 +7,7 @@ import {
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   encodeTunnelMessage,
-} from '@kb-2/tunnel-protocol';
+} from '@kb-1/tunnel-protocol';
 import {
   ChunkedHttpRequestAssembler,
   DialbackBridge,

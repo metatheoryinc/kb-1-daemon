@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${KB2_PORT:-7382}"
-HOST="${KB2_HOST:-127.0.0.1}"
+PORT="${KB1_PORT:-${KB2_PORT:-7382}}"
+HOST="${KB1_HOST:-${KB2_HOST:-127.0.0.1}}"
 BASE="http://$HOST:$PORT"
 VAULT_ID="${KB1_VAULT_ID:-}"
 FLUSH_VAULT="${KB1_FLUSH_VAULT:-0}"

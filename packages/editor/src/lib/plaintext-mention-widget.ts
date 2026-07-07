@@ -43,7 +43,7 @@
  */
 
 import { WidgetType, type EditorView } from '@codemirror/view';
-import type { AccentName } from '@kb-2/ui';
+import type { AccentName } from '@kb-1/ui';
 import { mount, unmount } from 'svelte';
 // Note: `MentionChip.svelte` is imported lazily inside `toDOM()` rather
 // than statically. The test harness for `plaintext-decorations.ts`

@@ -69,7 +69,7 @@ function notifyVaultAuditHandlers(entry: AuditEntry, input: AuditInput): void {
     try {
       handler(entry, input);
     } catch (error) {
-      console.warn('KB-2 vault audit handler failed.', error);
+      console.warn('KB-1 vault audit handler failed.', error);
     }
   }
 }

@@ -212,7 +212,7 @@ export class DocumentSessionManager {
       try {
         handler(event);
       } catch (error) {
-        console.warn('KB-2 document session manager event handler failed.', error);
+        console.warn('KB-1 document session manager event handler failed.', error);
       }
     }
   }
@@ -245,7 +245,7 @@ export class DocumentSessionManager {
     }
     const timer = setTimeout(() => {
       void this.closeSession(vaultPath).catch((error: unknown) => {
-        console.warn(`KB-2 failed to close idle document session for ${vaultPath}.`, error);
+        console.warn(`KB-1 failed to close idle document session for ${vaultPath}.`, error);
       });
     }, this.idleSessionGraceMs);
     timer.unref?.();
@@ -258,7 +258,7 @@ export class DocumentSessionManager {
     const session = this.sessions.get(vaultPath);
     if (!session) return;
     if (session.hasActivePersistFailure()) {
-      console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`);
+      console.warn(`KB-1 refused to close idle document session for ${vaultPath}; content is not durably persisted.`);
       return;
     }
 
@@ -270,7 +270,7 @@ export class DocumentSessionManager {
     } catch (error) {
       if (session.hasActivePersistFailure()) {
         this.sessions.set(vaultPath, session);
-        console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`, error);
+        console.warn(`KB-1 refused to close idle document session for ${vaultPath}; content is not durably persisted.`, error);
         return;
       }
       throw error;

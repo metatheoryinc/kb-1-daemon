@@ -555,7 +555,7 @@
 
 <div
   class={[
-    'kb2-editor-shell',
+    'kb1-editor-shell',
     scroll === 'self' ? 'scroll-self' : 'scroll-external',
     className,
   ].filter(Boolean).join(' ')}
@@ -573,7 +573,7 @@
 </div>
 
 <style>
-  .kb2-editor-shell {
+  .kb1-editor-shell {
     position: relative;
     display: flex;
     width: 100%;
@@ -582,7 +582,7 @@
     background: var(--rd-panel, #ffffff);
   }
 
-  .kb2-editor-shell.scroll-self {
+  .kb1-editor-shell.scroll-self {
     height: 100%;
     overflow: hidden;
   }

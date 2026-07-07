@@ -14,16 +14,16 @@ import {
 } from './index.js';
 
 describe('OneFileDocumentSession', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let filePath: string;
 
   beforeEach(async () => {
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-doc-session-'));
-    filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-doc-session-'));
+    filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
   });
 
   afterEach(async () => {
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   it('maps fast-diff output to a Y.Text delta that reproduces randomized disk content exactly', () => {
@@ -89,7 +89,7 @@ describe('OneFileDocumentSession', () => {
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, 'stable\n', 'utf8');
 
-    const invalidStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'invalid.json');
+    const invalidStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'invalid.json');
     await mkdir(dirname(invalidStateFilePath), { recursive: true });
     await writeFile(invalidStateFilePath, '{not-json', 'utf8');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -107,7 +107,7 @@ describe('OneFileDocumentSession', () => {
 
     const mismatchedDoc = new Y.Doc();
     mismatchedDoc.getText('markdown').insert(0, 'different\n');
-    const mismatchedStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'mismatched.json');
+    const mismatchedStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'mismatched.json');
     const mismatchedUpdateBase64 = Buffer.from(Y.encodeStateAsUpdate(mismatchedDoc)).toString('base64');
     await writeFile(mismatchedStateFilePath, JSON.stringify({
       version: 1,
@@ -121,7 +121,7 @@ describe('OneFileDocumentSession', () => {
     expect(mismatchedStateSession.ydoc.getText('markdown').toString()).toBe('stable\n');
     await mismatchedStateSession.close();
 
-    const staleStateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'stale.json');
+    const staleStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'stale.json');
     await writeFile(staleStateFilePath, JSON.stringify({
       version: 1,
       contentHash: createHash('sha256').update('old\n').digest('hex'),
@@ -146,7 +146,7 @@ describe('OneFileDocumentSession', () => {
         message: 'file not found'
       }
     });
-    await expect(readdir(kb2Home)).resolves.toEqual([]);
+    await expect(readdir(kb1Home)).resolves.toEqual([]);
   });
 
   it('cold boots the Yjs document from the materialized Markdown file', async () => {
@@ -173,7 +173,7 @@ describe('OneFileDocumentSession', () => {
   });
 
   it('flushes dirty manager sessions and re-emits content-persisted events', async () => {
-    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const manager = new DocumentSessionManager({ root: join(kb1Home, 'demo-vault'), defaultContent: '' });
     const events: DocumentSessionEvent[] = [];
     manager.onEvent((event) => events.push(event));
     const session = manager.getSession('notes/flush.md');
@@ -182,7 +182,7 @@ describe('OneFileDocumentSession', () => {
     session.ydoc.getText('markdown').insert(0, 'manager flush\n');
     await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 1 });
 
-    await expect(readFile(join(kb2Home, 'demo-vault', 'notes', 'flush.md'), 'utf8')).resolves.toBe('manager flush\n');
+    await expect(readFile(join(kb1Home, 'demo-vault', 'notes', 'flush.md'), 'utf8')).resolves.toBe('manager flush\n');
     expect(events).toContainEqual(expect.objectContaining({ kind: 'content-persisted', path: 'notes/flush.md' }));
     await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 0 });
     await manager.close();
@@ -555,7 +555,7 @@ describe('OneFileDocumentSession', () => {
 
   it('rekeys a live session on move and preserves edits made during the move at the new path', async () => {
     const events: DocumentSessionEvent[] = [];
-    const targetPath = join(kb2Home, 'demo-vault', 'renamed.md');
+    const targetPath = join(kb1Home, 'demo-vault', 'renamed.md');
     const session = new OneFileDocumentSession(filePath, {
       defaultContent: 'base\n',
       eventPath: 'hello-world.md'
@@ -583,7 +583,7 @@ describe('OneFileDocumentSession', () => {
   });
 
   it('rekeys every live session under a moved folder subtree', async () => {
-    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const manager = new DocumentSessionManager({ root: join(kb1Home, 'demo-vault'), defaultContent: '' });
     const first = manager.getSession('folder/a.md');
     const second = manager.getSession('folder/deep/b.md');
     const events: DocumentSessionEvent[] = [];
@@ -596,19 +596,19 @@ describe('OneFileDocumentSession', () => {
     await Promise.all([first.flush(), second.flush()]);
 
     const moved = await manager.moveSessionSubtree('folder', 'moved/folder', async () => {
-      await mkdir(join(kb2Home, 'demo-vault', 'moved'), { recursive: true });
-      await rename(join(kb2Home, 'demo-vault', 'folder'), join(kb2Home, 'demo-vault', 'moved', 'folder'));
+      await mkdir(join(kb1Home, 'demo-vault', 'moved'), { recursive: true });
+      await rename(join(kb1Home, 'demo-vault', 'folder'), join(kb1Home, 'demo-vault', 'moved', 'folder'));
     });
 
     expect(moved.sort()).toEqual(['moved/folder/a.md', 'moved/folder/deep/b.md']);
-    await expect(readFile(join(kb2Home, 'demo-vault', 'moved', 'folder', 'a.md'), 'utf8')).resolves.toBe('a\n');
-    await expect(readFile(join(kb2Home, 'demo-vault', 'moved', 'folder', 'deep', 'b.md'), 'utf8')).resolves.toBe('b\n');
+    await expect(readFile(join(kb1Home, 'demo-vault', 'moved', 'folder', 'a.md'), 'utf8')).resolves.toBe('a\n');
+    await expect(readFile(join(kb1Home, 'demo-vault', 'moved', 'folder', 'deep', 'b.md'), 'utf8')).resolves.toBe('b\n');
     expect(events.filter((event) => event.kind === 'doc-moved')).toHaveLength(2);
     await manager.close();
   });
 
   it('runs move/delete fallbacks when no live session is open', async () => {
-    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const manager = new DocumentSessionManager({ root: join(kb1Home, 'demo-vault'), defaultContent: '' });
     let moved = false;
     let deleted = false;
 
@@ -634,7 +634,7 @@ describe('OneFileDocumentSession', () => {
 
   it('keeps a released client session alive through the idle grace and closes it after', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: 'base\n',
       idleSessionGraceMs: 80
     });
@@ -654,7 +654,7 @@ describe('OneFileDocumentSession', () => {
 
   it('evicts a never-opened client session whose missing-file open failed', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       idleSessionGraceMs: 80
     });
     const lease = manager.attachClientSession('typo/missing.md');
@@ -672,13 +672,13 @@ describe('OneFileDocumentSession', () => {
     lease.release();
 
     expect(manager.getOpenSessionCount()).toBe(0);
-    await expect(readdir(kb2Home)).resolves.toEqual([]);
+    await expect(readdir(kb1Home)).resolves.toEqual([]);
     await manager.close();
   });
 
   it('keeps a session open until every simultaneous client lease is released', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: '',
       idleSessionGraceMs: 30
     });
@@ -703,7 +703,7 @@ describe('OneFileDocumentSession', () => {
 
   it('flushes a pending client edit before idle close removes the session', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: '',
       idleSessionGraceMs: 1
     });
@@ -715,20 +715,20 @@ describe('OneFileDocumentSession', () => {
     await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
       `Timed out waiting for idle close; count=${manager.getOpenSessionCount()}`
     );
-    await expect(readFile(join(kb2Home, 'demo-vault', 'flush-before-close.md'), 'utf8'))
+    await expect(readFile(join(kb1Home, 'demo-vault', 'flush-before-close.md'), 'utf8'))
       .resolves.toBe('pending before close\n');
     await manager.close();
   });
 
   it('does not idle-close a session whose latest content failed to persist', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: 'base\n',
       idleSessionGraceMs: 20
     });
     const lease = manager.attachClientSession('readonly.md');
     await lease.session.open();
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
 
     try {
       await chmod(vaultDir, 0o500);
@@ -743,7 +743,7 @@ describe('OneFileDocumentSession', () => {
       await chmod(vaultDir, 0o700);
       lease.session.ydoc.getText('markdown').insert(lease.session.ydoc.getText('markdown').length, 'saved\n');
       await lease.session.flush();
-      await expect(readFile(join(kb2Home, 'demo-vault', 'readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nsaved\n');
+      await expect(readFile(join(kb1Home, 'demo-vault', 'readonly.md'), 'utf8')).resolves.toBe('base\nunsaved\nsaved\n');
     } finally {
       await chmod(vaultDir, 0o700).catch(() => undefined);
       if (lease.session.hasActivePersistFailure()) {
@@ -757,7 +757,7 @@ describe('OneFileDocumentSession', () => {
 
   it('hydrates API sessions with default content, keeps them through idle grace, then closes them', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       idleSessionGraceMs: 20
     });
 
@@ -780,7 +780,7 @@ describe('OneFileDocumentSession', () => {
 
   it('cancels a pending idle close when an API session is acquired again', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       idleSessionGraceMs: 30
     });
 
@@ -803,7 +803,7 @@ describe('OneFileDocumentSession', () => {
 
   it('does not idle-close an API-touched session while a client is attached', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: 'client\n',
       idleSessionGraceMs: 10
     });
@@ -825,7 +825,7 @@ describe('OneFileDocumentSession', () => {
 
   it('hydrates a fresh session when a client attaches while idle close is in flight', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: 'base\n',
       idleSessionGraceMs: 1
     });
@@ -869,7 +869,7 @@ describe('OneFileDocumentSession', () => {
   it('logs unexpected idle close failures without keeping the failed session registered', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: '',
       idleSessionGraceMs: 1
     });
@@ -899,7 +899,7 @@ describe('OneFileDocumentSession', () => {
   it('restores an idle-closing session when close discovers a persist failure', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: '',
       idleSessionGraceMs: 1
     });
@@ -935,7 +935,7 @@ describe('OneFileDocumentSession', () => {
 
   it('moves a single live manager session and updates the path registry', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: ''
     });
     const session = manager.getSession('single-move.md');
@@ -944,18 +944,18 @@ describe('OneFileDocumentSession', () => {
     await session.flush();
 
     await expect(manager.moveSession('single-move.md', 'moved-single.md', async () => {
-      await rename(join(kb2Home, 'demo-vault', 'single-move.md'), join(kb2Home, 'demo-vault', 'moved-single.md'));
+      await rename(join(kb1Home, 'demo-vault', 'single-move.md'), join(kb1Home, 'demo-vault', 'moved-single.md'));
     })).resolves.toBe(true);
 
     expect(manager.getOpenSession('single-move.md')).toBeUndefined();
     expect(manager.getOpenSession('moved-single.md')).toBe(session);
-    await expect(readFile(join(kb2Home, 'demo-vault', 'moved-single.md'), 'utf8')).resolves.toBe('single\n');
+    await expect(readFile(join(kb1Home, 'demo-vault', 'moved-single.md'), 'utf8')).resolves.toBe('single\n');
     await manager.close();
   });
 
   it('clears pending idle timers when the manager closes', async () => {
     const manager = new DocumentSessionManager({
-      root: join(kb2Home, 'demo-vault'),
+      root: join(kb1Home, 'demo-vault'),
       defaultContent: '',
       idleSessionGraceMs: 10_000
     });
@@ -969,7 +969,7 @@ describe('OneFileDocumentSession', () => {
   });
 
   it('deletes every live session under a folder subtree once after the disk delete', async () => {
-    const manager = new DocumentSessionManager({ root: join(kb2Home, 'demo-vault'), defaultContent: '' });
+    const manager = new DocumentSessionManager({ root: join(kb1Home, 'demo-vault'), defaultContent: '' });
     const first = manager.getSession('folder/a.md');
     const second = manager.getSession('folder/deep/b.md');
     await first.open();
@@ -981,7 +981,7 @@ describe('OneFileDocumentSession', () => {
     let deleteCalls = 0;
     const deleted = await manager.deleteSessionSubtree('folder', async () => {
       deleteCalls += 1;
-      await rm(join(kb2Home, 'demo-vault', 'folder'), { recursive: true });
+      await rm(join(kb1Home, 'demo-vault', 'folder'), { recursive: true });
     });
 
     expect(deleted).toEqual(['folder/a.md', 'folder/deep/b.md']);

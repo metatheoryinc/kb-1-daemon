@@ -7,25 +7,25 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/daemon build"
+        "command": "pnpm --filter @kb-1/daemon build"
       }
     },
     "dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/daemon dev"
+        "command": "pnpm --filter @kb-1/daemon dev"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/daemon test"
+        "command": "pnpm --filter @kb-1/daemon test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/daemon typecheck"
+        "command": "pnpm --filter @kb-1/daemon typecheck"
       }
     }
   }

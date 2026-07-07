@@ -1,10 +1,10 @@
 # Local Server
 
-The local KB-2 server is the authoritative runtime for one or more vaults. It is
+The local KB-1 server is the authoritative runtime for one or more vaults. It is
 open source and runs on a user's device, a home server, or a user-controlled
 cloud instance such as a Docker container on a provider they choose.
 
-The server is also the host for the first local KB-2 product experience. It
+The server is also the host for the first local KB-1 product experience. It
 should serve a minimal local web UI that uses the same service APIs as local MCP,
 local API clients, and later cloud relay requests.
 
@@ -65,18 +65,18 @@ file, and emit a warning event through connected local and cloud clients.
 
 For the local UI, a direct filesystem edit should be represented as a content
 state change, not as a presence event. A simple warning such as "changed outside
-KB-2; reloaded from disk" is preferable to introducing local user/cursor models.
+KB-1; reloaded from disk" is preferable to introducing local user/cursor models.
 
 ## Document Identity
 
-KB-2 can begin path-keyed:
+KB-1 can begin path-keyed:
 
 ```text
 document identity = canonical vault-relative path
 ```
 
 This differs from KB-1. In KB-1, path became metadata and stable note IDs became
-the real identity. In KB-2, the filesystem path is part of the source of truth.
+the real identity. In KB-1, the filesystem path is part of the source of truth.
 
 Rename and move operations must be explicit:
 
@@ -152,7 +152,7 @@ It should not include:
 - remote sharing policy
 - cursors, selections, follow mode, or presence
 
-The purpose of the local UI is to make KB-2 useful before the cloud relay exists
+The purpose of the local UI is to make KB-1 useful before the cloud relay exists
 and to exercise the same filesystem-backed APIs that local MCP tools and later
 cloud relay requests will use.
 

@@ -3,14 +3,14 @@ import {
   createLocalMcpEndpoint,
   type LocalMcpEndpoint,
   type LocalMcpVaultProvider
-} from '@kb-2/local-mcp';
+} from '@kb-1/local-mcp';
 import {
   type ServiceErrorCode,
   type ServiceResult,
   type VaultActor,
   type VaultChangeEvent,
   type VaultService
-} from '@kb-2/vault-service';
+} from '@kb-1/vault-service';
 import { createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -32,6 +32,8 @@ import type {
 } from './vault-registry.js';
 
 export const ACTOR_HEADER = 'x-kb1-actor';
+// Compatibility header accepted until coordinated client/cloud header migration is complete.
+export const LEGACY_ACTOR_HEADER = 'x-kb2-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
@@ -97,7 +99,7 @@ export function createApp(options: CreateAppOptions): Hono {
       return context.json({
         ok: false,
         error: 'relay_not_configured',
-        message: 'Relay is not configured. Set KB2_RELAY_URL and KB2_RELAY_TOKEN before connecting.'
+        message: 'Relay is not configured. Set KB1_RELAY_URL and KB1_RELAY_TOKEN before connecting. Legacy KB2_RELAY_URL/KB2_RELAY_TOKEN are still accepted.'
       }, 409);
     }
 
@@ -117,7 +119,10 @@ export function createApp(options: CreateAppOptions): Hono {
     // layer. Every data tool requires a vaultId; there is no default vault.
     const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(mcpVaultProvider(registry), {
       actorFromRequest: (request) => {
-        const parsed = actorFromHeader(request.headers.get(ACTOR_HEADER) ?? undefined);
+        const parsed = actorFromHeaders(
+          request.headers.get(ACTOR_HEADER) ?? undefined,
+          request.headers.get(LEGACY_ACTOR_HEADER) ?? undefined
+        );
         return parsed.ok ? parsed.actor : parsed;
       }
     });
@@ -699,42 +704,59 @@ function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 |
 }
 
 function actorFromRequest(context: Context, actorDefault: ActorDefault): ServiceResult<{ actor: VaultActor }> {
-  const parsed = actorFromHeader(context.req.header(ACTOR_HEADER));
+  const parsed = actorFromHeaders(
+    context.req.header(ACTOR_HEADER),
+    context.req.header(LEGACY_ACTOR_HEADER)
+  );
 
   if (!parsed.ok) return parsed;
   return { ok: true, actor: parsed.actor ?? defaultActor(actorDefault) };
 }
 
-export function actorFromHeader(rawActor: string | undefined): ServiceResult<{ actor?: VaultActor }> {
+export function actorFromHeaders(
+  rawKb1Actor: string | undefined,
+  rawLegacyKb2Actor: string | undefined
+): ServiceResult<{ actor?: VaultActor }> {
+  if (rawKb1Actor !== undefined) {
+    return actorFromHeader(rawKb1Actor, ACTOR_HEADER);
+  }
+
+  return actorFromHeader(rawLegacyKb2Actor, LEGACY_ACTOR_HEADER);
+}
+
+export function actorFromHeader(
+  rawActor: string | undefined,
+  headerName = ACTOR_HEADER
+): ServiceResult<{ actor?: VaultActor }> {
   if (rawActor === undefined) {
     return { ok: true };
   }
 
   if (new TextEncoder().encode(rawActor).byteLength > MAX_ACTOR_HEADER_BYTES) {
-    return invalidActor(`${ACTOR_HEADER} must be 1 KiB or smaller`);
+    return invalidActor(`${headerName} must be 1 KiB or smaller`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawActor);
   } catch {
-    return invalidActor(`${ACTOR_HEADER} must be valid JSON`);
+    return invalidActor(`${headerName} must be valid JSON`);
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return invalidActor(`${ACTOR_HEADER} must be a JSON object`);
+    return invalidActor(`${headerName} must be a JSON object`);
   }
 
   const actor = parsed as Record<string, unknown>;
   if (actor.kind !== 'user' && actor.kind !== 'integration') {
-    return invalidActor(`${ACTOR_HEADER}.kind must be "user" or "integration"`);
+    return invalidActor(`${headerName}.kind must be "user" or "integration"`);
   }
 
-  const id = readOptionalActorString(actor, 'id');
+  const id = readOptionalActorString(actor, 'id', headerName);
   if (!id.ok) return id;
-  const name = readOptionalActorString(actor, 'name');
+  const name = readOptionalActorString(actor, 'name', headerName);
   if (!name.ok) return name;
-  const client = readOptionalActorString(actor, 'client');
+  const client = readOptionalActorString(actor, 'client', headerName);
   if (!client.ok) return client;
 
   return {
@@ -758,14 +780,15 @@ function defaultActor(actorDefault: ActorDefault): VaultActor {
 
 function readOptionalActorString(
   actor: Record<string, unknown>,
-  key: 'id' | 'name' | 'client'
+  key: 'id' | 'name' | 'client',
+  headerName = ACTOR_HEADER
 ): ServiceResult<{ value?: string }> {
   if (!Object.prototype.hasOwnProperty.call(actor, key)) {
     return { ok: true };
   }
 
   if (typeof actor[key] !== 'string') {
-    return invalidActor(`${ACTOR_HEADER}.${key} must be a string when provided`);
+    return invalidActor(`${headerName}.${key} must be a string when provided`);
   }
 
   return { ok: true, value: actor[key] };
