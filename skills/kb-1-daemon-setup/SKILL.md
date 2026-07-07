@@ -42,7 +42,9 @@ pwd
 command -v node pnpm corepack git curl systemctl launchctl tailscale claude codex || true
 node --version 2>/dev/null || true
 pnpm --version 2>/dev/null || true
-systemctl --user status kb2d --no-pager 2>/dev/null || true
+systemctl --user status kb1d.service --no-pager 2>/dev/null || true
+systemctl --user status kb2d.service --no-pager 2>/dev/null || true
+launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb1d" 2>/dev/null || true
 launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb2d" 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/health 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/vaults 2>/dev/null || true
@@ -61,9 +63,15 @@ Defaults:
 - Vaults: `$HOME/.kb1/vaults/<vault-slug>`
 - Host bind: `127.0.0.1`
 - Port: `7382`
-- Linux service: user systemd unit `kb2d.service`
-- macOS service: user LaunchAgent `dev.metatheory.kb1.kb2d`
+- Linux service: user systemd unit `kb1d.service`
+- macOS service: user LaunchAgent `dev.metatheory.kb1.kb1d`
 - MCP endpoint: `http://127.0.0.1:7382/mcp`
+
+For in-place upgrades, the installer uses existing `$HOME/.kb2` daemon data if
+`$HOME/.kb1` does not exist. Existing `kb2d.service` and
+`dev.metatheory.kb1.kb2d` service definitions are also detected and updated in
+place when the new KB-1 service file is not present. Set `KB1_HOME`,
+`KB1_SERVICE_NAME`, or `KB1_LAUNCHD_LABEL` to choose explicitly.
 
 Run the support script from the skill directory when available. Its default mode installs KB-1 locally, configures a user service, optionally configures local MCP clients, and does not change Tailscale:
 
@@ -296,7 +304,7 @@ MCP smoke once tools are loaded:
 - Port 7382 busy: identify the process, or set `KB1_PORT` in the service and update MCP/Tailscale URLs to match.
 - Linux `systemctl --user` fails in a container: install/run on the host OS or use the foreground run path.
 - Linux service stops after logout: ask before enabling lingering with `sudo loginctl enable-linger "$USER"`.
-- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb2d`.
+- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb1d`; use `dev.metatheory.kb1.kb2d` only for legacy LaunchAgent upgrades.
 - Tailscale not installed or logged in: keep KB-1 local-only and give the user Tailscale setup steps.
 - Tailscale Serve already has unrelated routes: do not overwrite in auto mode; require explicit approval and a chosen port.
 - UI works but agents cannot edit: check the MCP URL, restart the client, and ensure every data tool call includes `vaultId`.

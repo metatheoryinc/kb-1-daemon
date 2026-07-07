@@ -4,6 +4,7 @@ import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttri
 import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
 import type { VaultChangeEventKind } from '@kb-1/vault-service';
+import { realpathSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -392,7 +393,19 @@ function closeServer(server: ReturnType<typeof serve>): Promise<void> {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isDaemonCliEntrypoint(metaUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) {
+    return false;
+  }
+
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
+  } catch {
+    return metaUrl === pathToFileURL(argv1).href;
+  }
+}
+
+if (isDaemonCliEntrypoint(import.meta.url, process.argv[1])) {
   let startedDaemon: StartedDaemon | undefined;
   let shuttingDown = false;
 

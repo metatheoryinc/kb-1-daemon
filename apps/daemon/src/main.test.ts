@@ -1,14 +1,15 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
-import { startDaemon } from './main.js';
+import { isDaemonCliEntrypoint, startDaemon } from './main.js';
 
 describe('daemon startup', () => {
   let kb1Home: string;
@@ -65,6 +66,26 @@ describe('daemon startup', () => {
 
     await started.close();
     warnSpy.mockRestore();
+  });
+
+  it('recognizes installed kb1d and kb2d symlink bins as daemon entrypoints', async () => {
+    const installRoot = await mkdtemp(join(tmpdir(), 'kb1-bin-entrypoint-'));
+    try {
+      const distDir = join(installRoot, 'node_modules', '@kb-1', 'daemon', 'dist');
+      const binDir = join(installRoot, 'bin');
+      await mkdir(distDir, { recursive: true });
+      await mkdir(binDir, { recursive: true });
+      const entrypoint = join(distDir, 'main.js');
+      await writeFile(entrypoint, '#!/usr/bin/env node\n', 'utf8');
+
+      for (const bin of ['kb1d', 'kb2d']) {
+        const binPath = join(binDir, bin);
+        await symlink(entrypoint, binPath);
+        expect(isDaemonCliEntrypoint(pathToFileURL(entrypoint).href, binPath)).toBe(true);
+      }
+    } finally {
+      await rm(installRoot, { force: true, recursive: true });
+    }
   });
 
   it('seeds and serves the first-boot starter vault through its scoped route', async () => {

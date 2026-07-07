@@ -8,7 +8,7 @@
     "build": "nx run-many -t build",
     "check": "node scripts/check.mjs",
     "docker:down": "docker compose down",
-    "docker:up": "docker compose up --build -d daemon",
+    "docker:up": "node scripts/docker-up.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:daemon": "pnpm --filter @kb-1/daemon dev",
     "dev:web": "pnpm --filter @kb-1/web dev",

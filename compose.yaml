@@ -6,10 +6,10 @@ services:
     image: kb-1-daemon:dev
     container_name: kb-1-daemon-dev
     environment:
-      KB1_HOME: /data/kb1
+      KB1_HOME: ${KB1_DOCKER_CONTAINER_HOME:-/data/kb1}
       KB1_HOST: 0.0.0.0
       KB1_PORT: 7382
     ports:
       - "17382:7382"
     volumes:
-      - ./.kb1-docker:/data/kb1
+      - ${KB1_DOCKER_HOST_HOME:-./.kb1-docker}:${KB1_DOCKER_CONTAINER_HOME:-/data/kb1}

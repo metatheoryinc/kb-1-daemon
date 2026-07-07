@@ -8,7 +8,7 @@ set -euo pipefail
 # Defaults:
 #   KB1_REPO_URL=https://github.com/metatheoryinc/kb-1-daemon.git
 #   KB1_REPO_DIR=$HOME/repos/kb-1-daemon
-#   KB1_HOME=$HOME/.kb1              # legacy KB2_HOME is accepted as fallback
+#   KB1_HOME=$HOME/.kb1              # existing $HOME/.kb2 is used if $HOME/.kb1 is absent
 #   KB1_HOST=127.0.0.1               # legacy KB2_HOST is accepted as fallback
 #   KB1_PORT=7382                    # legacy KB2_PORT is accepted as fallback
 #   KB1_RUN_CHECKS=1
@@ -17,9 +17,60 @@ set -euo pipefail
 #   KB1_CONFIRM_NON_LOOPBACK_BIND=0      # must be 1 for non-loopback KB1_HOST
 #   KB1_TAILSCALE_HTTPS_PORT=443
 
+say() { printf '\n==> %s\n' "$*"; }
+warn() { printf '\nWARN: %s\n' "$*" >&2; }
+need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 1; }; }
+
+resolve_kb1_home_default() {
+  if [ -n "${KB1_HOME:-}" ]; then
+    printf '%s\n' "$KB1_HOME"
+    return 0
+  fi
+
+  if [ -n "${KB2_HOME:-}" ]; then
+    printf '%s\n' "$KB2_HOME"
+    return 0
+  fi
+
+  if [ -d "$HOME/.kb2" ] && [ ! -e "$HOME/.kb1" ]; then
+    printf '%s\n' "$HOME/.kb2"
+    return 0
+  fi
+
+  printf '%s\n' "$HOME/.kb1"
+}
+
+resolve_linux_service_name_default() {
+  if [ -n "${KB1_SERVICE_NAME:-}" ]; then
+    printf '%s\n' "$KB1_SERVICE_NAME"
+    return 0
+  fi
+
+  if [ -f "$HOME/.config/systemd/user/kb2d.service" ] && [ ! -f "$HOME/.config/systemd/user/kb1d.service" ]; then
+    printf '%s\n' "kb2d.service"
+    return 0
+  fi
+
+  printf '%s\n' "kb1d.service"
+}
+
+resolve_macos_label_default() {
+  if [ -n "${KB1_LAUNCHD_LABEL:-}" ]; then
+    printf '%s\n' "$KB1_LAUNCHD_LABEL"
+    return 0
+  fi
+
+  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb2d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
+    printf '%s\n' "dev.metatheory.kb1.kb2d"
+    return 0
+  fi
+
+  printf '%s\n' "dev.metatheory.kb1.kb1d"
+}
+
 REPO_URL="${KB1_REPO_URL:-https://github.com/metatheoryinc/kb-1-daemon.git}"
 REPO_DIR="${KB1_REPO_DIR:-$HOME/repos/kb-1-daemon}"
-KB1_HOME="${KB1_HOME:-${KB2_HOME:-$HOME/.kb1}}"
+KB1_HOME="$(resolve_kb1_home_default)"
 KB1_HOST="${KB1_HOST:-${KB2_HOST:-127.0.0.1}}"
 KB1_PORT="${KB1_PORT:-${KB2_PORT:-7382}}"
 RUN_CHECKS="${KB1_RUN_CHECKS:-1}"
@@ -30,12 +81,17 @@ if [ "${KB1_ENABLE_TAILSCALE_SERVE:-0}" = "1" ]; then
 fi
 CONFIRM_TAILSCALE_EXPOSURE="${KB1_CONFIRM_TAILSCALE_EXPOSURE:-0}"
 TAILSCALE_HTTPS_PORT="${KB1_TAILSCALE_HTTPS_PORT:-443}"
-LINUX_SERVICE_NAME="${KB1_SERVICE_NAME:-kb2d.service}"
-MACOS_LABEL="${KB1_LAUNCHD_LABEL:-dev.metatheory.kb1.kb2d}"
+LINUX_SERVICE_NAME="$(resolve_linux_service_name_default)"
+MACOS_LABEL="$(resolve_macos_label_default)"
 
-say() { printf '\n==> %s\n' "$*"; }
-warn() { printf '\nWARN: %s\n' "$*" >&2; }
-need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 1; }; }
+if [ "${KB1_INSTALLER_PRINT_CONFIG:-0}" = "1" ]; then
+  printf 'KB1_HOME=%s\n' "$KB1_HOME"
+  printf 'KB1_HOST=%s\n' "$KB1_HOST"
+  printf 'KB1_PORT=%s\n' "$KB1_PORT"
+  printf 'KB1_SERVICE_NAME=%s\n' "$LINUX_SERVICE_NAME"
+  printf 'KB1_LAUNCHD_LABEL=%s\n' "$MACOS_LABEL"
+  exit 0
+fi
 
 is_loopback_host() {
   case "$KB1_HOST" in

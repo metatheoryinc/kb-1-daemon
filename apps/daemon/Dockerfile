@@ -38,8 +38,10 @@ ENV KB1_HOST=0.0.0.0
 ENV KB1_PORT=7382
 
 COPY --from=build /runtime ./
+COPY apps/daemon/scripts/docker-entrypoint.sh /usr/local/bin/kb1-docker-entrypoint
 
-VOLUME ["/data/kb1"]
+VOLUME ["/data/kb1", "/data/kb2"]
 EXPOSE 7382
 
+ENTRYPOINT ["kb1-docker-entrypoint"]
 CMD ["node", "apps/daemon/dist/main.js"]

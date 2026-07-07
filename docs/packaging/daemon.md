@@ -81,6 +81,18 @@ container. The daemon status file is therefore visible at:
 .kb1-docker/daemon/status.json
 ```
 
+For in-place upgrades from the old Compose default, `pnpm docker:up` detects an
+existing non-empty `.kb2-docker/` directory when `.kb1-docker/` is absent and
+uses that directory at `/data/kb2` instead. To choose explicitly:
+
+```bash
+KB1_DOCKER_HOST_HOME=./.kb2-docker KB1_DOCKER_CONTAINER_HOME=/data/kb2 pnpm docker:up
+```
+
+The image entrypoint has the same direct-container compatibility behavior: if
+the default `/data/kb1` home is empty and `/data/kb2` has data, it starts with
+`KB1_HOME=/data/kb2`. Set `KB1_HOME` to override this detection.
+
 Compose builds the daemon image and runs the compiled `dist/main.js` inside the
 container. Source is copied into the image during `docker compose up --build`;
 code changes require rerunning `pnpm docker:up`.
@@ -120,6 +132,13 @@ docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 kb-1-daemon
 
 The container defaults `KB1_HOME` to `/data/kb1` and writes daemon status to
 `/data/kb1/daemon/status.json`.
+
+Legacy direct-image deployments that mounted data at `/data/kb2` can keep that
+mount for upgrade:
+
+```bash
+docker run --rm -p 7382:7382 -v kb2-home:/data/kb2 kb-1-daemon
+```
 
 ## npm CLI
 
