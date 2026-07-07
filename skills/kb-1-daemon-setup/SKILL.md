@@ -290,7 +290,7 @@ MCP smoke once tools are loaded:
 
 ## Troubleshooting
 
-- Repo clone fails: verify the public repo URL, GitHub availability, and local Git credentials if the repo is still private during pre-release.
+- Repo clone fails: verify the public repo URL, GitHub availability, and local Git credentials for the account performing the clone.
 - `pnpm` missing: use Corepack with `corepack prepare pnpm@11.5.3 --activate`; if Corepack is absent, install Node 22+ first.
 - `apps/daemon/dist/main.js` missing: run `pnpm build` or `pnpm check` from the repo root.
 - Port 7382 busy: identify the process, or set `KB2_PORT` in the service and update MCP/Tailscale URLs to match.

@@ -121,8 +121,8 @@ The daemon package reserves the future CLI binary name:
 }
 ```
 
-Publishing is deferred. The first public path can be `git clone` plus the setup
-skill while packaging is hardened. A future release chunk can make
-`@kb-2/daemon` publishable, add provenance/signing rules, decide whether the
+Publishing is deferred. The supported public setup path is `git clone` plus the
+setup skill while packaging is hardened. Packaging hardening should make
+`@kb-2/daemon` publishable, add provenance/signing rules, define whether the
 open-source package publishes from this package directly or from a dedicated
 release wrapper, and choose the public binary/package names.
