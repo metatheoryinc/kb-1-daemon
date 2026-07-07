@@ -2259,7 +2259,7 @@ export function buildMarkdownDecorations(
         // Cursor inside (or header was empty) → raw source. Do not
         // descend into TableCell children, otherwise chips/links/bold
         // render while the user is trying to edit pipe syntax, which
-        // is the backwards half of FC-3294.
+        // is the backwards half of the table-cell editing behavior.
         return false;
       }
 

@@ -33,7 +33,7 @@
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
   import { plaintextImageUpload } from './plaintext-image-upload';
-  // Remote-cursor layer (cloud-014 part-6). Mounted only when the host supplies
+  // Remote-cursor layer. Mounted only when the host supplies
   // both `awareness` and `noteId` — the daemon UI, which has no presence,
   // passes neither and the producer/consumer are skipped entirely.
   import type { Awareness } from 'y-protocols/awareness';
@@ -105,7 +105,7 @@
     onUploadStart?: () => void;
     onUploadEnd?: () => void;
     onError?: (err: unknown, file: File) => void;
-    /** Vault-scoped awareness handle (cloud-014 part-6). When supplied
+    /** Vault-scoped awareness handle. When supplied
      *  (together with `noteId`), the editor publishes the local caret /
      *  selection to `awareness.cursor` and renders remote peers' carets +
      *  selections. Optional and backward-compatible: the daemon UI has no
@@ -405,13 +405,12 @@
       editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
-      // Remote-cursor producer + consumer (cloud-014 part-6). LIFTED from
-      // kb-1/apps/@kb-1/web/src/lib/components/app/editor/PlaintextEditor.svelte.
-      // Mounted only when the host supplied both an `awareness` handle and a
-      // `noteId`; the daemon UI omits both, so this is a no-op there. The
-      // producer writes the local caret to `awareness.cursor`; the consumer
-      // renders remote peers' carets/selections. Must sit AFTER `plaintextSync`
-      // so the CM doc and Y.Text are in sync before RelPos are built.
+      // Remote-cursor producer + consumer. Mounted only when the host supplied
+      // both an `awareness` handle and a `noteId`; the daemon UI omits both, so
+      // this is a no-op there. The producer writes the local caret to
+      // `awareness.cursor`; the consumer renders remote peers'
+      // carets/selections. Must sit AFTER `plaintextSync` so the CM doc and
+      // Y.Text are in sync before RelPos are built.
       ...(stableAwareness && stableNoteId !== undefined
         ? [
             plaintextCursorProducer(stableAwareness, stableText, stableNoteId),

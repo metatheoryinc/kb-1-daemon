@@ -32,8 +32,7 @@ import {
  * break — that's the seam Slice 5's two-browser smoke catches. The
  * spec layer is what we pin here.
  *
- * Spec: `docs/plans/2026-05-13-plaintext-shadow-track.md`
- *   §"Undo and origin tagging"
+ * Contract: undo and origin tagging.
  */
 
 function setup(initial = '') {

@@ -27,8 +27,9 @@ The local server owns:
 - local MCP/API access
 - outbound cloud tunnel connection
 
-It does not own cloud billing, organization membership, or multi-user feature
-policy. Those are enforced by the cloud layer before requests are relayed.
+It does not own remote account administration, organization membership, or
+multi-user access policy. Those are enforced by the cloud layer before requests
+are relayed.
 
 It also does not own local multi-user presence. In the local-first product, the
 server should model files, edits, file-change events, and audit history. Users,
@@ -133,8 +134,8 @@ cloud. Remote/web agents still use the cloud MCP/API and relay.
 
 ## Local Web UI
 
-The local web UI is a first-class open-source surface. It should be a small
-subset of the eventual hosted product:
+The local web UI is a first-class open-source surface. It should start with the
+local product capabilities:
 
 - file tree browsing
 - Markdown read/edit
@@ -147,7 +148,7 @@ It should not include:
 - cloud auth
 - users
 - organization management
-- billing
+- remote account administration
 - remote sharing policy
 - cursors, selections, follow mode, or presence
 

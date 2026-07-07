@@ -434,7 +434,7 @@ export function createLocalMcpServer(
     "edit_note",
     {
       description:
-        "Apply the Chunk 008 anchored splice contract verbatim. Requires a read_note baseline plus old_text/new_text and optional before/after/occurrence anchors. Rejected results are returned intact: stale_doc includes current_content and fresh baseline; ambiguous includes match_count; size rejects include limits; persist_failed means the edit was not durably saved and has no success audit row.",
+        "Apply the anchored splice contract. Requires a read_note baseline plus old_text/new_text and optional before/after/occurrence anchors. Rejected results are returned intact: stale_doc includes current_content and fresh baseline; ambiguous includes match_count; size rejects include limits; persist_failed means the edit was not durably saved and has no success audit row.",
       inputSchema: {
         path: z.string().describe("Vault-relative Markdown file path to edit."),
         baseline: z.string().describe("Baseline returned by read_note."),

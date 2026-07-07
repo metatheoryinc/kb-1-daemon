@@ -1,17 +1,16 @@
 # KB-1 Local Comparison
 
-KB-1 Local preserves the original hosted KB-1 ambition while changing the
-custody and authority model. Some implementation/package names still say KB-2
-while the product rename is in progress; public-facing language should say
-KB-1 Local, KB-1 Cloud relay, and KB-1 Cloud Hosted.
+KB-1 Local preserves the original KB-1 ambition while changing the custody and
+authority model. Some implementation/package names still say KB-2 while the
+product rename is in progress; public-facing language should say KB-1 Local.
 
 ## KB-1 Summary
 
-KB-1 is a hosted, agent-consumable Markdown vault. It preserves an
+KB-1 is an agent-consumable Markdown vault. It preserves an
 Obsidian-like information architecture while giving humans and agents shared
 access through web, API, and MCP surfaces.
 
-The KB-1 architecture uses a Cloudflare-hosted substrate:
+The KB-1 architecture uses a Cloudflare-based substrate:
 
 - SvelteKit web app
 - Hono API
@@ -55,16 +54,16 @@ KB-1 Local should preserve:
 
 The central change is custody.
 
-| Concern | Hosted KB-1 | KB-1 Local |
+| Concern | Original KB-1 | KB-1 Local |
 |---|---|---|
-| Durable content | Hosted D1/R2/DO substrate | User filesystem |
-| Cloud role | Source of truth and app backend | Optional paid relay, Hosted, auth, policy, presence |
+| Durable content | Remote D1/R2/DO substrate | User filesystem |
+| Cloud role | Source of truth and app backend | Optional relay, auth, policy, presence |
 | Local role | Optional desktop wrapper | Authoritative vault server and local app host |
 | Open source surface | Optional/unclear | Local server and local UI are the public open-source foundation |
-| Multi-tenancy | Shared hosted storage substrate | Tenant content outside hosted storage |
+| Multi-tenancy | Shared remote storage substrate | Tenant content outside remote storage |
 | Document identity | Migrated toward stable note IDs | Path-keyed initially because files are canonical |
 | Awareness | Cloud/realtime substrate | Cloud presence plane can remain separate |
-| Data loss posture | Hosted service owns more risk | User owns storage/backup; service owns write correctness |
+| Data loss posture | Remote substrate owns content durability | User owns storage/backup; service owns write correctness |
 
 ## Why Path Identity Is Acceptable Again
 
@@ -87,32 +86,32 @@ summarize that history into Git commits.
 
 ## Better Multi-Tenant Posture
 
-KB-1 placed all tenants into one hosted data substrate. Even with correct
-authorization, that means the SaaS operator owns more data custody, backup,
+KB-1 placed all tenants into one remote data substrate. Even with correct
+authorization, that means the service operator owns more data custody, backup,
 isolation, migration, and breach surface.
 
-KB-1 Local removes customer knowledge content from the hosted substrate. KB-1
-Cloud still needs account and routing metadata for relay, and Hosted stores a
-tenant's vault because managed hosting is the point. The default path keeps the
+KB-1 Local removes customer knowledge content from the remote substrate. A relay
+layer still needs account and routing metadata, but the default path keeps the
 user's actual vault content with the user.
 
 ## Local Product Before Cloud Relay
 
-KB-1's primary useful experience depended on the hosted app and hosted substrate.
+KB-1's primary useful experience depended on the remote app and remote
+substrate.
 KB-1 Local should become useful earlier: the open-source local server should
 host a local UI for file-tree browsing and Markdown editing, while local agents
 use local MCP/API tools against the same service.
 
-This changes execution order, not the long-term cloud ambition. Cloud relay,
-auth, org management, billing, presence, and Hosted vaults arrive as remote and
-multi-user layers around the same service contract.
+This changes execution order, not the service contract. Remote relay, auth, org
+management, and presence can arrive as remote and multi-user layers around the
+same service contract.
 
 ## Open Questions
 
 - Which KB-1 MCP tools should be carried over exactly, and which should change
   because the filesystem is canonical?
 - Which KB-1 collaboration affordances are essential for the first KB-1 Local demo?
-- Which local UI affordances should replace hosted collaboration affordances in
+- Which local UI affordances should replace remote collaboration affordances in
   the first local-only demo?
 - Which KB-1 architectural docs should be treated as source inspiration versus
   migration cautionary tales?

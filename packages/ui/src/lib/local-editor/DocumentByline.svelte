@@ -1,11 +1,8 @@
 <script lang="ts">
   /**
-   * Ported from KB-1:
-   * apps/@kb-1/web/src/lib/components/app/canvas/document/DocumentByline.svelte
-   *
-   * Local daemon delta: metadata is still omitted until that surface exists.
-   * History now mirrors KB-1's byline affordance and opens the note-scoped
-   * history panel from the route shell.
+   * Local daemon byline: metadata is still omitted until that surface exists.
+   * The history affordance opens the note-scoped history panel from the route
+   * shell.
    */
   interface Props {
     statusLabel?: string;
