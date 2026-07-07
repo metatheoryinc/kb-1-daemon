@@ -1,14 +1,13 @@
-# KB-1 Cloud Relay
+# Remote Relay Boundary
 
-Cloud relay is the paid remote-access and collaboration layer for KB-1 Local. It
-keeps the KB-1-style web, API, and MCP experience while durable content storage
-stays on the user's local server.
+Remote relay is an optional remote-access and collaboration layer for KB-1
+Local. It keeps the KB-1-style web, API, and MCP experience while durable
+content storage stays on the user's local server.
 
 Cloud relay is not required for the first useful local KB-1 product. The
 open-source local service can host a local web UI and local MCP/API tools before
-remote relay is enabled. The public launch story is: local first, tailnet/local
-network for private access, KB-1 Cloud relay when authenticated reach is worth a
-paid service.
+remote relay is enabled. The local product should remain useful over localhost
+and private networks without requiring any remote account.
 
 ## Responsibilities
 
@@ -19,7 +18,6 @@ The cloud layer owns:
 - active tunnel registry
 - per-vault routing
 - permissions and feature gates
-- billing and plan enforcement
 - cloud MCP/API endpoints
 - web app delivery
 - ephemeral presence, cursors, selections, and follow-mode state
@@ -37,7 +35,7 @@ Local Server -> Cloud Relay
 ```
 
 The connection is authenticated by a key or credential generated for the owning
-user or organization. The cloud binds the tunnel to one or more vaults hosted by
+user or organization. The cloud binds the tunnel to one or more vaults served by
 that server.
 
 ## Active Authority
@@ -57,14 +55,13 @@ Every edge should check permissions:
 - user or organization membership
 - vault access
 - operation permission: read, search, write, admin
-- feature gate: individual, paid collaboration, organization feature
+- collaboration policy
 - tunnel authority for the target vault
 - request envelope validity at the local server
 
-The open-source local app should remain useful without a cloud account. Relay
-access is the paid convenience path unless a later business decision introduces
-trials or a free single-user relay tier. Organization plans can enable other
-users to read, write, or collaborate in shared vaults.
+The open-source local app should remain useful without a remote account.
+Collaboration policy can enable other users to read, write, or collaborate in
+shared vaults.
 
 ## Content Plane
 
@@ -99,7 +96,7 @@ editing a document and some other local process or agent changes that file, the
 local product should surface a file-change event or direct-write warning rather
 than attempting to show remote cursors or user presence.
 
-## Collaboration Gates
+## Collaboration Policy
 
 The cloud can enforce collaboration policy without changing the open-source
 local server:
@@ -108,11 +105,9 @@ local server:
 - owner-owned agents
 - read-only org members
 - write-capable org members
-- paid multi-user collaboration
-- paid org administration
 
 The local server still validates that relayed requests are well-formed and belong
-to a registered vault, but business-tier enforcement belongs in the cloud.
+to a registered vault, but collaboration policy belongs in the relay layer.
 
 ## Open Questions
 
@@ -121,8 +116,6 @@ to a registered vault, but business-tier enforcement belongs in the cloud.
 - What metadata can be safely logged for debugging without weakening the data
   custody promise?
 - What does tunnel takeover look like in the web UI?
-- Should presence be available on the free plan for a single user plus their own
-  agents?
 - What guarantees do cloud APIs provide when a vault server is offline?
 - What, if anything, should the cloud presence layer know about edits that
   originated in the local-only UI before a relay session exists?

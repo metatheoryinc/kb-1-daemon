@@ -1,28 +1,21 @@
 /**
  * Plaintext awareness — remote-cursor producer/consumer + CM6 wiring.
  *
- * LIFTED FROM (canonical KB-1):
- *   kb-1/apps/@kb-1/web/src/lib/components/app/editor/plaintext-awareness.ts
- *   (original landed 2026-05-13 KB-1 e97b7df2; daemon copied the editor on
- *    2026-06-17 bd1f153 but stripped this cursor layer).
- *
- * This is the cloud-014 part-6 cursor port (Register #2: keep `@kb-2/editor`
- * shared and copy the divergent cursor layer into it). The editor is shared
- * by the cloud web app and the daemon UI, so the producer/consumer are mounted
- * only when the host supplies an `awareness` + `noteId` (both optional props on
- * PlaintextEditor) — the daemon, which has no presence, never mounts them.
+ * The editor is shared by hosts with and without presence support, so the
+ * producer/consumer are mounted only when the host supplies an `awareness` +
+ * `noteId` (both optional props on PlaintextEditor). The daemon UI has no
+ * presence and never mounts them.
  *
  * RECONCILIATIONS vs the KB-1 source (faithful ports, not invention):
  *   1. noteId placement. KB-1 carried `noteId` only on `awareness.focus`
  *      (`{kind:'note', path, noteId}`) and the cursor payload was
  *      `{kind:'plaintext', anchor, head}`; the snapshot filtered peers by
- *      `focus.noteId`. The cloud's wire schema
- *      (`@kb-1-cloud/presence-protocol` `plaintextPresenceCursorSchema`) puts
- *      `noteId` INSIDE the cursor payload (`{kind, noteId, anchor, head}`), and
- *      the cloud awareness bridge fabricates remote `cursor` (not `focus`) from
- *      the presence roster. So the producer EMBEDS `noteId` in the payload and
- *      the snapshot FILTERS on `cursor.noteId === noteId`. Same logical gate,
- *      relocated to where the cloud transport carries it.
+ *      `focus.noteId`. The presence wire schema puts `noteId` INSIDE the cursor
+ *      payload (`{kind, noteId, anchor, head}`), and the awareness bridge
+ *      fabricates remote `cursor` (not `focus`) from the presence roster. So the
+ *      producer EMBEDS `noteId` in the payload and the snapshot FILTERS on
+ *      `cursor.noteId === noteId`. Same logical gate, relocated to where the
+ *      transport carries it.
  *   2. accent color helper. KB-1 used `@kb-1/core`'s `accentHexForId`; the
  *      cloud/daemon-shared editor uses `@kb-2/ui`'s `accentHexForId` (a faithful
  *      copy of the same deterministic hash + palette).
@@ -65,12 +58,11 @@ import { accentHexForId } from '@kb-2/ui';
 export type EncodedRelPos = unknown;
 
 /**
- * The discriminated awareness `cursor` payload, cloud shape: `noteId` lives IN
+ * The discriminated awareness `cursor` payload: `noteId` lives IN
  * the payload (see RECONCILIATION #1). `anchor === head` means a caret;
  * otherwise the selection extends between the two (with `head` the moving end,
  * the same contract CM6's `EditorSelection.main` exposes). This mirrors the
- * cloud's `plaintextPresenceCursorSchema`
- * (`@kb-1-cloud/presence-protocol`).
+ * presence cursor schema.
  */
 export interface PlaintextAwarenessCursor {
   kind: 'plaintext';

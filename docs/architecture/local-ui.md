@@ -6,8 +6,8 @@ does not read or write the filesystem directly.
 
 ## Purpose
 
-The local UI lets KB-2 become useful before cloud relay, auth, org management,
-or hosted collaboration exist.
+The local UI lets KB-2 become useful before remote relay, auth, org management,
+or collaboration services exist.
 
 The first local product should let a single local user:
 

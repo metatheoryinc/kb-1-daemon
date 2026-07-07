@@ -1,8 +1,7 @@
 # KB-1 Local Packaging Paths
 
-Chunk 001 keeps release automation intentionally light, but the scaffold is
-structured so the same local service can run from pnpm, Docker, or a future npm
-CLI package.
+Release automation is intentionally light, but the scaffold is structured so the
+same local service can run from pnpm, Docker, or a future npm CLI package.
 
 ## Public Naming
 
@@ -31,10 +30,10 @@ The root `.env` only disables Nx implicit env loading with
 
 ## Local UI Development
 
-Chunk 002 adds a SvelteKit local UI at `apps/web`. Product development still
-uses the daemon as the browser front door: `pnpm dev` starts Vite and the daemon,
-sets `KB2_WEB_PROXY_TARGET` for the daemon, and leaves Vite HMR connected
-directly to the Vite port.
+The SvelteKit local UI lives at `apps/web`. Product development still uses the
+daemon as the browser front door: `pnpm dev` starts Vite and the daemon, sets
+`KB2_WEB_PROXY_TARGET` for the daemon, and leaves Vite HMR connected directly to
+the Vite port.
 
 ```bash
 KB2_HOME=/tmp/kb2-ui-dev KB2_PORT=7382 pnpm dev

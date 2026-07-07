@@ -12,7 +12,6 @@ set -euo pipefail
 #   KB2_HOST=127.0.0.1
 #   KB2_PORT=7382
 #   KB1_RUN_CHECKS=1
-#   KB1_CONFIGURE_HERMES=1
 #   KB1_TAILSCALE_MODE=local-only        # local-only|auto|serve
 #   KB1_CONFIRM_TAILSCALE_EXPOSURE=0     # must be 1 for auto/serve
 #   KB1_CONFIRM_NON_LOOPBACK_BIND=0      # must be 1 for non-loopback KB2_HOST
@@ -24,7 +23,6 @@ KB2_HOME="${KB2_HOME:-$HOME/.kb2}"
 KB2_HOST="${KB2_HOST:-127.0.0.1}"
 KB2_PORT="${KB2_PORT:-7382}"
 RUN_CHECKS="${KB1_RUN_CHECKS:-1}"
-CONFIGURE_HERMES="${KB1_CONFIGURE_HERMES:-1}"
 CONFIRM_NON_LOOPBACK_BIND="${KB1_CONFIRM_NON_LOOPBACK_BIND:-0}"
 TAILSCALE_MODE="${KB1_TAILSCALE_MODE:-local-only}"
 if [ "${KB1_ENABLE_TAILSCALE_SERVE:-0}" = "1" ]; then
@@ -446,20 +444,6 @@ rm -f "$health_tmp" "$health_err"
 say "Vaults"
 curl -fsS "$VAULTS_URL"
 printf '\n'
-
-if [ "$CONFIGURE_HERMES" = "1" ]; then
-  if command -v hermes >/dev/null 2>&1; then
-    say "Configuring Hermes MCP if needed"
-    if hermes mcp list 2>/dev/null | grep -qE '(^|[[:space:]])kb1([[:space:]]|$)'; then
-      echo "Hermes MCP server 'kb1' already appears to be configured. Leaving it unchanged."
-    else
-      hermes mcp add kb1 --url "http://127.0.0.1:$KB2_PORT/mcp"
-    fi
-    hermes mcp test kb1 || warn "Hermes MCP test failed; restart Hermes/OpenWebUI and inspect 'hermes mcp list'."
-  else
-    warn "hermes command not found; add MCP manually: hermes mcp add kb1 --url http://127.0.0.1:$KB2_PORT/mcp"
-  fi
-fi
 
 configure_tailscale_serve
 

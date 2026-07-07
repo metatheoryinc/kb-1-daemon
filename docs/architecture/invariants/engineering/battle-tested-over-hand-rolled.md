@@ -21,11 +21,11 @@ code is reviewable at a glance; algorithm code is not.
 
 ## Founding Example
 
-Chunk 006 shipped `applyMinimalTextSplice` — a 39-line hand-rolled
-prefix/suffix differ — when `fast-diff` (the extracted core of Google's
-diff-match-patch, surrogate-safe, a decade in Quill production) plus Yjs's
-built-in `Y.Text.applyDelta` do the same job as ~6 lines of glue. The user
-caught it in review. Chunk 006.5 deletes it.
+An early implementation shipped `applyMinimalTextSplice` — a 39-line
+hand-rolled prefix/suffix differ — when `fast-diff` (the extracted core of
+Google's diff-match-patch, surrogate-safe, a decade in Quill production) plus
+Yjs's built-in `Y.Text.applyDelta` do the same job as ~6 lines of glue. Review
+caught it, and the follow-up replaced it with the library-backed path.
 
 ## This Means
 

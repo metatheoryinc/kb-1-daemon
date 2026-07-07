@@ -21,6 +21,6 @@ boundary through `packages/local-mcp`.
 | Read folder color/icon metadata | Inline in `GET /api/tree`; direct `GET /api/folders/{path}/metadata` | `get_folder_metadata`; `list_files` inline metadata | None |
 | Set folder color from folder context menu | `PUT /api/folders/{path}/metadata` | `set_folder_metadata` | None |
 
-Out-of-scope UI in Chunk 011B has no parity requirement because it is not
+Unshipped UI has no parity requirement because it is not
 reachable in the product: favorites, history, presence, settings, icon-picker
 UI, folder canvas, mention autocomplete, image upload, and pagination UI.

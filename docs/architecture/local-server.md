@@ -133,8 +133,8 @@ cloud. Remote/web agents still use the cloud MCP/API and relay.
 
 ## Local Web UI
 
-The local web UI is a first-class open-source surface. It should be a small
-subset of the eventual hosted product:
+The local web UI is a first-class open-source surface. It should start with the
+local product capabilities:
 
 - file tree browsing
 - Markdown read/edit

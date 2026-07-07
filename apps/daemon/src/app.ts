@@ -442,7 +442,7 @@ function registerVaultDataRoutes(
     if (!body.ok) return mapServiceResult(context, body);
     const to = readRequiredString(body.body, 'to');
     if (!to.ok) return mapServiceResult(context, to);
-    // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+    // Move operations record the move but do not rewrite wikilinks; link-index handling lands later.
     return mapServiceResult(context, await service.moveNote({
       fromPath,
       toPath: to.value,
@@ -523,7 +523,7 @@ function registerVaultDataRoutes(
     if (!body.ok) return mapServiceResult(context, body);
     const to = readRequiredString(body.body, 'to');
     if (!to.ok) return mapServiceResult(context, to);
-    // Chunk 007 records the move but does not rewrite wikilinks; link-index handling lands later.
+    // Move operations record the move but do not rewrite wikilinks; link-index handling lands later.
     return mapServiceResult(context, await resolved.service.moveFolder({
       fromPath,
       toPath: to.value,

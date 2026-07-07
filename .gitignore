@@ -8,9 +8,6 @@ coverage/
 .kb2-docker/
 .kb2-dev/
 .DS_Store
-.fleet/
-fleet-claude-inbox-*.jsonl
-.claude/
 docs/scratch/
 .fallow/
 

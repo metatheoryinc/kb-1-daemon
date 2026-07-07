@@ -1,6 +1,6 @@
 ---
 name: kb-1-daemon-setup
-description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux or macOS. Use when setting up kb-1-daemon, configuring MCP clients such as Claude Code, Codex, or Hermes, copying a Markdown/Obsidian vault into KB2_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
+description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux or macOS. Use when setting up kb-1-daemon, configuring MCP clients, copying a Markdown/Obsidian vault into KB2_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
 ---
 
 # KB-1 Daemon Setup
@@ -39,7 +39,7 @@ Before changing anything, inspect the live machine:
 uname -a
 whoami
 pwd
-command -v node pnpm corepack git curl systemctl launchctl tailscale claude codex hermes || true
+command -v node pnpm corepack git curl systemctl launchctl tailscale claude codex || true
 node --version 2>/dev/null || true
 pnpm --version 2>/dev/null || true
 systemctl --user status kb2d --no-pager 2>/dev/null || true
@@ -224,14 +224,6 @@ Claude Code:
 claude mcp add kb1 --transport http http://127.0.0.1:7382/mcp
 ```
 
-Hermes:
-
-```bash
-hermes mcp list
-hermes mcp add kb1 --url http://127.0.0.1:7382/mcp
-hermes mcp test kb1
-```
-
 Codex and other MCP-capable agents:
 
 - Add an HTTP/Streamable HTTP MCP server named `kb1`.
@@ -309,7 +301,7 @@ MCP smoke once tools are loaded:
 - Tailscale Serve already has unrelated routes: do not overwrite in auto mode; require explicit approval and a chosen port.
 - UI works but agents cannot edit: check the MCP URL, restart the client, and ensure every data tool call includes `vaultId`.
 
-## Handoff Summary
+## Report Summary
 
 When finished, report:
 

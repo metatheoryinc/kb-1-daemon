@@ -182,11 +182,6 @@ fi
 
 rm -f "$probe_out" "$probe_headers"
 
-if command -v hermes >/dev/null 2>&1; then
-  say "Hermes MCP test"
-  hermes mcp test kb1 || true
-fi
-
 if command -v tailscale >/dev/null 2>&1; then
   say "Tailscale status"
   tailscale status || true

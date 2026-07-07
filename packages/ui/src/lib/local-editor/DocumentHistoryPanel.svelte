@@ -1,10 +1,7 @@
 <script lang="ts">
   import Icon from "../primitives/Icon.svelte";
 
-  // Borrowed from KB-1's components/history/HistoryList.svelte and
-  // components/history/HistoryRow.svelte. This port renders content-version
-  // snapshots instead of KB-1's change-feed because FC-7496 Part 1 stores a
-  // daemon-owned per-file content-version log.
+  // Renders daemon-owned per-file content-version snapshots.
   export type DocumentHistoryOperation = "create" | "update" | "move" | "rename";
 
   export type DocumentHistoryActor = {
