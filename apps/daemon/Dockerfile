@@ -2,33 +2,42 @@ FROM node:22-slim AS deps
 
 WORKDIR /app
 RUN corepack enable
+ENV NX_DAEMON=false
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml nx.json tsconfig.base.json ./
-COPY apps/daemon/package.json apps/daemon/package.json
-COPY apps/web/package.json apps/web/package.json
+COPY . .
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-COPY apps/daemon apps/daemon
-COPY apps/web apps/web
 RUN pnpm --filter @kb-2/web build
-RUN pnpm --filter @kb-2/daemon build
+RUN pnpm --filter @kb-2/daemon... build
+RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules \
+  && pnpm install --prod --frozen-lockfile --filter @kb-2/daemon...
+RUN mkdir -p /runtime/apps/daemon /runtime/apps/web /runtime/packages \
+  && cp package.json pnpm-lock.yaml pnpm-workspace.yaml /runtime/ \
+  && cp -a node_modules /runtime/node_modules \
+  && cp apps/daemon/package.json /runtime/apps/daemon/package.json \
+  && cp -a apps/daemon/node_modules /runtime/apps/daemon/node_modules \
+  && cp -a apps/daemon/dist /runtime/apps/daemon/dist \
+  && cp -a apps/web/build /runtime/apps/web/build \
+  && for package_dir in packages/*; do \
+    if [ -f "$package_dir/package.json" ]; then \
+      mkdir -p "/runtime/$package_dir"; \
+      cp "$package_dir/package.json" "/runtime/$package_dir/package.json"; \
+      if [ -d "$package_dir/dist" ]; then cp -a "$package_dir/dist" "/runtime/$package_dir/dist"; fi; \
+      if [ -d "$package_dir/node_modules" ]; then cp -a "$package_dir/node_modules" "/runtime/$package_dir/node_modules"; fi; \
+    fi; \
+  done
 
 FROM node:22-slim AS runtime
 
 WORKDIR /app
-RUN corepack enable
 
 ENV NODE_ENV=production
 ENV KB2_HOME=/data/kb2
 ENV KB2_HOST=0.0.0.0
 ENV KB2_PORT=7382
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/daemon/package.json apps/daemon/package.json
-RUN pnpm install --prod --frozen-lockfile --filter @kb-2/daemon
-COPY --from=build /app/apps/daemon/dist apps/daemon/dist
-COPY --from=build /app/apps/web/build apps/web/build
+COPY --from=build /runtime ./
 
 VOLUME ["/data/kb2"]
 EXPOSE 7382

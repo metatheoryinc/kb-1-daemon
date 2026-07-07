@@ -6,3 +6,5 @@ node_modules/
 .kb2-docker/
 apps/*/dist/
 apps/*/node_modules/
+packages/*/dist/
+packages/*/node_modules/
