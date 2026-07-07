@@ -1,8 +1,8 @@
 # KB-1 Cloud Relay
 
-Cloud relay is the paid remote-access and collaboration layer for self-hosted
-KB-1. It keeps the KB-1-style web, API, and MCP experience while durable content
-storage stays on the user's local server.
+Cloud relay is the Cloud-managed remote-access and collaboration layer for
+self-hosted KB-1. It keeps the KB-1-style web, API, and MCP experience while
+durable content storage stays on the user's local server.
 
 Cloud relay is not required for local-only KB-1. The public launch story is
 simultaneous but explicit: local-only is the free open-source solo/developer
@@ -12,8 +12,8 @@ KB-1-operated vault engine.
 
 Private access can still start with local network or a tailnet such as
 Tailscale. Cloud relay is for users who want KB-1 Cloud identity, org
-membership, signed entry, remote reach, and collaboration without exposing an
-inbound port.
+membership, signed entry, remote reach, collaboration, and agent access beyond
+the daemon host without exposing an inbound port.
 
 ## Responsibilities
 
@@ -67,9 +67,10 @@ Every edge should check permissions:
 - request envelope validity at the local server
 
 The open-source local app remains useful without a Cloud account. Relay access
-is the paid full-experience path for self-hosters unless a later business
-decision introduces trials or a free single-user relay tier. Organization plans
-can enable other users to read, write, or collaborate in shared vaults.
+is the Cloud-connected full-experience path for self-hosters; plan and pricing
+policy can decide whether a single-user relay tier is free, paid, or trialed.
+Organization plans can enable other users to read, write, or collaborate in
+shared vaults.
 
 ## Content Plane
 

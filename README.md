@@ -25,9 +25,11 @@ command/package names only. Public product language should say **KB-1 Local**.
 
 KB-1 launches as a set of choices:
 
-- **Local-only:** free open-source solo/developer path. No Cloud login required.
+- **Local-only:** free open-source solo/developer path. No Cloud login required,
+  no Cloud users or orgs, and no team presence.
 - **Self-hosted full experience:** KB-1 Cloud login plus a vault engine running
-  on your machine.
+  on your machine. Cloud relay adds remote access, Cloud users/orgs, and agent
+  access beyond the daemon host.
 - **Hosted full experience:** KB-1 Cloud login plus a KB-1 operated vault
   engine.
 
@@ -172,7 +174,8 @@ For the full guarded copy pattern, see `skills/kb-1-daemon-setup/SKILL.md`.
 
 Local-only KB-1 has no application login layer in front of the local daemon.
 Anyone who can reach the local UI, API, or MCP endpoint can read and write
-through it. Keep `KB2_HOST=127.0.0.1` by default.
+through it. The daemon does not have a Cloud user or organization model of its
+own. Keep `KB2_HOST=127.0.0.1` by default.
 
 For private multi-device access, prefer Tailscale Serve or another private
 network path over binding the daemon directly to `0.0.0.0`. Only expose the
