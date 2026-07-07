@@ -960,7 +960,7 @@ describe("vault-core filesystem operations", () => {
     }
   });
 
-  it("creates folders idempotently and lists trees excluding .kb2 trash/audit", async () => {
+  it("creates folders idempotently and lists trees excluding internal metadata", async () => {
     await expect(makeVaultFolder(ctx, "notes")).resolves.toMatchObject({
       ok: true,
       value: { path: "notes" },
@@ -971,6 +971,8 @@ describe("vault-core filesystem operations", () => {
     });
     await writeVaultFile(ctx, { path: "notes/a.md", content: "a" });
     await deleteVaultFile(ctx, { path: "notes/a.md" });
+    await mkdir(path.join(root, ".git", "objects"), { recursive: true });
+    await writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
 
     const tree = await listVaultTree(ctx);
     expect(tree.ok).toBe(true);

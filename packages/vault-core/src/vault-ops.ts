@@ -210,7 +210,12 @@ function trashRelativePath(originalPath: string): string {
 }
 
 function isHiddenMetadataPath(relPath: string): boolean {
-  return relPath === ".kb2" || relPath.startsWith(".kb2/");
+  return (
+    relPath === ".kb2" ||
+    relPath.startsWith(".kb2/") ||
+    relPath === ".git" ||
+    relPath.startsWith(".git/")
+  );
 }
 
 const TEXT_ARTIFACT_EXTENSIONS: Record<string, { contentType: string; preview: ArtifactPreview }> = {
