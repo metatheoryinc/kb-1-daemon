@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import { cn } from '../utils';
+  import { normalizeHex } from './color-utils';
 
   const DEFAULT_ICON_COLOR = '#cbd5e1';
 
@@ -24,14 +25,6 @@
     class?: string;
   }
 
-  function normalizeHex(color: string): string {
-    if (color.length === 4 && color.startsWith('#')) {
-      const [, r, g, b] = color;
-      return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
-    }
-    if (color.length === 7 && color.startsWith('#')) return color.toLowerCase();
-    return color;
-  }
 </script>
 
 <script lang="ts">

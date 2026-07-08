@@ -1,8 +1,8 @@
 import type { AccentName } from "../primitives/accent";
 
-export type LocalArtifactKind = "text" | "attachment";
+type LocalArtifactKind = "text" | "attachment";
 
-export type LocalArtifactPreview =
+type LocalArtifactPreview =
   | "markdown"
   | "text"
   | "image"
@@ -11,7 +11,7 @@ export type LocalArtifactPreview =
   | "pdf"
   | "download";
 
-export interface LocalArtifactInfo {
+interface LocalArtifactInfo {
   kind: LocalArtifactKind;
   contentType: string;
   editable: boolean;

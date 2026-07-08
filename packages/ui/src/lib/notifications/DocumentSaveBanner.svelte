@@ -67,7 +67,7 @@
 </script>
 
 <script lang="ts">
-  import { Button } from '../button';
+  import Button from '../button/button.svelte';
   import Icon from '../primitives/Icon.svelte';
   import IconButton from '../primitives/IconButton.svelte';
   import { cn } from '../utils';

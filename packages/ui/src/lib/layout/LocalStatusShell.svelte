@@ -19,7 +19,7 @@
 <script lang="ts">
   import Badge from '../primitives/Badge.svelte';
   import BrandMark from '../primitives/BrandMark.svelte';
-  import { Button } from '../button';
+  import Button from '../button/button.svelte';
   import Panel from './Panel.svelte';
 
   let {

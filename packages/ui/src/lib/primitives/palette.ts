@@ -1,4 +1,4 @@
-export interface PaletteSwatch {
+interface PaletteSwatch {
   name: string;
   color: string;
 }

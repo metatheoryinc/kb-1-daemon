@@ -1,5 +1,3 @@
-export const DEFAULT_ICON_COLOR = "#cbd5e1";
-
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 export function isValidHexColor(input: string): boolean {
