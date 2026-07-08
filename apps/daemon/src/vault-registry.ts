@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-1/doc-session';
 import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-1/vault-service';
@@ -127,10 +127,76 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
 }
 
 export async function migrateLegacyVaultMetadata(vaultRoot: string): Promise<{ migrated: boolean }> {
-  return migrateDirectoryCopyVerifyCleanup({
-    source: legacyIdentityDir(vaultRoot),
-    target: identityDir(vaultRoot)
-  });
+  const source = legacyIdentityDir(vaultRoot);
+  const target = identityDir(vaultRoot);
+
+  if (!(await isDirectory(source))) {
+    return { migrated: false };
+  }
+
+  if (!(await pathExists(target))) {
+    return migrateDirectoryCopyVerifyCleanup({ source, target });
+  }
+
+  await reconcileExistingVaultMetadataMigration(source, target);
+  await rm(source, { recursive: true, force: true });
+  return { migrated: false };
+}
+
+async function reconcileExistingVaultMetadataMigration(source: string, target: string): Promise<void> {
+  const files = await listRelativeFiles(source);
+  for (const relPath of files) {
+    const sourceFile = join(source, relPath);
+    const targetFile = join(target, relPath);
+
+    if (!(await pathExists(targetFile))) {
+      await mkdir(dirname(targetFile), { recursive: true });
+      await copyFile(sourceFile, targetFile);
+      continue;
+    }
+
+    if (relPath === VAULT_IDENTITY_FILE) {
+      await assertSameVaultIdentity(sourceFile, targetFile);
+      continue;
+    }
+
+    const [sourceInfo, targetInfo] = await Promise.all([stat(sourceFile), stat(targetFile)]);
+    if (sourceInfo.size !== targetInfo.size) {
+      throw new Error(
+        `Migration verification failed: ${relPath} size mismatch (source ${sourceInfo.size}, copy ${targetInfo.size}).`
+      );
+    }
+  }
+}
+
+async function assertSameVaultIdentity(sourceFile: string, targetFile: string): Promise<void> {
+  const [sourceRaw, targetRaw] = await Promise.all([readFile(sourceFile, 'utf8'), readFile(targetFile, 'utf8')]);
+  const sourceIdentity = parseVaultIdentity(sourceRaw, sourceFile);
+  const targetIdentity = parseVaultIdentity(targetRaw, targetFile);
+  if (sourceIdentity.id !== targetIdentity.id) {
+    throw new Error(
+      `Migration verification failed: vault identity mismatch (source ${sourceIdentity.id}, copy ${targetIdentity.id}).`
+    );
+  }
+}
+
+async function listRelativeFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(abs);
+      } else if (entry.isFile()) {
+        files.push(relative(root, abs));
+      }
+    }
+  }
+
+  await walk(root);
+  return files;
 }
 
 /** Persist a vault's identity to `<vault>/.kb1/vault.json`, creating `.kb1` if needed. */

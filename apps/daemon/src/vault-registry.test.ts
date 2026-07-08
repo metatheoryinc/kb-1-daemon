@@ -112,6 +112,60 @@ describe('vault registry', () => {
       await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
     });
 
+    it('finishes an interrupted metadata rename when the current identity has the same vault id', async () => {
+      const root = join(home, 'legacy-vault');
+      await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'legacy-slug', displayName: 'Legacy Vault' }),
+        'utf8'
+      );
+      await writeFile(join(root, '.kb2', 'audit', 'changes.jsonl'), '{"ok":true}\n', 'utf8');
+      await writeFile(
+        join(root, '.kb1', 'vault.json'),
+        JSON.stringify(
+          {
+            id: 'legacy-slug',
+            displayName: 'Renamed Vault',
+            metadata: { color: '#f97316' }
+          },
+          null,
+          2
+        ) + '\n',
+        'utf8'
+      );
+
+      const identity = await readOrMintVaultIdentity(root, 'legacy-vault');
+
+      expect(identity).toEqual({
+        id: 'legacy-slug',
+        displayName: 'Renamed Vault',
+        metadata: { color: '#f97316' }
+      });
+      await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe('{"ok":true}\n');
+      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+    });
+
+    it('fails loudly when legacy and current metadata point at different vault ids', async () => {
+      const root = join(home, 'conflicting-vault');
+      await mkdir(join(root, '.kb2'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'legacy-slug', displayName: 'Legacy Vault' }),
+        'utf8'
+      );
+      await writeFile(
+        join(root, '.kb1', 'vault.json'),
+        JSON.stringify({ id: 'current-slug', displayName: 'Current Vault' }),
+        'utf8'
+      );
+
+      await expect(readOrMintVaultIdentity(root, 'conflicting-vault')).rejects.toThrow(/vault identity mismatch/);
+      await expect(access(join(root, '.kb2'))).resolves.toBeUndefined();
+    });
+
     it('fails loudly on malformed identity', async () => {
       const root = join(home, 'broken');
       await mkdir(join(root, '.kb1'), { recursive: true });
