@@ -1,0 +1,25 @@
+{
+  "usedClassMembers": [
+    {
+      "extends": "WidgetType",
+      "members": ["destroy", "eq", "ignoreEvent", "toDOM"]
+    },
+    "applyBaselineEdit",
+    "applyContent",
+    "applyContentEdit",
+    "attachClientSession",
+    "close",
+    "deleteSessionSubtree",
+    "failure",
+    "flushDirtySessions",
+    "getContent",
+    "getOpenSession",
+    "getOpenSessionCount",
+    "moveSession",
+    "moveSessionSubtree",
+    "onEvent",
+    "readWithBaseline",
+    "reset",
+    "withSession"
+  ]
+}

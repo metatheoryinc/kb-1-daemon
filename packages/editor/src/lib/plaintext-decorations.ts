@@ -464,7 +464,7 @@ function lookupFenceLanguage(info: string): Language | null {
  * underlying source didn't change in a way that affects the rendered
  * output (e.g. a cursor move past the table doesn't rebuild the DOM).
  */
-export type ColumnAlignment = 'left' | 'center' | 'right';
+type ColumnAlignment = 'left' | 'center' | 'right';
 
 class TableWidget extends WidgetType {
   constructor(
@@ -565,7 +565,7 @@ type InlineElement = MarkdownElement & {
   readonly children?: readonly InlineElement[];
 };
 
-export type TableInlinePart =
+type TableInlinePart =
   | { kind: 'text'; text: string }
   | { kind: 'strong' | 'emphasis' | 'strike'; children: readonly TableInlinePart[] }
   | { kind: 'code'; text: string }

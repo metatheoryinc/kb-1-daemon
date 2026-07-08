@@ -1,6 +1,6 @@
 const MENTION_URL_SCHEME = 'mention:' as const;
 
-export interface MentionParts {
+interface MentionParts {
   email: string;
 }
 

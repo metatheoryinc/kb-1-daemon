@@ -879,7 +879,7 @@ function updateOriginForOptions(
   return createDocumentUpdateAttributionOrigin(options.attribution ?? fallback);
 }
 
-export type YTextDeltaOperation =
+type YTextDeltaOperation =
   | { retain: number }
   | { insert: string }
   | { delete: number };
