@@ -74,6 +74,23 @@ interface VaultRouteScope {
   foldersPrefix(context: Context): string;
 }
 
+interface MutationRequestSetup {
+  service: VaultService;
+  actor: VaultActor;
+}
+
+interface MutationPathRequestSetup extends MutationRequestSetup {
+  path: string;
+}
+
+interface JsonMutationRequestSetup extends MutationRequestSetup {
+  body: Record<string, unknown>;
+}
+
+interface JsonMutationPathRequestSetup extends MutationPathRequestSetup {
+  body: Record<string, unknown>;
+}
+
 export function createApp(options: CreateAppOptions): Hono {
   const app = new Hono();
   const api = new Hono();
@@ -315,18 +332,15 @@ function registerVaultDataRoutes(
   });
 
   router.put(`${basePath}/raw/*`, async (context) => {
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const rawPath = filePathParam(context.req.path, scope.rawPrefix(context));
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
+    const request = routePathMutationRequest(context, scope, actorDefault, scope.rawPrefix(context));
+    if (!request.ok) return mapServiceResult(context, request);
     const bytes = new Uint8Array(await context.req.raw.arrayBuffer());
     const overwrite = context.req.query('overwrite') === 'true';
-    return mapServiceResult(context, await resolved.service.writeRawFile({
-      path: rawPath,
+    return mapServiceResult(context, await request.service.writeRawFile({
+      path: request.path,
       bytes,
       overwrite,
-      actor: actor.actor
+      actor: request.actor
     }), overwrite ? 200 : 201);
   });
 
@@ -347,33 +361,27 @@ function registerVaultDataRoutes(
   });
 
   router.put(`${basePath}/files/*`, async (context) => {
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
+    const request = routePathMutationRequest(context, scope, actorDefault, scope.filesPrefix(context));
+    if (!request.ok) return mapServiceResult(context, request);
     const content = await requestTextContent(context.req.raw);
     if (!content.ok) return mapServiceResult(context, content);
     const overwrite = context.req.query('overwrite') === 'true';
-    return mapServiceResult(context, await resolved.service.createNote({
-      path: filePath,
+    return mapServiceResult(context, await request.service.createNote({
+      path: request.path,
       content: content.content,
       overwrite,
-      actor: actor.actor
+      actor: request.actor
     }), overwrite ? 200 : 201);
   });
 
   router.delete(`${basePath}/files/*`, async (context) => {
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const filePath = filePathParam(context.req.path, scope.filesPrefix(context));
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
+    const request = routePathMutationRequest(context, scope, actorDefault, scope.filesPrefix(context));
+    if (!request.ok) return mapServiceResult(context, request);
     const permanent = context.req.query('permanent') === 'true';
-    return mapServiceResult(context, await resolved.service.deleteNote({
-      path: filePath,
+    return mapServiceResult(context, await request.service.deleteNote({
+      path: request.path,
       permanent,
-      actor: actor.actor
+      actor: request.actor
     }));
   });
 
@@ -384,52 +392,43 @@ function registerVaultDataRoutes(
     const filesPrefix = scope.filesPrefix(context);
 
     if (context.req.path.endsWith('/splice')) {
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const filePath = filePathParam(context.req.path, filesPrefix, '/splice');
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const splice = readSpliceRequest(body);
+      const request = await serviceJsonPathMutationRequest(context, service, actorDefault, filesPrefix, '/splice');
+      if (!request.ok) return mapServiceResult(context, request);
+      const splice = readSpliceRequest({ body: request.body });
       if (!splice.ok) return mapServiceResult(context, splice);
       return mapServiceResult(context, await service.editNote({
-        path: filePath,
+        path: request.path,
         baseline: splice.baseline,
         oldText: splice.request.oldText,
         newText: splice.request.newText,
         before: splice.request.before,
         after: splice.request.after,
         occurrence: splice.request.occurrence,
-        actor: actor.actor
+        actor: request.actor
       }));
     }
 
     if (context.req.path.endsWith('/append')) {
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const filePath = filePathParam(context.req.path, filesPrefix, '/append');
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const content = readRequiredString(body.body, 'content');
+      const request = await serviceJsonPathMutationRequest(context, service, actorDefault, filesPrefix, '/append');
+      if (!request.ok) return mapServiceResult(context, request);
+      const content = readRequiredString(request.body, 'content');
       if (!content.ok) return mapServiceResult(context, content);
       return mapServiceResult(context, await service.appendNote({
-        path: filePath,
+        path: request.path,
         content: content.value,
-        actor: actor.actor
+        actor: request.actor
       }));
     }
 
     if (context.req.path.endsWith('/prepend')) {
-      const actor = actorFromRequest(context, actorDefault);
-      if (!actor.ok) return mapServiceResult(context, actor);
-      const filePath = filePathParam(context.req.path, filesPrefix, '/prepend');
-      const body = await readJsonObject(context.req.raw);
-      if (!body.ok) return mapServiceResult(context, body);
-      const content = readRequiredString(body.body, 'content');
+      const request = await serviceJsonPathMutationRequest(context, service, actorDefault, filesPrefix, '/prepend');
+      if (!request.ok) return mapServiceResult(context, request);
+      const content = readRequiredString(request.body, 'content');
       if (!content.ok) return mapServiceResult(context, content);
       return mapServiceResult(context, await service.prependNote({
-        path: filePath,
+        path: request.path,
         content: content.value,
-        actor: actor.actor
+        actor: request.actor
       }));
     }
 
@@ -437,32 +436,25 @@ function registerVaultDataRoutes(
       return notFoundResponse(context);
     }
 
-    const fromPath = filePathParam(context.req.path, filesPrefix, '/move');
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
-    const body = await readJsonObject(context.req.raw);
-    if (!body.ok) return mapServiceResult(context, body);
-    const to = readRequiredString(body.body, 'to');
+    const request = await serviceJsonPathMutationRequest(context, service, actorDefault, filesPrefix, '/move');
+    if (!request.ok) return mapServiceResult(context, request);
+    const to = readRequiredString(request.body, 'to');
     if (!to.ok) return mapServiceResult(context, to);
     // Move operations record the move but do not rewrite wikilinks; link-index handling lands later.
     return mapServiceResult(context, await service.moveNote({
-      fromPath,
+      fromPath: request.path,
       toPath: to.value,
-      actor: actor.actor
+      actor: request.actor
     }));
   });
 
   router.post(`${basePath}/folders`, async (context) => {
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
-    const body = await readJsonObject(context.req.raw);
-    if (!body.ok) return mapServiceResult(context, body);
-    const folderPath = typeof body.body.path === 'string' ? body.body.path : '';
-    return mapServiceResult(context, await resolved.service.createFolder({
+    const request = await routeJsonMutationRequest(context, scope, actorDefault);
+    if (!request.ok) return mapServiceResult(context, request);
+    const folderPath = typeof request.body.path === 'string' ? request.body.path : '';
+    return mapServiceResult(context, await request.service.createFolder({
       path: folderPath,
-      actor: actor.actor
+      actor: request.actor
     }), 201);
   });
 
@@ -480,35 +472,33 @@ function registerVaultDataRoutes(
     if (!context.req.path.endsWith('/metadata')) {
       return notFoundResponse(context);
     }
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
-    const folderPath = filePathParam(context.req.path, scope.foldersPrefix(context), '/metadata');
-    const body = await readJsonObject(context.req.raw);
-    if (!body.ok) return mapServiceResult(context, body);
-    const metadata = readFolderMetadataBody(body.body);
+    const request = await routeJsonPathMutationRequest(
+      context,
+      scope,
+      actorDefault,
+      scope.foldersPrefix(context),
+      '/metadata'
+    );
+    if (!request.ok) return mapServiceResult(context, request);
+    const metadata = readFolderMetadataBody(request.body);
     if (!metadata.ok) return mapServiceResult(context, metadata);
-    return mapServiceResult(context, await resolved.service.setFolderMetadata({
-      path: folderPath,
+    return mapServiceResult(context, await request.service.setFolderMetadata({
+      path: request.path,
       metadata: metadata.metadata,
-      actor: actor.actor
+      actor: request.actor
     }));
   });
 
   router.delete(`${basePath}/folders/*`, async (context) => {
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const folderPath = filePathParam(context.req.path, scope.foldersPrefix(context));
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
+    const request = routePathMutationRequest(context, scope, actorDefault, scope.foldersPrefix(context));
+    if (!request.ok) return mapServiceResult(context, request);
     const recursive = context.req.query('recursive') === 'true';
     const permanent = context.req.query('permanent') === 'true';
-    return mapServiceResult(context, await resolved.service.deleteFolder({
-      path: folderPath,
+    return mapServiceResult(context, await request.service.deleteFolder({
+      path: request.path,
       recursive,
       permanent,
-      actor: actor.actor
+      actor: request.actor
     }));
   });
 
@@ -516,22 +506,111 @@ function registerVaultDataRoutes(
     if (!context.req.path.endsWith('/move')) {
       return notFoundResponse(context);
     }
-    const resolved = scope.resolve(context);
-    if (!resolved.ok) return mapServiceResult(context, resolved);
-    const actor = actorFromRequest(context, actorDefault);
-    if (!actor.ok) return mapServiceResult(context, actor);
-    const fromPath = filePathParam(context.req.path, scope.foldersPrefix(context), '/move');
-    const body = await readJsonObject(context.req.raw);
-    if (!body.ok) return mapServiceResult(context, body);
-    const to = readRequiredString(body.body, 'to');
+    const request = await routeJsonPathMutationRequest(
+      context,
+      scope,
+      actorDefault,
+      scope.foldersPrefix(context),
+      '/move'
+    );
+    if (!request.ok) return mapServiceResult(context, request);
+    const to = readRequiredString(request.body, 'to');
     if (!to.ok) return mapServiceResult(context, to);
     // Move operations record the move but do not rewrite wikilinks; link-index handling lands later.
-    return mapServiceResult(context, await resolved.service.moveFolder({
-      fromPath,
+    return mapServiceResult(context, await request.service.moveFolder({
+      fromPath: request.path,
       toPath: to.value,
-      actor: actor.actor
+      actor: request.actor
     }));
   });
+}
+
+function routeMutationRequest(
+  context: Context,
+  scope: VaultRouteScope,
+  actorDefault: ActorDefault
+): ServiceResult<MutationRequestSetup> {
+  const resolved = scope.resolve(context);
+  if (!resolved.ok) return resolved;
+  return serviceMutationRequest(context, resolved.service, actorDefault);
+}
+
+function routePathMutationRequest(
+  context: Context,
+  scope: VaultRouteScope,
+  actorDefault: ActorDefault,
+  prefix: string,
+  suffix = ''
+): ServiceResult<MutationPathRequestSetup> {
+  const request = routeMutationRequest(context, scope, actorDefault);
+  if (!request.ok) return request;
+  return { ok: true, ...addMutationPath(context, request, prefix, suffix) };
+}
+
+async function routeJsonMutationRequest(
+  context: Context,
+  scope: VaultRouteScope,
+  actorDefault: ActorDefault
+): Promise<ServiceResult<JsonMutationRequestSetup>> {
+  const request = routeMutationRequest(context, scope, actorDefault);
+  if (!request.ok) return request;
+  return readMutationJson(context, request);
+}
+
+async function routeJsonPathMutationRequest(
+  context: Context,
+  scope: VaultRouteScope,
+  actorDefault: ActorDefault,
+  prefix: string,
+  suffix = ''
+): Promise<ServiceResult<JsonMutationPathRequestSetup>> {
+  const request = routePathMutationRequest(context, scope, actorDefault, prefix, suffix);
+  if (!request.ok) return request;
+  return readMutationJson(context, request);
+}
+
+function serviceMutationRequest(
+  context: Context,
+  service: VaultService,
+  actorDefault: ActorDefault
+): ServiceResult<MutationRequestSetup> {
+  const actor = actorFromRequest(context, actorDefault);
+  if (!actor.ok) return actor;
+  return { ok: true, service, actor: actor.actor };
+}
+
+async function serviceJsonPathMutationRequest(
+  context: Context,
+  service: VaultService,
+  actorDefault: ActorDefault,
+  prefix: string,
+  suffix = ''
+): Promise<ServiceResult<JsonMutationPathRequestSetup>> {
+  const request = serviceMutationRequest(context, service, actorDefault);
+  if (!request.ok) return request;
+  const pathRequest = addMutationPath(context, request, prefix, suffix);
+  return readMutationJson(context, pathRequest);
+}
+
+function addMutationPath(
+  context: Context,
+  request: MutationRequestSetup,
+  prefix: string,
+  suffix = ''
+): MutationPathRequestSetup {
+  return {
+    ...request,
+    path: filePathParam(context.req.path, prefix, suffix)
+  };
+}
+
+async function readMutationJson<T extends MutationRequestSetup>(
+  context: Context,
+  request: T
+): Promise<ServiceResult<T & { body: Record<string, unknown> }>> {
+  const body = await readJsonObject(context.req.raw);
+  if (!body.ok) return body;
+  return { ok: true, ...request, body: body.body };
 }
 
 function eventStreamResponse(vaultService: VaultService): Response {
