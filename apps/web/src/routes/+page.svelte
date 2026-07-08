@@ -2,16 +2,16 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import {
-    createDemoDocumentProvider,
-    isDemoDocumentProviderOpenError,
+    createLocalDocumentProvider,
+    isLocalDocumentProviderOpenError,
     parseVaultRoute,
     vaultRoute,
-  } from '$lib/yjs/demo-document-provider';
+  } from '$lib/yjs/local-document-provider';
   import type {
-    DemoDocumentProvider,
-    DemoDocumentProviderSaveState,
-    DemoDocumentProviderStatus,
-  } from '$lib/yjs/demo-document-provider';
+    LocalDocumentProvider,
+    LocalDocumentProviderSaveState,
+    LocalDocumentProviderStatus,
+  } from '$lib/yjs/local-document-provider';
   import {
     PlaintextEditor,
     parseWikilinkInner,
@@ -183,7 +183,7 @@
 
   let dialog = $state<DialogState>({ kind: 'none' });
 
-  let provider = $state<DemoDocumentProvider | null>(null);
+  let provider = $state<LocalDocumentProvider | null>(null);
   let noteSnapshotDocument = $state.raw<NoteSnapshotDocument | null>(null);
   let noteSnapshotDocumentKey = $state<string | null>(null);
   let previousSnapshotHydrationActive = false;
@@ -191,8 +191,8 @@
   let docBody = $state<HTMLDivElement | null>(null);
   let providerGeneration = 0;
   let providerSynced = $state(false);
-  let status = $state<DemoDocumentProviderStatus>('connecting');
-  let saveState = $state<DemoDocumentProviderSaveState>({ status: 'saved', pending: 0 });
+  let status = $state<LocalDocumentProviderStatus>('connecting');
+  let saveState = $state<LocalDocumentProviderSaveState>({ status: 'saved', pending: 0 });
   let error = $state<string | null>(null);
   let externalMergeVisible = $state(false);
   let externalChangeVisible = $state(false);
@@ -835,7 +835,7 @@
     error = null;
     notFoundPath = null;
     docDeleted = false;
-    const nextProvider = createDemoDocumentProvider({
+    const nextProvider = createLocalDocumentProvider({
       vaultId: activeVaultId,
       path,
       onStatus: (nextStatus) => {
@@ -844,7 +844,7 @@
       },
       onError: (caught) => {
         if (generation !== providerGeneration) return;
-        if (isDemoDocumentProviderOpenError(caught)) {
+        if (isLocalDocumentProviderOpenError(caught)) {
           notFoundPath = path;
           providerSynced = false;
           error = null;

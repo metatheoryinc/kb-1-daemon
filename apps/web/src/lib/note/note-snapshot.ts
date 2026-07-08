@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 
-import { DEMO_DOCUMENT_TEXT_NAME } from '$lib/yjs/demo-document-provider';
+import { LOCAL_DOCUMENT_TEXT_NAME } from '$lib/yjs/local-document-provider';
 
 export interface NoteSnapshot {
   vaultId: string;
@@ -21,7 +21,7 @@ export interface NoteSnapshotDocument {
 
 export function createNoteSnapshotDocument(snapshot: NoteSnapshot): NoteSnapshotDocument {
   const doc = new Y.Doc();
-  const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
+  const text = doc.getText(LOCAL_DOCUMENT_TEXT_NAME);
   text.insert(0, snapshot.content);
 
   return {

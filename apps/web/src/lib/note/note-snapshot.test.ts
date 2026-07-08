@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 
-import { DEMO_DOCUMENT_TEXT_NAME } from '$lib/yjs/demo-document-provider';
+import { LOCAL_DOCUMENT_TEXT_NAME } from '$lib/yjs/local-document-provider';
 import type { NoteSnapshot } from './note-snapshot';
 import { createNoteSnapshotDocument, snapshotFromLiveText } from './note-snapshot';
 
@@ -11,7 +11,7 @@ describe('note snapshot display docs', () => {
     const display = createNoteSnapshotDocument(snapshot);
 
     expect(display.snapshot).toBe(snapshot);
-    expect(display.doc.getText(DEMO_DOCUMENT_TEXT_NAME).toDelta()).toEqual([
+    expect(display.doc.getText(LOCAL_DOCUMENT_TEXT_NAME).toDelta()).toEqual([
       { insert: '# Cached note' },
     ]);
 
@@ -20,7 +20,7 @@ describe('note snapshot display docs', () => {
 
   it('captures live Y.Text as passive snapshot data', () => {
     const doc = new Y.Doc();
-    const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
+    const text = doc.getText(LOCAL_DOCUMENT_TEXT_NAME);
     text.insert(0, 'Live body');
     const previous = noteSnapshot({
       version: 12,

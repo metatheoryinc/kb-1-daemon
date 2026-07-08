@@ -1,4 +1,4 @@
-import { encodeVaultPath } from "./yjs/demo-document-provider";
+import { encodeVaultPath } from "./yjs/local-document-provider";
 
 /**
  * Transport layer for vault, file, and folder operations. Owns every

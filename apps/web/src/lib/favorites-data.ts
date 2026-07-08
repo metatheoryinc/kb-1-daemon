@@ -21,7 +21,7 @@ import {
   type AccentName,
   type LocalTreeNode,
 } from "@kb-1/ui";
-import { encodeVaultPath } from "$lib/yjs/demo-document-provider";
+import { encodeVaultPath } from "$lib/yjs/local-document-provider";
 
 export interface StarredRow {
   /** Stable id for keyed iteration + active-row matching. `kind:vaultId:path`. */

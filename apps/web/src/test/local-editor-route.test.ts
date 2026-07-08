@@ -50,26 +50,32 @@ vi.mock("@kb-1/editor", async () => {
   return { PlaintextEditor };
 });
 
-vi.mock("$lib/yjs/demo-document-provider", async () => {
+vi.mock("$lib/yjs/local-document-provider", async () => {
   const actual = await vi.importActual<
-    typeof import("$lib/yjs/demo-document-provider")
-  >("$lib/yjs/demo-document-provider");
+    typeof import("$lib/yjs/local-document-provider")
+  >("$lib/yjs/local-document-provider");
+  class TestLocalDocumentProviderOpenError extends Error {
+    readonly failure = {
+      ok: false as const,
+      error: "not_found" as const,
+      message: "file not found",
+    };
+
+    constructor() {
+      super("file not found");
+      this.name = "LocalDocumentProviderOpenError";
+    }
+  }
   return {
     ...actual,
-    createDemoDocumentProvider: vi.fn((options) => {
+    createLocalDocumentProvider: vi.fn((options) => {
       const path = options.path ?? "hello-world.md";
       options.onStatus?.("syncing");
       const doc = new Y.Doc();
       const text = doc.getText("markdown");
       if (path === "projects/missing.md" || path === "deleted-later.md") {
         options.onStatus?.("closed");
-        options.onError?.(
-          new actual.DemoDocumentProviderOpenError({
-            ok: false,
-            error: "not_found",
-            message: "file not found",
-          }),
-        );
+        options.onError?.(new TestLocalDocumentProviderOpenError());
       } else {
         text.insert(0, `content:${path}`);
         const open = () => {
@@ -89,6 +95,9 @@ vi.mock("$lib/yjs/demo-document-provider", async () => {
         destroy: mocks.destroyProvider,
       };
     }),
+    isLocalDocumentProviderOpenError: vi.fn(
+      (error: unknown) => error instanceof TestLocalDocumentProviderOpenError,
+    ),
   };
 });
 

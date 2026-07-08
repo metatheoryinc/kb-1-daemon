@@ -18,22 +18,22 @@ import {
   type DocumentSessionEvent,
 } from '@kb-1/doc-session';
 import {
-  createDemoDocumentProvider,
-  DEMO_DOCUMENT_TEXT_NAME,
-  DEMO_DOCUMENT_YJS_PATH,
-  isDemoDocumentProviderOpenError,
-  type DemoDocumentProviderSaveState,
-} from './demo-document-provider';
+  createLocalDocumentProvider,
+  LOCAL_DOCUMENT_TEXT_NAME,
+  isLocalDocumentProviderOpenError,
+  type LocalDocumentProviderSaveState,
+} from './local-document-provider';
 
 const messageSync = 0;
-const DEFAULT_DEMO_DOCUMENT_CONTENT = [
+const TEST_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
+const DEFAULT_TEST_DOCUMENT_CONTENT = [
   '# Hello KB-1',
   '',
   'This Markdown file is served by the local KB-1 daemon.',
   '',
 ].join('\n');
 
-describe('demo document provider', () => {
+describe('local document provider', () => {
   let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
   let server: Server | undefined;
@@ -66,13 +66,13 @@ describe('demo document provider', () => {
 
   it('converges with a raw y-protocols client through the daemon and persists to disk', async () => {
     const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
-    session = new OneFileDocumentSession(filePath, { defaultContent: DEFAULT_DEMO_DOCUMENT_CONTENT });
+    session = new OneFileDocumentSession(filePath, { defaultContent: DEFAULT_TEST_DOCUMENT_CONTENT });
     await session.open();
 
     server = createServer();
     webSocketServer = new WebSocketServer({ noServer: true });
     server.on('upgrade', (request, socket, head) => {
-      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+      if (request.url !== TEST_DOCUMENT_YJS_PATH) {
         socket.destroy();
         return;
       }
@@ -84,9 +84,9 @@ describe('demo document provider', () => {
     await listen(server);
     const port = (server.address() as AddressInfo).port;
 
-    const url = `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`;
-    const saveStates: DemoDocumentProviderSaveState[] = [];
-    const provider = createDemoDocumentProvider({
+    const url = `ws://127.0.0.1:${port}${TEST_DOCUMENT_YJS_PATH}`;
+    const saveStates: LocalDocumentProviderSaveState[] = [];
+    const provider = createLocalDocumentProvider({
       url,
       onSaveState: (state) => saveStates.push(state),
     });
@@ -126,7 +126,7 @@ describe('demo document provider', () => {
     server = createServer();
     webSocketServer = new WebSocketServer({ noServer: true });
     server.on('upgrade', (request, socket, head) => {
-      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+      if (request.url !== TEST_DOCUMENT_YJS_PATH) {
         socket.destroy();
         return;
       }
@@ -142,8 +142,8 @@ describe('demo document provider', () => {
     await listen(server);
     const port = (server.address() as AddressInfo).port;
 
-    const provider = createDemoDocumentProvider({
-      url: `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`,
+    const provider = createLocalDocumentProvider({
+      url: `ws://127.0.0.1:${port}${TEST_DOCUMENT_YJS_PATH}`,
       onSessionEvent: (event) => events.push(event),
     });
 
@@ -160,7 +160,7 @@ describe('demo document provider', () => {
     server = createServer();
     webSocketServer = new WebSocketServer({ noServer: true });
     server.on('upgrade', (request, socket, head) => {
-      if (request.url !== DEMO_DOCUMENT_YJS_PATH) {
+      if (request.url !== TEST_DOCUMENT_YJS_PATH) {
         socket.destroy();
         return;
       }
@@ -172,15 +172,15 @@ describe('demo document provider', () => {
     await listen(server);
     const port = (server.address() as AddressInfo).port;
 
-    const provider = createDemoDocumentProvider({
-      url: `ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`,
+    const provider = createLocalDocumentProvider({
+      url: `ws://127.0.0.1:${port}${TEST_DOCUMENT_YJS_PATH}`,
       onError: (error) => errors.push(error),
     });
 
-    await waitUntil(() => errors.some(isDemoDocumentProviderOpenError), () =>
+    await waitUntil(() => errors.some(isLocalDocumentProviderOpenError), () =>
       `Timed out waiting for provider open failure: ${String(errors[0])}`
     );
-    const failure = errors.find(isDemoDocumentProviderOpenError)?.failure;
+    const failure = errors.find(isLocalDocumentProviderOpenError)?.failure;
     expect(failure).toEqual({ ok: false, error: 'not_found', message: 'file not found' });
 
     provider.destroy();
@@ -195,7 +195,7 @@ interface RawYjsClient {
 
 async function connectRawYjsClient(url: string): Promise<RawYjsClient> {
   const doc = new Y.Doc();
-  const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
+  const text = doc.getText(LOCAL_DOCUMENT_TEXT_NAME);
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
 

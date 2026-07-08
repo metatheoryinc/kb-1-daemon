@@ -13,48 +13,47 @@ import {
   type DocumentSessionEvent,
 } from '@kb-1/doc-session/protocol';
 
-export const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
-export const DEMO_DOCUMENT_TEXT_NAME = 'markdown';
+export const LOCAL_DOCUMENT_TEXT_NAME = 'markdown';
 
-export type DemoDocumentProviderStatus =
+export type LocalDocumentProviderStatus =
   | 'connecting'
   | 'syncing'
   | 'open'
   | 'closed'
   | 'error';
 
-export interface DemoDocumentProvider {
+export interface LocalDocumentProvider {
   doc: Y.Doc;
   text: Y.Text;
-  destroy: () => DemoDocumentProviderSaveState;
+  destroy: () => LocalDocumentProviderSaveState;
 }
 
-export type DemoDocumentProviderSaveState =
+export type LocalDocumentProviderSaveState =
   | { status: 'saved'; pending: 0 }
   | { status: 'saving'; pending: number }
   | { status: 'failed'; pending: number; message: string };
 
-export interface DemoDocumentProviderOpenFailure {
+interface LocalDocumentProviderOpenFailure {
   ok: false;
   error: 'not_found';
   message: string;
 }
 
-export class DemoDocumentProviderOpenError extends Error {
-  constructor(readonly failure: DemoDocumentProviderOpenFailure) {
+class LocalDocumentProviderOpenError extends Error {
+  constructor(readonly failure: LocalDocumentProviderOpenFailure) {
     super(failure.message);
-    this.name = 'DemoDocumentProviderOpenError';
+    this.name = 'LocalDocumentProviderOpenError';
   }
 }
 
-export interface DemoDocumentProviderOptions {
+interface LocalDocumentProviderOptions {
   url?: string;
   /** Vault the document lives in — selects the scoped Yjs WS route. */
   vaultId?: string;
   path?: string;
-  onStatus?: (status: DemoDocumentProviderStatus) => void;
+  onStatus?: (status: LocalDocumentProviderStatus) => void;
   onError?: (error: unknown) => void;
-  onSaveState?: (state: DemoDocumentProviderSaveState) => void;
+  onSaveState?: (state: LocalDocumentProviderSaveState) => void;
   onSessionEvent?: (event: DocumentSessionEvent) => void;
   onSynced?: () => void;
 }
@@ -66,18 +65,18 @@ interface PendingSaveAck {
   timeout?: ReturnType<typeof setTimeout>;
 }
 
-export const DOCUMENT_SAVE_ACK_TIMEOUT_MS = 10_000;
+const DOCUMENT_SAVE_ACK_TIMEOUT_MS = 10_000;
 
-export function createDemoDocumentProvider(
-  options: DemoDocumentProviderOptions = {},
-): DemoDocumentProvider {
+export function createLocalDocumentProvider(
+  options: LocalDocumentProviderOptions = {},
+): LocalDocumentProvider {
   const doc = new Y.Doc();
-  const text = doc.getText(DEMO_DOCUMENT_TEXT_NAME);
+  const text = doc.getText(LOCAL_DOCUMENT_TEXT_NAME);
   const socket = new WebSocket(options.url ?? yjsWebSocketUrl(options.vaultId, options.path));
   socket.binaryType = 'arraybuffer';
 
   let destroyed = false;
-  let latestSaveState: DemoDocumentProviderSaveState = { status: 'saved', pending: 0 };
+  let latestSaveState: LocalDocumentProviderSaveState = { status: 'saved', pending: 0 };
   let nextSaveAckSeq = 0;
   const saveAckPrefix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const pendingSaveAcks = new Map<string, PendingSaveAck>();
@@ -104,7 +103,7 @@ export function createDemoDocumentProvider(
     options.onSaveState?.(latestSaveState);
   };
 
-  const saveStateOnDestroy = (): DemoDocumentProviderSaveState => {
+  const saveStateOnDestroy = (): LocalDocumentProviderSaveState => {
     if (pendingSaveAcks.size === 0) return latestSaveState;
     if (latestSaveState.status === 'failed') return latestSaveState;
     return { status: 'saving', pending: pendingSaveAcks.size };
@@ -235,7 +234,7 @@ export function createDemoDocumentProvider(
     if (destroyed) return;
     const failure = parseOpenFailure(event.reason);
     if (failure) {
-      options.onError?.(new DemoDocumentProviderOpenError(failure));
+      options.onError?.(new LocalDocumentProviderOpenError(failure));
     }
   });
 
@@ -255,8 +254,10 @@ export function createDemoDocumentProvider(
   };
 }
 
-export function isDemoDocumentProviderOpenError(error: unknown): error is DemoDocumentProviderOpenError {
-  return error instanceof DemoDocumentProviderOpenError;
+export function isLocalDocumentProviderOpenError(
+  error: unknown,
+): error is { failure: LocalDocumentProviderOpenFailure } {
+  return error instanceof LocalDocumentProviderOpenError;
 }
 
 function yjsWebSocketUrl(vaultId: string | undefined, documentPath = 'hello-world.md'): string {
@@ -287,8 +288,7 @@ export function vaultRoute(vaultId: string, documentPath = ''): string {
 /**
  * Split a browser pathname into `{ vaultId, path }`. The first segment is
  * the vault id; the rest is the vault-relative document path. The root
- * path (`/`) yields no vault id, signalling "redirect to the default
- * vault".
+ * path (`/`) yields no vault id so the route can choose the initial vault.
  */
 export function parseVaultRoute(pathname: string): { vaultId: string | null; path: string } {
   const trimmed = pathname.replace(/^\/+/, '');
@@ -313,10 +313,10 @@ function toUint8Array(data: unknown): Uint8Array | undefined {
   return undefined;
 }
 
-function parseOpenFailure(reason: string): DemoDocumentProviderOpenFailure | undefined {
+function parseOpenFailure(reason: string): LocalDocumentProviderOpenFailure | undefined {
   if (!reason) return undefined;
   try {
-    const parsed = JSON.parse(reason) as Partial<DemoDocumentProviderOpenFailure>;
+    const parsed = JSON.parse(reason) as Partial<LocalDocumentProviderOpenFailure>;
     if (
       parsed.ok === false &&
       parsed.error === 'not_found' &&
