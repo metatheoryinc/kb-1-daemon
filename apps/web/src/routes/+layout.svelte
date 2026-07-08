@@ -13,7 +13,11 @@
   // store instance.
   const appState = createAppState({ storage: window.localStorage });
   setAppStateContext(appState);
-  const { client: queryClient } = createKbQueryClient();
+  const { client: queryClient, restored: queryCacheRestored } = createKbQueryClient();
+  let queryCacheReady = $state(false);
+  void queryCacheRestored.finally(() => {
+    queryCacheReady = true;
+  });
 
   // Color-mode resolver. Subscribes to the persisted `colorMode`, then
   // resolves `'system'` against `prefers-color-scheme` and writes:
@@ -58,6 +62,8 @@
   });
 </script>
 
-<QueryClientProvider client={queryClient}>
-  {@render children()}
-</QueryClientProvider>
+{#if queryCacheReady}
+  <QueryClientProvider client={queryClient}>
+    {@render children()}
+  </QueryClientProvider>
+{/if}

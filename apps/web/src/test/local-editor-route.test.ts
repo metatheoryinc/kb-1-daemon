@@ -5,8 +5,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/svelte";
+import type { QueryClient } from "@tanstack/svelte-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { queryKeys } from "$lib/realtime";
+import type { NoteSnapshot } from "$lib/note/note-snapshot";
 import AppStateHarness from "./AppStateHarness.svelte";
 import { setPageUrl } from "./page-state.svelte";
 
@@ -14,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   goto: vi.fn(),
   destroyProvider: vi.fn(),
   providers: [] as Array<{ path: string; doc: Y.Doc; text: Y.Text }>,
+  delayedSyncPaths: new Set<string>(),
+  pendingSyncs: new Map<string, () => void>(),
 }));
 
 // The route derives the active vault + open document from the URL, so the
@@ -67,8 +72,15 @@ vi.mock("$lib/yjs/demo-document-provider", async () => {
         );
       } else {
         text.insert(0, `content:${path}`);
-        options.onStatus?.("open");
-        options.onSynced?.();
+        const open = () => {
+          options.onStatus?.("open");
+          options.onSynced?.();
+        };
+        if (mocks.delayedSyncPaths.has(path)) {
+          mocks.pendingSyncs.set(path, open);
+        } else {
+          open();
+        }
       }
       mocks.providers.push({ path, doc, text });
       return {
@@ -85,6 +97,8 @@ describe("local editor route", () => {
     mocks.goto.mockReset();
     mocks.destroyProvider.mockReset();
     mocks.providers = [];
+    mocks.delayedSyncPaths.clear();
+    mocks.pendingSyncs.clear();
     // The harness builds the app-state store against `localStorage`, which
     // persists tree expansion and vault filters. Clear it so each test
     // starts from the clean first-load defaults rather than inheriting a
@@ -275,6 +289,48 @@ describe("local editor route", () => {
     expect(treeProvider?.path).toBe("projects/active/editor-shell.md");
     expect(treeProvider?.text.toString()).toBe("typed into tree-opened file");
     expect(mocks.providers[0]?.text.toString()).toBe("content:hello-world.md");
+  });
+
+  it("paints a cached snapshot while syncing and preserves selection on live hydration", async () => {
+    mocks.delayedSyncPaths.add("hello-world.md");
+    const { container } = render(AppStateHarness, {
+      props: {
+        seedQueryClient: (client: QueryClient) => {
+          client.setQueryData(
+            queryKeys.note("demo-vault", "hello-world.md"),
+            noteSnapshot({
+              path: "hello-world.md",
+              content: "cached hello world",
+            }),
+          );
+        },
+      },
+    });
+
+    let snapshotEditor!: HTMLTextAreaElement;
+    await waitFor(() => {
+      snapshotEditor = container.querySelector(
+        ".snapshot-editor-layer textarea",
+      ) as HTMLTextAreaElement;
+      expect(snapshotEditor?.value).toBe("cached hello world");
+    });
+
+    snapshotEditor.focus();
+    snapshotEditor.setSelectionRange(7, 12, "forward");
+    document.dispatchEvent(new Event("selectionchange"));
+    mocks.pendingSyncs.get("hello-world.md")?.();
+
+    await waitFor(() => {
+      expect(container.querySelector(".snapshot-editor-layer")).toBeNull();
+    });
+    const liveEditor = container.querySelector(
+      ".live-editor-layer textarea",
+    ) as HTMLTextAreaElement;
+    expect(liveEditor.value).toBe("content:hello-world.md");
+    await waitFor(() => {
+      expect(liveEditor.selectionStart).toBe(7);
+      expect(liveEditor.selectionEnd).toBe(12);
+    });
   });
 
   it("opens attachment rows through the raw route instead of the document provider", async () => {
@@ -480,6 +536,19 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function noteSnapshot(overrides: Partial<NoteSnapshot> = {}): NoteSnapshot {
+  return {
+    vaultId: "demo-vault",
+    path: "hello-world.md",
+    version: 1,
+    mtime: 1,
+    size: overrides.content?.length ?? 0,
+    contentType: "text/markdown; charset=utf-8",
+    content: "",
+    ...overrides,
+  };
 }
 
 // History navigation (back/forward, deep-link) lands a new URL. The route

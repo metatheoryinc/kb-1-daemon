@@ -58,9 +58,16 @@
     type FavoriteEntry,
   } from '$lib/app-state';
   import { buildStarredViewData } from '$lib/favorites-data';
+  import {
+    createNoteSnapshotDocument,
+    snapshotFromLiveText,
+    type NoteSnapshot,
+    type NoteSnapshotDocument,
+  } from '$lib/note/note-snapshot';
   import { createViewportStore } from '$lib/viewport.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import { EditorView } from '@codemirror/view';
   import { queryKeys } from '$lib/realtime';
 
   interface TreeEntry {
@@ -84,6 +91,21 @@
   interface VaultChangeEvent {
     kind: string;
     path?: string;
+  }
+
+  type TextSelectionSnapshot =
+    | {
+        kind: 'input';
+        start: number;
+        end: number;
+        direction: 'forward' | 'backward' | 'none';
+      }
+    | { kind: 'dom'; anchorOffset: number; focusOffset: number }
+    | { kind: 'codemirror'; anchorOffset: number; focusOffset: number };
+
+  interface TextPosition {
+    node: Node;
+    offset: number;
   }
 
   const TREE_DIRTY_EVENT_KINDS = new Set<string>([
@@ -162,6 +184,11 @@
   let dialog = $state<DialogState>({ kind: 'none' });
 
   let provider = $state<DemoDocumentProvider | null>(null);
+  let noteSnapshotDocument = $state.raw<NoteSnapshotDocument | null>(null);
+  let noteSnapshotDocumentKey = $state<string | null>(null);
+  let previousSnapshotHydrationActive = false;
+  let snapshotSelection = $state<TextSelectionSnapshot | null>(null);
+  let docBody = $state<HTMLDivElement | null>(null);
   let providerGeneration = 0;
   let providerSynced = $state(false);
   let status = $state<DemoDocumentProviderStatus>('connecting');
@@ -802,6 +829,7 @@
     const generation = providerGeneration + 1;
     providerGeneration = generation;
     providerSynced = false;
+    snapshotSelection = null;
     status = 'connecting';
     saveState = { status: 'saved', pending: 0 };
     error = null;
@@ -918,11 +946,236 @@
   function teardownProvider(): void {
     provider?.destroy();
     provider = null;
+    destroyNoteSnapshotDocument();
+    snapshotSelection = null;
+    previousSnapshotHydrationActive = false;
     providerSynced = false;
     status = 'connecting';
     saveState = { status: 'saved', pending: 0 };
     notFoundPath = null;
     docDeleted = false;
+  }
+
+  function destroyNoteSnapshotDocument(): void {
+    noteSnapshotDocument?.destroy();
+    noteSnapshotDocument = null;
+    noteSnapshotDocumentKey = null;
+  }
+
+  function noteSnapshotKey(
+    vaultId: string,
+    path: string,
+    snapshot: NoteSnapshot,
+  ): string {
+    return `${vaultId}\u0000${path}\u0000${contentFingerprint(snapshot.content)}`;
+  }
+
+  function contentFingerprint(content: string): string {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < content.length; index += 1) {
+      hash ^= content.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `${content.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  function snapshotSelectionRoot(): HTMLElement | null {
+    return docBody?.querySelector('.snapshot-editor-layer') ?? null;
+  }
+
+  function liveSelectionRoot(): HTMLElement | null {
+    return docBody?.querySelector('.live-editor-layer') ?? null;
+  }
+
+  function captureTextSelection(root: HTMLElement | null): TextSelectionSnapshot | null {
+    if (!root) return null;
+
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLTextAreaElement &&
+      root.contains(active) &&
+      active.selectionStart !== null &&
+      active.selectionEnd !== null
+    ) {
+      return {
+        kind: 'input',
+        start: active.selectionStart,
+        end: active.selectionEnd,
+        direction: active.selectionDirection ?? 'none',
+      };
+    }
+
+    const cmSelection = captureCodeMirrorSelection(root);
+    if (
+      cmSelection &&
+      (root.contains(document.activeElement) ||
+        cmSelection.anchorOffset !== cmSelection.focusOffset)
+    ) return cmSelection;
+
+    const selection = window.getSelection();
+    if (
+      selection === null ||
+      selection.rangeCount === 0 ||
+      selection.anchorNode === null ||
+      selection.focusNode === null ||
+      !root.contains(selection.anchorNode) ||
+      !root.contains(selection.focusNode)
+    ) return null;
+
+    const anchorOffset = textOffsetWithin(root, selection.anchorNode, selection.anchorOffset);
+    const focusOffset = textOffsetWithin(root, selection.focusNode, selection.focusOffset);
+    if (anchorOffset === null || focusOffset === null) return null;
+    return { kind: 'dom', anchorOffset, focusOffset };
+  }
+
+  function restoreTextSelection(
+    root: HTMLElement | null,
+    selection: TextSelectionSnapshot | null,
+  ): boolean {
+    if (!root || !selection) return false;
+
+    if (selection.kind === 'input') {
+      const target = root.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Markdown editor"]',
+      );
+      if (!target) return false;
+      target.focus({ preventScroll: true });
+      target.setSelectionRange(selection.start, selection.end, selection.direction);
+      return true;
+    }
+
+    if (
+      selection.kind === 'codemirror' &&
+      restoreCodeMirrorSelection(root, selection.anchorOffset, selection.focusOffset)
+    ) return true;
+
+    const anchor = textPositionAtOffset(root, selection.anchorOffset);
+    const focus = textPositionAtOffset(root, selection.focusOffset);
+    if (!anchor || !focus) return false;
+    const browserSelection = window.getSelection();
+    if (!browserSelection) return false;
+
+    const editable = root.querySelector<HTMLElement>(
+      '[contenteditable="true"], [role="textbox"][aria-label="Markdown editor"]',
+    );
+    editable?.focus({ preventScroll: true });
+
+    const range = document.createRange();
+    range.setStart(anchor.node, anchor.offset);
+    range.collapse(true);
+    browserSelection.removeAllRanges();
+    browserSelection.addRange(range);
+    if (browserSelection.extend) {
+      browserSelection.extend(focus.node, focus.offset);
+    } else {
+      range.setEnd(focus.node, focus.offset);
+      browserSelection.removeAllRanges();
+      browserSelection.addRange(range);
+    }
+    document.dispatchEvent(new Event('selectionchange'));
+    return true;
+  }
+
+  function scheduleLiveSelectionRestore(
+    selection: TextSelectionSnapshot | null,
+  ): void {
+    let attempts = 0;
+    const tryRestore = () => {
+      const restored = restoreTextSelection(liveSelectionRoot(), selection);
+      attempts += 1;
+      if (!restored && attempts < 8) requestAnimationFrame(tryRestore);
+    };
+    requestAnimationFrame(tryRestore);
+  }
+
+  function captureCodeMirrorSelection(
+    root: HTMLElement,
+  ): Extract<TextSelectionSnapshot, { kind: 'codemirror' }> | null {
+    const view = codeMirrorView(root);
+    if (!view) return null;
+    const main = view.state.selection.main;
+    return {
+      kind: 'codemirror',
+      anchorOffset: main.anchor,
+      focusOffset: main.head,
+    };
+  }
+
+  function restoreCodeMirrorSelection(
+    root: HTMLElement,
+    anchorOffset: number,
+    focusOffset: number,
+  ): boolean {
+    const view = codeMirrorView(root);
+    if (!view) return false;
+    const docLength = view.state.doc.length;
+    view.focus();
+    view.dispatch({
+      selection: {
+        anchor: clampTextOffset(anchorOffset, docLength),
+        head: clampTextOffset(focusOffset, docLength),
+      },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
+  function codeMirrorView(root: HTMLElement): EditorView | null {
+    const editor = root.querySelector<HTMLElement>('.cm-editor, .cm-content');
+    return EditorView.findFromDOM(editor ?? root);
+  }
+
+  function textOffsetWithin(
+    root: HTMLElement,
+    targetNode: Node,
+    targetOffset: number,
+  ): number | null {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let offset = 0;
+    let current = walker.nextNode();
+    while (current) {
+      if (current === targetNode) {
+        return offset + clampTextOffset(targetOffset, current.textContent?.length ?? 0);
+      }
+      offset += current.textContent?.length ?? 0;
+      current = walker.nextNode();
+    }
+    if (targetNode === root) return clampTextOffset(targetOffset, offset);
+    return null;
+  }
+
+  function textPositionAtOffset(
+    root: HTMLElement,
+    requestedOffset: number,
+  ): TextPosition | null {
+    const targetOffset = Math.max(0, requestedOffset);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let consumed = 0;
+    let current = walker.nextNode();
+    let lastText: Text | null = null;
+
+    while (current) {
+      const text = current as Text;
+      const length = text.textContent?.length ?? 0;
+      lastText = text;
+      if (targetOffset <= consumed + length) {
+        return {
+          node: text,
+          offset: clampTextOffset(targetOffset - consumed, length),
+        };
+      }
+      consumed += length;
+      current = walker.nextNode();
+    }
+
+    if (lastText) {
+      return { node: lastText, offset: lastText.textContent?.length ?? 0 };
+    }
+    return null;
+  }
+
+  function clampTextOffset(offset: number, length: number): number {
+    return Math.max(0, Math.min(offset, length));
   }
 
   function toggleFolder(key: string): void {
@@ -1709,8 +1962,99 @@
     untrack(() => {
       provider?.destroy();
       provider = null;
+      destroyNoteSnapshotDocument();
       providerSynced = false;
     });
+  });
+
+  $effect(() => {
+    const id = activeVaultId;
+    const path = documentPath;
+    const activeProvider = provider;
+    const synced = providerSynced;
+    if (
+      !id ||
+      !path ||
+      !activeProvider ||
+      synced ||
+      notFoundPath === path ||
+      viewingFolder ||
+      activeAttachmentNode
+    ) {
+      destroyNoteSnapshotDocument();
+      return;
+    }
+
+    const snapshot = queryClient.getQueryData<NoteSnapshot>(queryKeys.note(id, path));
+    if (!snapshot || snapshot.vaultId !== id || snapshot.path !== path) {
+      destroyNoteSnapshotDocument();
+      return;
+    }
+
+    const nextKey = noteSnapshotKey(id, path, snapshot);
+    if (noteSnapshotDocumentKey === nextKey) return;
+    const previous = noteSnapshotDocument;
+    noteSnapshotDocument = createNoteSnapshotDocument(snapshot);
+    noteSnapshotDocumentKey = nextKey;
+    previous?.destroy();
+  });
+
+  $effect(() => {
+    const id = activeVaultId;
+    const path = documentPath;
+    const activeProvider = provider;
+    const synced = providerSynced;
+    if (!id || !path || !activeProvider || !synced) return;
+
+    const text = activeProvider.text;
+    const writeSnapshot = () => {
+      const key = queryKeys.note(id, path);
+      const previous = queryClient.getQueryData<NoteSnapshot | null>(key);
+      queryClient.setQueryData<NoteSnapshot>(
+        key,
+        snapshotFromLiveText({
+          vaultId: id,
+          path,
+          text,
+          previous,
+        }),
+      );
+    };
+
+    writeSnapshot();
+    text.observe(writeSnapshot);
+    return () => text.unobserve(writeSnapshot);
+  });
+
+  const snapshotHydrationActive = $derived(
+    provider !== null &&
+      !providerSynced &&
+      noteSnapshotDocument !== null &&
+      !viewingFolder &&
+      !activeAttachmentNode &&
+      notFoundPath !== documentPath,
+  );
+  const snapshotEditorReady = $derived(snapshotHydrationActive && noteSnapshotDocument !== null);
+  const liveEditorReady = $derived(provider !== null && (providerSynced || snapshotEditorReady));
+
+  $effect(() => {
+    if (!snapshotHydrationActive) return;
+    const updateSelection = () => {
+      snapshotSelection = captureTextSelection(snapshotSelectionRoot());
+    };
+
+    updateSelection();
+    document.addEventListener('selectionchange', updateSelection);
+    return () => document.removeEventListener('selectionchange', updateSelection);
+  });
+
+  $effect(() => {
+    const active = snapshotHydrationActive;
+    if (previousSnapshotHydrationActive && !active) {
+      const selection = snapshotSelection;
+      scheduleLiveSelectionRestore(selection);
+    }
+    previousSnapshotHydrationActive = active;
   });
 
   // First-load bootstrap. Load the vault list, then — when the URL is the
@@ -1774,6 +2118,7 @@
       }
       provider?.destroy();
       provider = null;
+      destroyNoteSnapshotDocument();
       providerSynced = false;
       saveState = { status: 'saved', pending: 0 };
     };
@@ -1853,10 +2198,10 @@
          to `.doc-body`. There are no side gutter columns, so no dark bands
          beside the document. -->
     <div class="doc-body-wrap">
-      <div class="doc-body">
+      <div bind:this={docBody} class="doc-body">
         {#if notFoundPath === documentPath}
           <DocumentNotFoundState path={documentPath} />
-        {:else if provider && providerSynced}
+        {:else if provider && liveEditorReady}
           <div class:history-open={historyPanelOpen} class="document-workspace">
             <div class="doc-column">
               <DocumentByline
@@ -1864,20 +2209,45 @@
                 statusTone={bylineStatusTone}
                 onHistory={openHistoryPanel}
               />
-              {#key provider}
-                <PlaintextEditor
-                  ydoc={provider.doc}
-                  ytext={provider.text}
-                  livePaths={livePaths}
-                  orgPeople={orgPeople}
-                  readOnly={docDeleted}
-                  scroll="external"
-                  class="vault-editor"
-                  attachmentSrc={rawAttachmentSrc}
-                  uploadImage={uploadImageAttachment}
-                  onWikilinkClick={handleWikilinkClick}
-                />
-              {/key}
+              <div class="editor-stage" class:snapshot-active={snapshotEditorReady}>
+                <div
+                  class="editor-layer live-editor-layer"
+                  class:snapshot-covered={snapshotEditorReady}
+                  aria-hidden={snapshotEditorReady}
+                >
+                  {#key provider}
+                    <PlaintextEditor
+                      ydoc={provider.doc}
+                      ytext={provider.text}
+                      livePaths={livePaths}
+                      orgPeople={orgPeople}
+                      readOnly={docDeleted || !providerSynced || snapshotEditorReady}
+                      scroll="external"
+                      class="vault-editor"
+                      attachmentSrc={rawAttachmentSrc}
+                      uploadImage={providerSynced ? uploadImageAttachment : undefined}
+                      onWikilinkClick={handleWikilinkClick}
+                    />
+                  {/key}
+                </div>
+                {#if snapshotEditorReady && noteSnapshotDocument}
+                  <div class="editor-layer snapshot-editor-layer">
+                    {#key noteSnapshotDocumentKey}
+                      <PlaintextEditor
+                        ydoc={noteSnapshotDocument.doc}
+                        ytext={noteSnapshotDocument.text}
+                        livePaths={livePaths}
+                        orgPeople={orgPeople}
+                        readOnly={true}
+                        scroll="external"
+                        class="vault-editor"
+                        attachmentSrc={rawAttachmentSrc}
+                        onWikilinkClick={handleWikilinkClick}
+                      />
+                    {/key}
+                  </div>
+                {/if}
+              </div>
             </div>
             {#if historyPanelOpen}
               <DocumentHistoryPanel
@@ -2135,6 +2505,26 @@
      band. */
   .doc-body :global(.vault-editor) {
     background: transparent;
+  }
+
+  .editor-stage {
+    display: grid;
+    min-width: 0;
+    position: relative;
+  }
+
+  .editor-layer {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+
+  .live-editor-layer.snapshot-covered {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .snapshot-editor-layer {
+    z-index: 1;
   }
 
   @media (max-width: 1180px) {
