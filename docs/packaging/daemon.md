@@ -22,6 +22,12 @@ The daemon reads configuration from environment variables owned by KB-1 code:
 - `KB1_HOST`: HTTP bind host, defaulting to `127.0.0.1`
 - `KB1_PORT`: HTTP port, defaulting to `7382`
 - `KB1_WEB_PROXY_TARGET`: optional dev-only Vite target for non-API UI requests
+- `KB1_RELAY_URL` and `KB1_RELAY_TOKEN`: relay/tunnel connection, supplied
+  together
+- `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD`: optional daemon identity fields
+  sent to the relay
+- `KB1_ACTOR_DEFAULT`: default local actor attribution, `user` or `unknown`
+- `KB1_HISTORY_COALESCE_WINDOW_MS`: non-negative note-history coalescing window
 
 For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
 The daemon does not honor `KB2_*` environment variables; runtime configuration is
@@ -138,7 +144,6 @@ The daemon package reserves the future CLI binary name:
 ```json
 {
   "bin": {
-    "kb1d": "./dist/main.js",
     "kb1d": "./dist/main.js"
   }
 }

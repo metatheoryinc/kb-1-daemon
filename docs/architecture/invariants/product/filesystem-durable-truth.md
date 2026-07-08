@@ -15,8 +15,13 @@ session state — is a rebuildable artifact.
   an accepted edit lives at rest.
 - Deleting `.kb1/cache/` and `.kb1/runtime/` must never lose user content.
 - New durable product semantics live in files (vault content or durable
-  `.kb1` metadata such as `vault.yml`, `folders.yml`, audit logs) — not in
+  `.kb1` metadata such as `vault.json`, `folders.yml`, audit logs) — not in
   runtime-only state.
+- A vault identity is durable JSON at `.kb1/vault.json`, with required `id` and
+  `displayName` and optional `metadata`.
+- Git-backed note history is best-effort and rebuildable from the vault's Git
+  repository when available; it must not replace accepted filesystem writes as
+  the durable content source.
 
 ## Good Examples
 
@@ -24,6 +29,8 @@ session state — is a rebuildable artifact.
   cold start.
 - Search indexes regenerated from files after cache deletion.
 - Folder colors stored in `.kb1/folders.yml`, not in a runtime database.
+- Vault slugs/display names stored in `.kb1/vault.json`, not inferred only from
+  memory.
 
 ## Violations
 
