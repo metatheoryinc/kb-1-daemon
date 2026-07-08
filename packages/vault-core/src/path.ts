@@ -3,7 +3,7 @@ import path from 'node:path';
 const MAX_PATH_LENGTH = 1024;
 const MAX_SEGMENT_LENGTH = 255;
 
-export type VaultPathKind = 'file' | 'folder' | 'artifact';
+type VaultPathKind = 'file' | 'folder' | 'artifact';
 
 export class InvalidPathError extends Error {
   constructor(public readonly input: string, public readonly reason: string) {

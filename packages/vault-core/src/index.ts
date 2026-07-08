@@ -86,4 +86,3 @@ export {
   type WriteFileValue,
   type WriteRawFileValue,
 } from "./vault-ops.js";
-export { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";

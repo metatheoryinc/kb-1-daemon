@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import * as Y from "yjs";
 
-import { anchoredSpliceContractCases } from "@kb-1/vault-core";
+import { anchoredSpliceContractCases } from "../../../packages/vault-core/src/splice-contract-cases.test-support.js";
 import type { VaultChangeEvent, VaultService } from "@kb-1/vault-service";
 import {
   createApp,
