@@ -26,9 +26,6 @@ import {
   validateVaultPath,
 } from "./path.js";
 
-export { emitVaultAudit, InvalidPathError, validateVaultPath };
-export type { AuditEntry, VaultActor };
-
 export type VaultErrorCode =
   | "invalid_path"
   | "invalid_metadata"

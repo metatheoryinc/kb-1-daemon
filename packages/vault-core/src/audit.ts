@@ -17,7 +17,7 @@ export type AuditOperation =
   | 'splice'
   | 'append'
   | 'prepend';
-export type AuditEntityKind = 'file' | 'folder';
+type AuditEntityKind = 'file' | 'folder';
 
 export interface AuditEntry {
   id: string;

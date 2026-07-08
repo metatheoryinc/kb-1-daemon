@@ -5,7 +5,7 @@ import {
   type AnchoredSpliceResult
 } from './splice.js';
 
-export interface AnchoredSpliceContractCase {
+interface AnchoredSpliceContractCase {
   name: string;
   initialContent: string;
   request: AnchoredSpliceRequest;

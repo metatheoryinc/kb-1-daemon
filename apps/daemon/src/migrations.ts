@@ -1,12 +1,12 @@
 import { cp, readdir, rm, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
-export interface DirectoryMigrationInput {
+interface DirectoryMigrationInput {
   source: string;
   target: string;
 }
 
-export interface DirectoryMigrationResult {
+interface DirectoryMigrationResult {
   migrated: boolean;
 }
 

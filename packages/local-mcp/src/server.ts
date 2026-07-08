@@ -29,13 +29,13 @@ export interface LocalMcpEndpoint {
   close(): Promise<void>;
 }
 
-export interface LocalMcpEndpointOptions {
+interface LocalMcpEndpointOptions {
   actorFromRequest?: (
     request: Request,
   ) => LocalMcpActor | ServiceFailure | undefined;
 }
 
-export interface LocalMcpServerOptions {
+interface LocalMcpServerOptions {
   actor?: LocalMcpActor;
 }
 
@@ -50,7 +50,7 @@ interface SessionRecord {
  * endpoint; a bare service is normalized to a one-vault provider so the tool
  * surface is identical either way.
  */
-export type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
+type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
 
 export function createLocalMcpEndpoint(
   source: LocalMcpVaultSource,
