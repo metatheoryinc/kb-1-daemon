@@ -4,22 +4,35 @@
       "extends": "WidgetType",
       "members": ["destroy", "eq", "ignoreEvent", "toDOM"]
     },
-    "applyBaselineEdit",
-    "applyContent",
-    "applyContentEdit",
-    "attachClientSession",
-    "close",
-    "deleteSessionSubtree",
-    "failure",
-    "flushDirtySessions",
-    "getContent",
-    "getOpenSession",
-    "getOpenSessionCount",
-    "moveSession",
-    "moveSessionSubtree",
-    "onEvent",
-    "readWithBaseline",
-    "reset",
-    "withSession"
+    {
+      "implements": "DocumentSessionFailureCarrier",
+      "members": ["failure"]
+    },
+    {
+      "implements": "DocumentSessionManagerRuntimeSurface",
+      "members": [
+        "attachClientSession",
+        "close",
+        "deleteSessionSubtree",
+        "flushDirtySessions",
+        "getOpenSession",
+        "getOpenSessionCount",
+        "moveSession",
+        "moveSessionSubtree",
+        "onEvent",
+        "withSession"
+      ]
+    },
+    {
+      "implements": "OneFileDocumentSessionRuntimeSurface",
+      "members": [
+        "applyBaselineEdit",
+        "applyContent",
+        "applyContentEdit",
+        "getContent",
+        "readWithBaseline",
+        "reset"
+      ]
+    }
   ]
 }

@@ -71,7 +71,11 @@ export const DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE: DocumentSessionFailure 
 
 export const DOCUMENT_SESSION_FAILURE_CLOSE_CODE = 1008;
 
-export class DocumentSessionNotFoundError extends Error {
+interface DocumentSessionFailureCarrier {
+  readonly failure: DocumentSessionFailure;
+}
+
+export class DocumentSessionNotFoundError extends Error implements DocumentSessionFailureCarrier {
   readonly failure = DOCUMENT_SESSION_NOT_FOUND_FAILURE;
 
   constructor(readonly filePath: string) {
@@ -109,7 +113,23 @@ export class PersistFailedError extends Error {
   }
 }
 
-export class OneFileDocumentSession {
+interface OneFileDocumentSessionRuntimeSurface {
+  getContent(): Promise<string>;
+  readWithBaseline(): Promise<{ content: string; baseline: string }>;
+  reset(content?: string): Promise<string>;
+  applyContent(content: string, options?: DocumentSessionMutationOptions): Promise<string>;
+  applyBaselineEdit(
+    baseline: string,
+    edit: (currentContent: string) => SessionContentEditResult,
+    options?: DocumentSessionMutationOptions,
+  ): Promise<SessionSpliceResult>;
+  applyContentEdit(
+    edit: (currentContent: string) => string,
+    options?: DocumentSessionMutationOptions,
+  ): Promise<{ content: string; baseline: string }>;
+}
+
+export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurface {
   filePath: string;
 
   private readonly defaultContent: string;

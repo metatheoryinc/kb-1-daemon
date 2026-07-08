@@ -20,7 +20,24 @@ export interface FlushDocumentSessionsResult {
   flushed: number;
 }
 
-export class DocumentSessionManager {
+interface DocumentSessionManagerRuntimeSurface {
+  onEvent(handler: DocumentSessionEventHandler): () => void;
+  attachClientSession(vaultPath: string): ClientDocumentSession;
+  withSession<T>(
+    vaultPath: string,
+    operation: (session: OneFileDocumentSession) => Promise<T>,
+    options?: Partial<Pick<OneFileDocumentSessionOptions, 'defaultContent'>>
+  ): Promise<T>;
+  getOpenSession(vaultPath: string): OneFileDocumentSession | undefined;
+  getOpenSessionCount(): number;
+  flushDirtySessions(): Promise<FlushDocumentSessionsResult>;
+  moveSession(fromPath: string, toPath: string, moveOnDisk: () => Promise<void>): Promise<boolean>;
+  moveSessionSubtree(fromFolder: string, toFolder: string, moveOnDisk: () => Promise<void>): Promise<string[]>;
+  deleteSessionSubtree(folderPath: string, deleteOnDisk: () => Promise<void>): Promise<string[]>;
+  close(): Promise<void>;
+}
+
+export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurface {
   private readonly root: string;
   private readonly options: Omit<OneFileDocumentSessionOptions, 'eventPath'>;
   private readonly idleSessionGraceMs: number;
