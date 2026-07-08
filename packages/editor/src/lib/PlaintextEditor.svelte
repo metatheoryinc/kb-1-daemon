@@ -6,6 +6,7 @@
     EditorState,
     Annotation,
     Compartment,
+    Facet,
     type Extension,
   } from '@codemirror/state';
   import {
@@ -41,6 +42,121 @@
     plaintextCursorProducer,
     plaintextCursorConsumer,
   } from './plaintext-awareness';
+
+  interface PlaintextSyncConfig {
+    ydoc: Doc;
+    ytext: Y.Text;
+  }
+
+  const plaintextSyncConfig = Facet.define<
+    PlaintextSyncConfig,
+    PlaintextSyncConfig | null
+  >({
+    combine(values) {
+      return values.at(-1) ?? null;
+    },
+  });
+
+  const syncAnnotation = Annotation.define<symbol>();
+  const SYNC_MARK = Symbol('plaintext-sync');
+
+  class PlaintextSyncPlugin implements PluginValue {
+    private view: EditorView;
+    private ydoc: Doc;
+    private ytext: Y.Text;
+    private observer: (
+      event: Y.YTextEvent,
+      transaction: Y.Transaction,
+    ) => void;
+    private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+
+    constructor(view: EditorView) {
+      this.view = view;
+      const config = view.state.facet(plaintextSyncConfig);
+      if (!config) {
+        throw new Error('PlaintextSyncPlugin requires plaintextSyncConfig');
+      }
+      this.ydoc = config.ydoc;
+      this.ytext = config.ytext;
+      this.observer = (event, _tr) => {
+        // Skip echo of our own local writes.
+        if (event.transaction.origin === PLAINTEXT_USER_ORIGIN) return;
+        const delta = event.delta;
+        const changes: { from: number; to: number; insert: string }[] = [];
+        let pos = 0;
+        for (const d of delta) {
+          if (d.insert != null) {
+            const text = typeof d.insert === 'string' ? d.insert : '';
+            if (text.length > 0) {
+              changes.push({ from: pos, to: pos, insert: text });
+            }
+          } else if (d.delete != null) {
+            changes.push({ from: pos, to: pos + d.delete, insert: '' });
+            pos += d.delete;
+          } else if (d.retain != null) {
+            pos += d.retain;
+          }
+        }
+        if (changes.length === 0) return;
+        view.dispatch({
+          changes,
+          annotations: [syncAnnotation.of(SYNC_MARK)],
+        });
+      };
+      this.ytext.observe(this.observer);
+      this.reconcileFromYText();
+      this.reconcileTimer = setTimeout(() => {
+        this.reconcileTimer = undefined;
+        this.reconcileFromYText();
+      }, 50);
+    }
+
+    private reconcileFromYText(): void {
+      const syncedText = this.ytext.toString();
+      if (syncedText !== this.view.state.doc.toString()) {
+        this.view.dispatch({
+          changes: {
+            from: 0,
+            to: this.view.state.doc.length,
+            insert: syncedText,
+          },
+          annotations: [syncAnnotation.of(SYNC_MARK)],
+        });
+      }
+    }
+
+    update(update: ViewUpdate): void {
+      if (!update.docChanged) return;
+      // Skip CM dispatches that came from the inbound Y.Text observer.
+      for (const tr of update.transactions) {
+        if (tr.annotation(syncAnnotation) === SYNC_MARK) return;
+      }
+      // Local user edits — write them back to Y.Text with our origin.
+      this.ydoc.transact(() => {
+        let adj = 0;
+        update.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => {
+          const insertText = insert.sliceString(0, insert.length, '\n');
+          if (fromA !== toA) {
+            this.ytext.delete(fromA + adj, toA - fromA);
+          }
+          if (insertText.length > 0) {
+            this.ytext.insert(fromA + adj, insertText);
+          }
+          adj += insertText.length - (toA - fromA);
+        });
+      }, PLAINTEXT_USER_ORIGIN);
+    }
+
+    destroy(): void {
+      if (this.reconcileTimer) {
+        clearTimeout(this.reconcileTimer);
+        this.reconcileTimer = undefined;
+      }
+      this.ytext.unobserve(this.observer);
+    }
+  }
+
+  const plaintextSyncPlugin = ViewPlugin.fromClass(PlaintextSyncPlugin);
 
   interface Props {
     /** Shared Y.Doc supplied by the host app/provider. */
@@ -206,99 +322,10 @@
     //   - Inbound Y.Text events (origin !== PLAINTEXT_USER_ORIGIN) are
     //     dispatched into CM as edits annotated `syncAnnotation` so
     //     the update() loop can skip its own echo.
-    const syncAnnotation = Annotation.define<symbol>();
-    const SYNC_MARK = Symbol('plaintext-sync');
-
-    class PlaintextSyncPlugin implements PluginValue {
-      private view: EditorView;
-      private observer: (
-        event: Y.YTextEvent,
-        transaction: Y.Transaction,
-      ) => void;
-      private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
-
-      constructor(view: EditorView) {
-        this.view = view;
-        this.observer = (event, _tr) => {
-          // Skip echo of our own local writes.
-          if (event.transaction.origin === PLAINTEXT_USER_ORIGIN) return;
-          const delta = event.delta;
-          const changes: { from: number; to: number; insert: string }[] = [];
-          let pos = 0;
-          for (const d of delta) {
-            if (d.insert != null) {
-              const text = typeof d.insert === 'string' ? d.insert : '';
-              if (text.length > 0) {
-                changes.push({ from: pos, to: pos, insert: text });
-              }
-            } else if (d.delete != null) {
-              changes.push({ from: pos, to: pos + d.delete, insert: '' });
-              pos += d.delete;
-            } else if (d.retain != null) {
-              pos += d.retain;
-            }
-          }
-          if (changes.length === 0) return;
-          view.dispatch({
-            changes,
-            annotations: [syncAnnotation.of(SYNC_MARK)],
-          });
-        };
-        stableText.observe(this.observer);
-        this.reconcileFromYText();
-        this.reconcileTimer = setTimeout(() => {
-          this.reconcileTimer = undefined;
-          this.reconcileFromYText();
-        }, 50);
-      }
-
-      private reconcileFromYText(): void {
-        const syncedText = stableText.toString();
-        if (syncedText !== this.view.state.doc.toString()) {
-          this.view.dispatch({
-            changes: {
-              from: 0,
-              to: this.view.state.doc.length,
-              insert: syncedText,
-            },
-            annotations: [syncAnnotation.of(SYNC_MARK)],
-          });
-        }
-      }
-
-      update(update: ViewUpdate): void {
-        if (!update.docChanged) return;
-        // Skip CM dispatches that came from the inbound Y.Text observer.
-        for (const tr of update.transactions) {
-          if (tr.annotation(syncAnnotation) === SYNC_MARK) return;
-        }
-        // Local user edits — write them back to Y.Text with our origin.
-        stableDoc.transact(() => {
-          let adj = 0;
-          update.changes.iterChanges(
-            (fromA, toA, _fromB, _toB, insert) => {
-              const insertText = insert.sliceString(0, insert.length, '\n');
-              if (fromA !== toA) {
-                stableText.delete(fromA + adj, toA - fromA);
-              }
-              if (insertText.length > 0) {
-                stableText.insert(fromA + adj, insertText);
-              }
-              adj += insertText.length - (toA - fromA);
-            },
-          );
-        }, PLAINTEXT_USER_ORIGIN);
-      }
-
-      destroy(): void {
-        if (this.reconcileTimer) {
-          clearTimeout(this.reconcileTimer);
-          this.reconcileTimer = undefined;
-        }
-        stableText.unobserve(this.observer);
-      }
-    }
-    const plaintextSync = ViewPlugin.fromClass(PlaintextSyncPlugin);
+    const plaintextSync: Extension = [
+      plaintextSyncConfig.of({ ydoc: stableDoc, ytext: stableText }),
+      plaintextSyncPlugin,
+    ];
 
     // --- Undo manager ----------------------------------------------
     //
