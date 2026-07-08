@@ -297,6 +297,56 @@ describe('daemon boot migration', () => {
     await secondBoot.close();
   });
 
+  it('migrates a Docker-style sibling kb2 home to an explicit kb1 home and is idempotent', async () => {
+    const dataRoot = join(kb1Home, 'data');
+    const legacyHome = join(dataRoot, 'kb2');
+    const targetHome = join(dataRoot, 'kb1');
+    const legacyVaultRoot = join(legacyHome, 'vaults', 'demo-vault');
+    await mkdir(join(legacyHome, 'daemon'), { recursive: true });
+    await writeFile(join(legacyHome, 'daemon', 'docker-marker.txt'), 'legacy docker data\n', 'utf8');
+    await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
+    await writeFile(join(legacyVaultRoot, 'notes', 'from-docker-home.md'), 'from docker home\n', 'utf8');
+
+    const firstPort = await reservePort();
+    const firstBoot = await startDaemon({
+      env: {
+        ...originalEnv,
+        KB1_HOME: targetHome,
+        KB1_HOST: '127.0.0.1',
+        KB1_PORT: String(firstPort)
+      },
+      homeDir: join(kb1Home, 'ignored-home')
+    });
+
+    expect(firstBoot.config.kb1Home).toBe(targetHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(targetHome, 'daemon', 'docker-marker.txt'), 'utf8')).resolves.toBe(
+      'legacy docker data\n'
+    );
+    await expect(readFile(join(targetHome, 'vaults', 'demo-vault', 'notes', 'from-docker-home.md'), 'utf8')).resolves.toBe(
+      'from docker home\n'
+    );
+    await firstBoot.close();
+
+    const secondPort = await reservePort();
+    const secondBoot = await startDaemon({
+      env: {
+        ...originalEnv,
+        KB1_HOME: targetHome,
+        KB1_HOST: '127.0.0.1',
+        KB1_PORT: String(secondPort)
+      },
+      homeDir: join(kb1Home, 'ignored-home')
+    });
+
+    expect(secondBoot.config.kb1Home).toBe(targetHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(targetHome, 'vaults', 'demo-vault', 'notes', 'from-docker-home.md'), 'utf8')).resolves.toBe(
+      'from docker home\n'
+    );
+    await secondBoot.close();
+  });
+
   it('migrates a legacy single-vault layout into the registry layout on boot, preserving every note', async () => {
     await seedLegacyLayout();
 
