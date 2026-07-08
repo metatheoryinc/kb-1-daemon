@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 export const SERVICE_NAME = 'kb1d';
 export const DEFAULT_PORT = 7382;
 export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_ACTOR_DEFAULT = 'user';
+const DEFAULT_ACTOR_DEFAULT = 'user';
 export const DEFAULT_HISTORY_COALESCE_WINDOW_MS = 5 * 60 * 1000;
 export const DEFAULT_KB1_HOME_DIRNAME = '.kb1';
 export const LEGACY_KB2_HOME_DIRNAME = '.kb2';
@@ -13,7 +13,7 @@ export type ActorDefault = 'user' | 'unknown';
 
 export const DEFAULT_VAULT_SLUG = 'demo-vault';
 export const LEGACY_VAULT_DIRNAME = 'demo-vault';
-export const VAULTS_DIRNAME = 'vaults';
+const VAULTS_DIRNAME = 'vaults';
 
 export interface DaemonConfig {
   serviceName: typeof SERVICE_NAME;
@@ -39,7 +39,7 @@ export interface DaemonConfig {
   deprecationWarnings: string[];
 }
 
-export interface DaemonRelayConfig {
+interface DaemonRelayConfig {
   relayUrl: string;
   token: string;
   daemonVersion?: string;

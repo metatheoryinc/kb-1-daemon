@@ -13,7 +13,7 @@ const VAULT_IDENTITY_DIR = '.kb1';
  * where the build step copies the template directory alongside the compiled
  * module (dist tree).
  */
-export const STARTER_KIT_DIR = fileURLToPath(new URL('./starter-kit-template/', import.meta.url));
+const STARTER_KIT_DIR = fileURLToPath(new URL('./starter-kit-template/', import.meta.url));
 
 /**
  * Recursively copy the bundled starter-kit template tree into a vault root.

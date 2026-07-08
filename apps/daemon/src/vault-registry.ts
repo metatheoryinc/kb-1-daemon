@@ -17,7 +17,7 @@ const VAULT_IDENTITY_FILE = 'vault.json';
 export const VAULT_TRASH_DIRNAME = '.trash';
 
 /** Durable identity for a single vault, stored at `<vault>/.kb1/vault.json`. */
-export interface VaultIdentity {
+interface VaultIdentity {
   /** Stable unique slug for the vault within this daemon. */
   id: string;
   /** Human-facing name; defaults to the folder name on first sight. */
@@ -26,16 +26,16 @@ export interface VaultIdentity {
   metadata?: VaultMetadata;
 }
 
-export interface VaultMetadata {
+interface VaultMetadata {
   color?: string;
 }
 
-export interface VaultMetadataInput {
+interface VaultMetadataInput {
   color?: string | null;
 }
 
 /** A vault the daemon knows about: identity plus its on-disk root. */
-export interface VaultRegistryEntry {
+interface VaultRegistryEntry {
   slug: string;
   displayName: string;
   root: string;
@@ -43,7 +43,7 @@ export interface VaultRegistryEntry {
 }
 
 /** A live, root-scoped instance serving one vault. */
-export interface VaultInstance {
+interface VaultInstance {
   entry: VaultRegistryEntry;
   service: VaultService;
   manager: DocumentSessionManager;
@@ -54,9 +54,9 @@ export interface VaultRegistryChangeEvent {
   event: VaultChangeEvent;
 }
 
-export type VaultRegistryChangeEventHandler = (event: VaultRegistryChangeEvent) => void;
+type VaultRegistryChangeEventHandler = (event: VaultRegistryChangeEvent) => void;
 
-export interface VaultRegistryOptions {
+interface VaultRegistryOptions {
   historyCoalesceWindowMs?: number;
 }
 
@@ -126,7 +126,7 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
   return identity;
 }
 
-export async function migrateLegacyVaultMetadata(vaultRoot: string): Promise<{ migrated: boolean }> {
+async function migrateLegacyVaultMetadata(vaultRoot: string): Promise<{ migrated: boolean }> {
   const source = legacyIdentityDir(vaultRoot);
   const target = identityDir(vaultRoot);
 
@@ -200,7 +200,7 @@ async function listRelativeFiles(root: string): Promise<string[]> {
 }
 
 /** Persist a vault's identity to `<vault>/.kb1/vault.json`, creating `.kb1` if needed. */
-export async function writeVaultIdentity(vaultRoot: string, identity: VaultIdentity): Promise<void> {
+async function writeVaultIdentity(vaultRoot: string, identity: VaultIdentity): Promise<void> {
   const payload: VaultIdentity = {
     id: identity.id,
     displayName: identity.displayName,
@@ -337,7 +337,7 @@ export async function discoverVaults(vaultsHome: string): Promise<VaultRegistryE
 }
 
 /** Build a root-scoped service + document manager per discovered vault. */
-export function buildVaultInstances(entries: VaultRegistryEntry[], options: VaultRegistryOptions = {}): Map<string, VaultInstance> {
+function buildVaultInstances(entries: VaultRegistryEntry[], options: VaultRegistryOptions = {}): Map<string, VaultInstance> {
   const instances = new Map<string, VaultInstance>();
   for (const entry of entries) {
     instances.set(entry.slug, buildVaultInstance(entry, options));
@@ -346,7 +346,7 @@ export function buildVaultInstances(entries: VaultRegistryEntry[], options: Vaul
 }
 
 /** A summary of a vault for listing: stable slug as `id` plus its display name. */
-export interface VaultSummary {
+interface VaultSummary {
   id: string;
   displayName: string;
   metadata?: VaultMetadata;
@@ -355,7 +355,7 @@ export interface VaultSummary {
 /** Error codes the registry can return for vault-management operations. */
 export type VaultRegistryErrorCode = 'invalid_request' | 'already_exists' | 'not_found';
 
-export type VaultRegistryResult<T extends object = object> =
+type VaultRegistryResult<T extends object = object> =
   | ({ ok: true } & T)
   | { ok: false; error: VaultRegistryErrorCode; message: string };
 
