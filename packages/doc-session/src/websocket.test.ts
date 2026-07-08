@@ -581,7 +581,7 @@ describe('Yjs WebSocket session', () => {
 
   it('accepts a warm browser-provider response after daemon restart when Yjs state was restored', async () => {
     const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
-    const stateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'hello-world.json');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'hello-world.json');
     const firstSession = new OneFileDocumentSession(filePath, {
       defaultContent: 'stable provider bytes\n',
       stateFilePath

@@ -66,14 +66,14 @@ describe('tunnel-client helpers', () => {
   });
 
   it('preserves the stable tunnel path when building internal relay URLs', () => {
-    expect(relayInternalUrl(new URL('https://relay.example/t/dev1?token=nope'), '/__kb2_tunnel/control').href).toBe(
-      'wss://relay.example/t/dev1/__kb2_tunnel/control',
+    expect(relayInternalUrl(new URL('https://relay.example/t/dev1?token=nope'), '/__kb1_tunnel/control').href).toBe(
+      'wss://relay.example/t/dev1/__kb1_tunnel/control',
     );
-    expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1/'), '/__kb2_tunnel/dialback').href).toBe(
-      'ws://127.0.0.1:9920/t/dev1/__kb2_tunnel/dialback',
+    expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1/'), '/__kb1_tunnel/dialback').href).toBe(
+      'ws://127.0.0.1:9920/t/dev1/__kb1_tunnel/dialback',
     );
-    expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1'), '__kb2_tunnel/control').href).toBe(
-      'ws://127.0.0.1:9920/t/dev1/__kb2_tunnel/control',
+    expect(relayInternalUrl(new URL('http://127.0.0.1:9920/t/dev1'), '__kb1_tunnel/control').href).toBe(
+      'ws://127.0.0.1:9920/t/dev1/__kb1_tunnel/control',
     );
   });
 

@@ -18,7 +18,7 @@ Open-source local KB-1 server
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
-Markdown, images, attachments, .kb2 metadata
+Markdown, images, attachments, .kb1 metadata
 
 Later remote-connected mode:
 
@@ -33,7 +33,7 @@ Open-source local KB-1 server
 Vault API, Yjs runtime, search, audit, file watcher, materializer
         |
 Local filesystem
-Markdown, images, attachments, .kb2 metadata
+Markdown, images, attachments, .kb1 metadata
 ```
 
 ## Planes

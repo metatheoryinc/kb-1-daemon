@@ -3,10 +3,10 @@
 import { spawn } from 'node:child_process';
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const daemonHost = envValue('KB1_HOST', 'KB2_HOST') || '127.0.0.1';
-const daemonPort = envValue('KB1_PORT', 'KB2_PORT') || '7382';
-const webPort = envValue('KB1_WEB_PORT', 'KB2_WEB_PORT') || '5173';
-const webProxyTarget = envValue('KB1_WEB_PROXY_TARGET', 'KB2_WEB_PROXY_TARGET') || `http://127.0.0.1:${webPort}`;
+const daemonHost = process.env.KB1_HOST || '127.0.0.1';
+const daemonPort = process.env.KB1_PORT || '7382';
+const webPort = process.env.KB1_WEB_PORT || '5173';
+const webProxyTarget = process.env.KB1_WEB_PROXY_TARGET || `http://127.0.0.1:${webPort}`;
 
 const children = [
   spawnProcess('web', ['--filter', '@kb-1/web', 'dev'], {
@@ -72,10 +72,6 @@ function spawnProcess(name, args, env) {
   streamLines(name, child.stderr);
 
   return child;
-}
-
-function envValue(primary, legacy) {
-  return process.env[primary] || process.env[legacy];
 }
 
 function streamLines(name, stream) {

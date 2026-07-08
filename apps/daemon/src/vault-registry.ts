@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-1/doc-session';
 import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-1/vault-service';
@@ -7,14 +7,16 @@ import { normalizeFolderMetadataColor, type VaultActor } from '@kb-1/vault-core'
 import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
+import { migrateDirectoryCopyVerifyCleanup, verifyCopy } from './migrations.js';
 
-const VAULT_IDENTITY_DIR = '.kb2';
+const VAULT_IDENTITY_DIR = '.kb1';
+const LEGACY_VAULT_IDENTITY_DIR = '.kb2';
 const VAULT_IDENTITY_FILE = 'vault.json';
 
 /** Home-level directory that holds soft-deleted vault folders (reversible). */
 export const VAULT_TRASH_DIRNAME = '.trash';
 
-/** Durable identity for a single vault, stored at `<vault>/.kb2/vault.json`. */
+/** Durable identity for a single vault, stored at `<vault>/.kb1/vault.json`. */
 export interface VaultIdentity {
   /** Stable unique slug for the vault within this daemon. */
   id: string;
@@ -82,6 +84,14 @@ function identityPath(vaultRoot: string): string {
   return join(vaultRoot, VAULT_IDENTITY_DIR, VAULT_IDENTITY_FILE);
 }
 
+function legacyIdentityDir(vaultRoot: string): string {
+  return join(vaultRoot, LEGACY_VAULT_IDENTITY_DIR);
+}
+
+function identityDir(vaultRoot: string): string {
+  return join(vaultRoot, VAULT_IDENTITY_DIR);
+}
+
 function isNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
 }
@@ -91,6 +101,7 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
  * slug and display name both default from the folder name.
  */
 export async function readOrMintVaultIdentity(vaultRoot: string, folderName: string): Promise<VaultIdentity> {
+  await migrateLegacyVaultMetadata(vaultRoot);
   const file = identityPath(vaultRoot);
 
   let raw: string | undefined;
@@ -115,7 +126,14 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
   return identity;
 }
 
-/** Persist a vault's identity to `<vault>/.kb2/vault.json`, creating `.kb2` if needed. */
+export async function migrateLegacyVaultMetadata(vaultRoot: string): Promise<{ migrated: boolean }> {
+  return migrateDirectoryCopyVerifyCleanup({
+    source: legacyIdentityDir(vaultRoot),
+    target: identityDir(vaultRoot)
+  });
+}
+
+/** Persist a vault's identity to `<vault>/.kb1/vault.json`, creating `.kb1` if needed. */
 export async function writeVaultIdentity(vaultRoot: string, identity: VaultIdentity): Promise<void> {
   const payload: VaultIdentity = {
     id: identity.id,
@@ -211,43 +229,6 @@ export async function migrateLegacyVaultLayout(options: {
   return { migrated: true };
 }
 
-async function verifyCopy(source: string, target: string): Promise<void> {
-  const sourceFiles = await listFilesWithSizes(source);
-  const targetFiles = await listFilesWithSizes(target);
-
-  for (const [relPath, size] of sourceFiles) {
-    const copiedSize = targetFiles.get(relPath);
-    if (copiedSize === undefined) {
-      throw new Error(`Vault migration verification failed: ${relPath} missing from copy.`);
-    }
-    if (copiedSize !== size) {
-      throw new Error(
-        `Vault migration verification failed: ${relPath} size mismatch (source ${size}, copy ${copiedSize}).`
-      );
-    }
-  }
-}
-
-async function listFilesWithSizes(root: string): Promise<Map<string, number>> {
-  const sizes = new Map<string, number>();
-
-  async function walk(dir: string): Promise<void> {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(abs);
-      } else if (entry.isFile()) {
-        const info = await stat(abs);
-        sizes.set(relative(root, abs), info.size);
-      }
-    }
-  }
-
-  await walk(root);
-  return sizes;
-}
-
 /**
  * Discover every vault directory under `vaultsHome`, mint identities as needed,
  * and return registry entries. Throws if two vaults resolve to the same slug.
@@ -267,6 +248,7 @@ export async function discoverVaults(vaultsHome: string): Promise<VaultRegistryE
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
     const root = join(vaultsHome, entry.name);
+    await migrateLegacyVaultMetadata(root);
     const identity = await readOrMintVaultIdentity(root, entry.name);
 
     const existing = bySlug.get(identity.id);
@@ -315,7 +297,7 @@ export type VaultRegistryResult<T extends object = object> =
  * Live, mutable registry of the vaults a daemon serves. Built from a disk scan
  * at boot and kept in sync as vaults are created, renamed, and soft-deleted at
  * runtime — no restart required. The filesystem stays the source of truth; the
- * registry mirrors it (identity always lands in `.kb2/vault.json` first).
+ * registry mirrors it (identity always lands in `.kb1/vault.json` first).
  */
 export class VaultRegistry {
   private readonly instances: Map<string, VaultInstance>;
@@ -413,7 +395,7 @@ export class VaultRegistry {
 
     // Every newly created vault starts from the bundled starter kit. The seeder
     // is a no-op on a vault that already has user content, so this is safe even
-    // though identity was just written above (`.kb2` does not count as content).
+    // though identity was just written above (`.kb1` does not count as content).
     await seedVaultFromStarterKit(root);
 
     const entry: VaultRegistryEntry = { slug, displayName, root };
@@ -426,7 +408,7 @@ export class VaultRegistry {
 
   /**
    * Rename a vault: change its display name only. The slug/id and on-disk
-   * folder are immutable, so identity in `.kb2/vault.json` is rewritten but the
+   * folder are immutable, so identity in `.kb1/vault.json` is rewritten but the
    * folder never moves.
    */
   async rename(id: string, input: { displayName: string }): Promise<VaultRegistryResult<{ vault: VaultSummary }>> {

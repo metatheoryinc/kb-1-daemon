@@ -9,7 +9,7 @@ a recoverable condition.
 
 ## This Means
 
-- A vault's identity lives on disk at `<vault>/.kb2/vault.json` (`{ id, displayName }`),
+- A vault's identity lives on disk at `<vault>/.kb1/vault.json` (`{ id, displayName }`),
   where `id` is the slug. The filesystem is the source of truth.
 - The registry is built by scanning the vaults directory; each directory's
   identity is read, or minted from the folder name on first sight.
@@ -23,7 +23,7 @@ a recoverable condition.
 - Discovery throwing `Duplicate vault slug "<id>"` and naming both conflicting
   roots when two vaults carry the same `id`.
 - Minting `{ id, displayName }` from the folder name only when
-  `.kb2/vault.json` is absent, then reusing it verbatim afterward.
+  `.kb1/vault.json` is absent, then reusing it verbatim afterward.
 
 ## Violations
 
@@ -41,5 +41,5 @@ None currently accepted.
 
 - Is each served vault addressable by a single stable slug?
 - Does a slug collision fail boot loudly instead of silently shadowing a vault?
-- Is identity persisted in `.kb2/vault.json` and read back rather than
+- Is identity persisted in `.kb1/vault.json` and read back rather than
   recomputed?

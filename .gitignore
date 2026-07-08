@@ -9,8 +9,8 @@ coverage/
 .kb1-dev/
 
 # Legacy KB-2 local state directories can still appear during in-place upgrades.
-.kb2-docker/
-.kb2-dev/
+.kb1-docker/
+.kb1-dev/
 .DS_Store
 docs/scratch/
 .fallow/

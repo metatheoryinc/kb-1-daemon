@@ -32,8 +32,6 @@ import type {
 } from './vault-registry.js';
 
 export const ACTOR_HEADER = 'x-kb1-actor';
-// Compatibility header accepted until coordinated client/cloud header migration is complete.
-export const LEGACY_ACTOR_HEADER = 'x-kb2-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
 export interface CreateAppOptions {
@@ -99,7 +97,7 @@ export function createApp(options: CreateAppOptions): Hono {
       return context.json({
         ok: false,
         error: 'relay_not_configured',
-        message: 'Relay is not configured. Set KB1_RELAY_URL and KB1_RELAY_TOKEN before connecting. Legacy KB2_RELAY_URL/KB2_RELAY_TOKEN are still accepted.'
+        message: 'Relay is not configured. Set KB1_RELAY_URL and KB1_RELAY_TOKEN before connecting.'
       }, 409);
     }
 
@@ -120,8 +118,7 @@ export function createApp(options: CreateAppOptions): Hono {
     const mcpEndpoint = options.mcpEndpoint ?? createLocalMcpEndpoint(mcpVaultProvider(registry), {
       actorFromRequest: (request) => {
         const parsed = actorFromHeaders(
-          request.headers.get(ACTOR_HEADER) ?? undefined,
-          request.headers.get(LEGACY_ACTOR_HEADER) ?? undefined
+          request.headers.get(ACTOR_HEADER) ?? undefined
         );
         return parsed.ok ? parsed.actor : parsed;
       }
@@ -705,8 +702,7 @@ function statusForServiceError(error: ServiceErrorCode): 400 | 404 | 409 | 413 |
 
 function actorFromRequest(context: Context, actorDefault: ActorDefault): ServiceResult<{ actor: VaultActor }> {
   const parsed = actorFromHeaders(
-    context.req.header(ACTOR_HEADER),
-    context.req.header(LEGACY_ACTOR_HEADER)
+    context.req.header(ACTOR_HEADER)
   );
 
   if (!parsed.ok) return parsed;
@@ -714,14 +710,9 @@ function actorFromRequest(context: Context, actorDefault: ActorDefault): Service
 }
 
 export function actorFromHeaders(
-  rawKb1Actor: string | undefined,
-  rawLegacyKb2Actor: string | undefined
+  rawKb1Actor: string | undefined
 ): ServiceResult<{ actor?: VaultActor }> {
-  if (rawKb1Actor !== undefined) {
-    return actorFromHeader(rawKb1Actor, ACTOR_HEADER);
-  }
-
-  return actorFromHeader(rawLegacyKb2Actor, LEGACY_ACTOR_HEADER);
+  return actorFromHeader(rawKb1Actor, ACTOR_HEADER);
 }
 
 export function actorFromHeader(

@@ -72,15 +72,15 @@ describe('vault registry', () => {
       const identity = await readOrMintVaultIdentity(root, 'My Vault');
       expect(identity).toEqual({ id: 'my-vault', displayName: 'My Vault' });
 
-      const persisted = JSON.parse(await readFile(join(root, '.kb2', 'vault.json'), 'utf8'));
+      const persisted = JSON.parse(await readFile(join(root, '.kb1', 'vault.json'), 'utf8'));
       expect(persisted).toEqual({ id: 'my-vault', displayName: 'My Vault' });
     });
 
     it('reads an existing identity without overwriting it', async () => {
       const root = join(home, 'demo-vault');
-      await mkdir(join(root, '.kb2'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
       await writeFile(
-        join(root, '.kb2', 'vault.json'),
+        join(root, '.kb1', 'vault.json'),
         JSON.stringify({ id: 'custom-slug', displayName: 'Custom Name' }),
         'utf8'
       );
@@ -89,19 +89,42 @@ describe('vault registry', () => {
       expect(identity).toEqual({ id: 'custom-slug', displayName: 'Custom Name' });
     });
 
+    it('migrates legacy .kb2 metadata to .kb1 before reading identity', async () => {
+      const root = join(home, 'legacy-vault');
+      await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'legacy-slug', displayName: 'Legacy Vault' }),
+        'utf8'
+      );
+      await writeFile(join(root, '.kb2', 'folders.yml'), 'notes:\n  color: "#f97316"\n', 'utf8');
+      await writeFile(join(root, '.kb2', 'audit', 'changes.jsonl'), '{"ok":true}\n', 'utf8');
+
+      const identity = await readOrMintVaultIdentity(root, 'legacy-vault');
+
+      expect(identity).toEqual({ id: 'legacy-slug', displayName: 'Legacy Vault' });
+      await expect(readFile(join(root, '.kb1', 'vault.json'), 'utf8')).resolves.toContain('legacy-slug');
+      await expect(readFile(join(root, '.kb1', 'folders.yml'), 'utf8')).resolves.toContain('#f97316');
+      await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe('{"ok":true}\n');
+      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+
+      await expect(readOrMintVaultIdentity(root, 'legacy-vault')).resolves.toEqual(identity);
+      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+    });
+
     it('fails loudly on malformed identity', async () => {
       const root = join(home, 'broken');
-      await mkdir(join(root, '.kb2'), { recursive: true });
-      await writeFile(join(root, '.kb2', 'vault.json'), '{ not json', 'utf8');
+      await mkdir(join(root, '.kb1'), { recursive: true });
+      await writeFile(join(root, '.kb1', 'vault.json'), '{ not json', 'utf8');
 
       await expect(readOrMintVaultIdentity(root, 'broken')).rejects.toThrow(/Malformed vault identity/);
     });
 
     it('reads valid metadata and rejects malformed metadata', async () => {
       const root = join(home, 'demo-vault');
-      await mkdir(join(root, '.kb2'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
       await writeFile(
-        join(root, '.kb2', 'vault.json'),
+        join(root, '.kb1', 'vault.json'),
         JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: '#f97316' } }),
         'utf8'
       );
@@ -113,21 +136,21 @@ describe('vault registry', () => {
       });
 
       await writeFile(
-        join(root, '.kb2', 'vault.json'),
+        join(root, '.kb1', 'vault.json'),
         JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: 'coral' }),
         'utf8'
       );
       await expect(readOrMintVaultIdentity(root, 'demo-vault')).rejects.toThrow(/"metadata" must be a JSON object/);
 
       await writeFile(
-        join(root, '.kb2', 'vault.json'),
+        join(root, '.kb1', 'vault.json'),
         JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: 42 } }),
         'utf8'
       );
       await expect(readOrMintVaultIdentity(root, 'demo-vault')).rejects.toThrow(/"metadata.color" must be a string/);
 
       await writeFile(
-        join(root, '.kb2', 'vault.json'),
+        join(root, '.kb1', 'vault.json'),
         JSON.stringify({ id: 'demo-vault', displayName: 'Demo Vault', metadata: { color: 'neon' } }),
         'utf8'
       );
@@ -156,11 +179,11 @@ describe('vault registry', () => {
       const vaultsHome = join(home, 'vaults');
       const first = join(vaultsHome, 'one');
       const second = join(vaultsHome, 'two');
-      await mkdir(join(first, '.kb2'), { recursive: true });
-      await mkdir(join(second, '.kb2'), { recursive: true });
+      await mkdir(join(first, '.kb1'), { recursive: true });
+      await mkdir(join(second, '.kb1'), { recursive: true });
       const dup = JSON.stringify({ id: 'same', displayName: 'Same' });
-      await writeFile(join(first, '.kb2', 'vault.json'), dup, 'utf8');
-      await writeFile(join(second, '.kb2', 'vault.json'), dup, 'utf8');
+      await writeFile(join(first, '.kb1', 'vault.json'), dup, 'utf8');
+      await writeFile(join(second, '.kb1', 'vault.json'), dup, 'utf8');
 
       await expect(discoverVaults(vaultsHome)).rejects.toThrow(/Duplicate vault slug "same"/);
     });
@@ -249,7 +272,7 @@ describe('vault registry', () => {
       expect(created).toEqual({ ok: true, vault: { id: 'my-notes', displayName: 'My Notes' } });
 
       // Filesystem is the source of truth: the folder and minted identity exist.
-      const identity = JSON.parse(await readFile(join(vaultsHome, 'my-notes', '.kb2', 'vault.json'), 'utf8'));
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'my-notes', '.kb1', 'vault.json'), 'utf8'));
       expect(identity).toEqual({ id: 'my-notes', displayName: 'My Notes' });
 
       // It is immediately listable and servable from the in-memory registry.
@@ -366,7 +389,7 @@ describe('vault registry', () => {
       // the new display name.
       expect(registry.get('original')).toBeDefined();
       expect(registry.list()).toContainEqual({ id: 'original', displayName: 'Renamed' });
-      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb2', 'vault.json'), 'utf8'));
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb1', 'vault.json'), 'utf8'));
       expect(identity).toEqual({ id: 'original', displayName: 'Renamed' });
 
       await registry.close();
@@ -384,7 +407,7 @@ describe('vault registry', () => {
         vault: { id: 'original', displayName: 'Renamed', metadata: { color: '#0ea5e9' } }
       });
 
-      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb2', 'vault.json'), 'utf8'));
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'original', '.kb1', 'vault.json'), 'utf8'));
       expect(identity).toEqual({ id: 'original', displayName: 'Renamed', metadata: { color: '#0ea5e9' } });
 
       await registry.close();
@@ -480,7 +503,7 @@ describe('vault registry', () => {
         displayName: 'Design Notes',
         metadata: { color: '#a855f7' }
       });
-      await expect(readFile(join(vaultsHome, 'design-notes', '.kb2', 'vault.json'), 'utf8')).resolves.toContain(
+      await expect(readFile(join(vaultsHome, 'design-notes', '.kb1', 'vault.json'), 'utf8')).resolves.toContain(
         '"metadata"'
       );
       expect(events).toContainEqual(expect.objectContaining({
@@ -519,7 +542,7 @@ describe('vault registry', () => {
 
       const cleared = await registry.setMetadata('design-notes', { color: null }, { kind: 'user' });
       expect(cleared).toEqual({ ok: true, vault: { id: 'design-notes', displayName: 'Design Notes' } });
-      const identity = JSON.parse(await readFile(join(vaultsHome, 'design-notes', '.kb2', 'vault.json'), 'utf8'));
+      const identity = JSON.parse(await readFile(join(vaultsHome, 'design-notes', '.kb1', 'vault.json'), 'utf8'));
       expect(identity).toEqual({ id: 'design-notes', displayName: 'Design Notes' });
 
       unsubscribe();

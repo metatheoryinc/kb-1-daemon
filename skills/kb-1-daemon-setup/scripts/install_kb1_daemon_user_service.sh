@@ -8,9 +8,9 @@ set -euo pipefail
 # Defaults:
 #   KB1_REPO_URL=https://github.com/metatheoryinc/kb-1-daemon.git
 #   KB1_REPO_DIR=$HOME/repos/kb-1-daemon
-#   KB1_HOME=$HOME/.kb1              # existing $HOME/.kb2 is used if $HOME/.kb1 is absent
-#   KB1_HOST=127.0.0.1               # legacy KB2_HOST is accepted as fallback
-#   KB1_PORT=7382                    # legacy KB2_PORT is accepted as fallback
+#   KB1_HOME=$HOME/.kb1
+#   KB1_HOST=127.0.0.1
+#   KB1_PORT=7382
 #   KB1_RUN_CHECKS=1
 #   KB1_TAILSCALE_MODE=local-only        # local-only|auto|serve
 #   KB1_CONFIRM_TAILSCALE_EXPOSURE=0     # must be 1 for auto/serve
@@ -27,27 +27,12 @@ resolve_kb1_home_default() {
     return 0
   fi
 
-  if [ -n "${KB2_HOME:-}" ]; then
-    printf '%s\n' "$KB2_HOME"
-    return 0
-  fi
-
-  if [ -d "$HOME/.kb2" ] && [ ! -e "$HOME/.kb1" ]; then
-    printf '%s\n' "$HOME/.kb2"
-    return 0
-  fi
-
   printf '%s\n' "$HOME/.kb1"
 }
 
 resolve_linux_service_name_default() {
   if [ -n "${KB1_SERVICE_NAME:-}" ]; then
     printf '%s\n' "$KB1_SERVICE_NAME"
-    return 0
-  fi
-
-  if [ -f "$HOME/.config/systemd/user/kb2d.service" ] && [ ! -f "$HOME/.config/systemd/user/kb1d.service" ]; then
-    printf '%s\n' "kb2d.service"
     return 0
   fi
 
@@ -60,19 +45,14 @@ resolve_macos_label_default() {
     return 0
   fi
 
-  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb2d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
-    printf '%s\n' "dev.metatheory.kb1.kb2d"
-    return 0
-  fi
-
   printf '%s\n' "dev.metatheory.kb1.kb1d"
 }
 
 REPO_URL="${KB1_REPO_URL:-https://github.com/metatheoryinc/kb-1-daemon.git}"
 REPO_DIR="${KB1_REPO_DIR:-$HOME/repos/kb-1-daemon}"
 KB1_HOME="$(resolve_kb1_home_default)"
-KB1_HOST="${KB1_HOST:-${KB2_HOST:-127.0.0.1}}"
-KB1_PORT="${KB1_PORT:-${KB2_PORT:-7382}}"
+KB1_HOST="${KB1_HOST:-127.0.0.1}"
+KB1_PORT="${KB1_PORT:-7382}"
 RUN_CHECKS="${KB1_RUN_CHECKS:-1}"
 CONFIRM_NON_LOOPBACK_BIND="${KB1_CONFIRM_NON_LOOPBACK_BIND:-0}"
 TAILSCALE_MODE="${KB1_TAILSCALE_MODE:-local-only}"

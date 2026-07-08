@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAppState } from './store';
+import { createAppState, DEFAULT_PERSIST_KEY } from './store';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { dump: () => string | null } {
   let value: string | null = null;
@@ -48,7 +48,7 @@ describe('railCollapsed slice', () => {
 
   it('ignores a non-boolean persisted value', () => {
     const storage = memoryStorage();
-    storage.setItem('kb2:app-state', JSON.stringify({ railCollapsed: 'yes' }));
+    storage.setItem(DEFAULT_PERSIST_KEY, JSON.stringify({ railCollapsed: 'yes' }));
     expect(createAppState({ storage }).getState().railCollapsed).toBe(true);
   });
 });

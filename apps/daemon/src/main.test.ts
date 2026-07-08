@@ -43,32 +43,35 @@ describe('daemon startup', () => {
     await close(blocker);
   });
 
-  it('starts from deprecated KB2_* env vars and reports one startup notice per variable', async () => {
+  it('ignores KB2_* env vars during startup', async () => {
     const port = await reservePort();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ignoredHome = join(kb1Home, 'ignored-kb2-home');
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb1Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port),
+      KB2_HOME: ignoredHome,
+      KB2_HOST: '0.0.0.0',
+      KB2_PORT: '1'
     };
 
     const started = await startDaemon();
 
     expect(started.config.kb1Home).toBe(kb1Home);
+    expect(started.config.host).toBe('127.0.0.1');
+    expect(started.config.port).toBe(port);
     expect(started.config.serviceName).toBe('kb1d');
     await expect(readFile(join(kb1Home, 'daemon', 'status.json'), 'utf8')).resolves.toContain('"kb1Home"');
-    expect(warnSpy.mock.calls.map(([message]) => String(message))).toEqual([
-      '[kb1d] KB2_HOME is deprecated; use KB1_HOME instead.',
-      '[kb1d] KB2_HOST is deprecated; use KB1_HOST instead.',
-      '[kb1d] KB2_PORT is deprecated; use KB1_PORT instead.'
-    ]);
+    await expect(access(ignoredHome)).rejects.toBeTruthy();
+    expect(warnSpy).not.toHaveBeenCalled();
 
     await started.close();
     warnSpy.mockRestore();
   });
 
-  it('recognizes installed kb1d and kb2d symlink bins as daemon entrypoints', async () => {
+  it('recognizes the installed kb1d symlink bin as a daemon entrypoint', async () => {
     const installRoot = await mkdtemp(join(tmpdir(), 'kb1-bin-entrypoint-'));
     try {
       const distDir = join(installRoot, 'node_modules', '@kb-1', 'daemon', 'dist');
@@ -78,11 +81,9 @@ describe('daemon startup', () => {
       const entrypoint = join(distDir, 'main.js');
       await writeFile(entrypoint, '#!/usr/bin/env node\n', 'utf8');
 
-      for (const bin of ['kb1d', 'kb2d']) {
-        const binPath = join(binDir, bin);
-        await symlink(entrypoint, binPath);
-        expect(isDaemonCliEntrypoint(pathToFileURL(entrypoint).href, binPath)).toBe(true);
-      }
+      const binPath = join(binDir, 'kb1d');
+      await symlink(entrypoint, binPath);
+      expect(isDaemonCliEntrypoint(pathToFileURL(entrypoint).href, binPath)).toBe(true);
     } finally {
       await rm(installRoot, { force: true, recursive: true });
     }
@@ -253,6 +254,49 @@ describe('daemon boot migration', () => {
     }
   }
 
+  it('migrates a legacy .kb2 daemon home to .kb1 on boot and is idempotent', async () => {
+    const homeDir = join(kb1Home, 'user-home');
+    const legacyHome = join(homeDir, '.kb2');
+    const migratedHome = join(homeDir, '.kb1');
+    const legacyVaultRoot = join(legacyHome, 'vaults', 'demo-vault');
+    await mkdir(join(legacyHome, 'daemon'), { recursive: true });
+    await writeFile(join(legacyHome, 'daemon', 'legacy-marker.txt'), 'legacy daemon data\n', 'utf8');
+    await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
+    await writeFile(join(legacyVaultRoot, 'notes', 'from-old-home.md'), 'from old home\n', 'utf8');
+
+    const firstPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(firstPort)
+    };
+
+    const firstBoot = await startDaemon({ homeDir });
+    expect(firstBoot.config.kb1Home).toBe(migratedHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(migratedHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
+      'legacy daemon data\n'
+    );
+    await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
+      'from old home\n'
+    );
+    await firstBoot.close();
+
+    const secondPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(secondPort)
+    };
+    const secondBoot = await startDaemon({ homeDir });
+    expect(secondBoot.config.kb1Home).toBe(migratedHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
+      'from old home\n'
+    );
+    await secondBoot.close();
+  });
+
   it('migrates a legacy single-vault layout into the registry layout on boot, preserving every note', async () => {
     await seedLegacyLayout();
 
@@ -277,7 +321,7 @@ describe('daemon boot migration', () => {
     }
 
     // A durable vault identity was minted with a non-empty slug and display name.
-    const identity = JSON.parse(await readFile(join(vaultRoot, '.kb2', 'vault.json'), 'utf8'));
+    const identity = JSON.parse(await readFile(join(vaultRoot, '.kb1', 'vault.json'), 'utf8'));
     expect(typeof identity).toBe('object');
     expect(identity).not.toBeNull();
     expect(identity.id).toBe('demo-vault');
@@ -300,7 +344,7 @@ describe('daemon boot migration', () => {
 
     const firstBoot = await startDaemon();
     const vaultRoot = firstBoot.config.vaultRoot;
-    const identityFile = join(vaultRoot, '.kb2', 'vault.json');
+    const identityFile = join(vaultRoot, '.kb1', 'vault.json');
     const identityAfterFirstBoot = await readFile(identityFile, 'utf8');
     const contentsAfterFirstBoot = await Promise.all(
       SEEDED_NOTES.map((note) => readFile(join(vaultRoot, note.path), 'utf8'))
@@ -386,7 +430,7 @@ describe('daemon vault management API', () => {
 
     // A real, valid empty vault landed on disk with minted identity.
     const identity = JSON.parse(
-      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(identity).toEqual({ id: 'field-notes', displayName: 'Field Notes' });
 
@@ -413,7 +457,7 @@ describe('daemon vault management API', () => {
     // The on-disk folder did not move; only identity changed.
     await expect(access(join(kb1Home, 'vaults', 'field-notes'))).resolves.toBeUndefined();
     const renamedIdentity = JSON.parse(
-      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(renamedIdentity).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
 
@@ -425,7 +469,7 @@ describe('daemon vault management API', () => {
     await expect(access(join(kb1Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
     // The data still exists under the home-level trash (never hard-deleted).
     const trashed = JSON.parse(
-      await readFile(join(kb1Home, '.trash', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, '.trash', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(trashed).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
 

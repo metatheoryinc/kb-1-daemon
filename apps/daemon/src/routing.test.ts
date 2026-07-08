@@ -683,13 +683,13 @@ describe("daemon routing", () => {
     });
   });
 
-  it("accepts the legacy x-kb2-actor header for existing clients", async () => {
+  it("ignores the legacy x-kb2-actor header", async () => {
     const { app } = await setupScopedVault();
     const legacyActor = {
       kind: "integration",
       id: "legacy-client",
       name: "Legacy Client",
-      client: "kb2-client",
+      client: "kb1-client",
     };
 
     const created = await app.request(filePath("notes/legacy-actor.md"), {
@@ -704,11 +704,11 @@ describe("daemon routing", () => {
     expect(created.status).toBe(201);
     await expect(created.json()).resolves.toMatchObject({
       ok: true,
-      audit: { actor: legacyActor },
+      audit: { actor: { kind: "user" } },
     });
   });
 
-  it("prefers x-kb1-actor when both actor headers are supplied", async () => {
+  it("uses x-kb1-actor for request attribution", async () => {
     const { app } = await setupScopedVault();
     const kb1Actor = {
       kind: "integration",
@@ -716,19 +716,12 @@ describe("daemon routing", () => {
       name: "KB-1 Client",
       client: "kb1-client",
     };
-    const legacyActor = {
-      kind: "integration",
-      id: "legacy-client",
-      name: "Legacy Client",
-      client: "kb2-client",
-    };
 
     const created = await app.request(filePath("notes/actor-precedence.md"), {
       method: "PUT",
       headers: {
         "content-type": "text/plain",
         "x-kb1-actor": JSON.stringify(kb1Actor),
-        "x-kb2-actor": JSON.stringify(legacyActor),
       },
       body: "actor precedence\n",
     });
@@ -836,7 +829,7 @@ describe("daemon routing", () => {
       stat(join(vaultRoot, "notes/rejected.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      stat(join(vaultRoot, ".kb2/audit/changes.jsonl")),
+      stat(join(vaultRoot, ".kb1/audit/changes.jsonl")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -1082,7 +1075,7 @@ describe("daemon routing", () => {
       });
 
       const identity = JSON.parse(
-        await readFile(join(vaultRoot, ".kb2", "vault.json"), "utf8"),
+        await readFile(join(vaultRoot, ".kb1", "vault.json"), "utf8"),
       );
       expect(identity).toMatchObject({
         id: VAULT,
@@ -1165,7 +1158,7 @@ describe("daemon routing", () => {
     });
 
     await writeFileWithParents(
-      join(vaultRoot, ".kb2", "folders.yml"),
+      join(vaultRoot, ".kb1", "folders.yml"),
       "folders: [",
     );
     const malformed = await app.request(`${folderPath("notes")}/metadata`);
@@ -1916,7 +1909,7 @@ describe("daemon routing", () => {
         message,
       });
       await expect(
-        stat(join(vaultRoot, ".kb2/audit/changes.jsonl")),
+        stat(join(vaultRoot, ".kb1/audit/changes.jsonl")),
       ).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
@@ -1936,7 +1929,7 @@ describe("daemon routing", () => {
       message: "to must be a string",
     });
     await expect(
-      stat(join(vaultRoot, ".kb2/audit/changes.jsonl")),
+      stat(join(vaultRoot, ".kb1/audit/changes.jsonl")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -1977,7 +1970,7 @@ describe("daemon routing", () => {
       "before\nneedle here\nafter\n",
     );
     await writeFileWithParents(
-      join(vaultRoot, ".kb2/trash/hidden.md"),
+      join(vaultRoot, ".kb1/trash/hidden.md"),
       "needle hidden\n",
     );
     const search = await app.request(
@@ -2562,7 +2555,7 @@ async function readAuditRows(
   root: string,
 ): Promise<Array<Record<string, unknown>>> {
   const content = await readFile(
-    join(root, ".kb2/audit/changes.jsonl"),
+    join(root, ".kb1/audit/changes.jsonl"),
     "utf8",
   );
   return content
@@ -2572,7 +2565,7 @@ async function readAuditRows(
 }
 
 async function readRawFolderMetadata(root: string): Promise<string> {
-  return readFile(join(root, ".kb2/folders.yml"), "utf8");
+  return readFile(join(root, ".kb1/folders.yml"), "utf8");
 }
 
 async function writeFileWithParents(

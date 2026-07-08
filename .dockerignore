@@ -5,8 +5,8 @@ dist/
 node_modules/
 .kb1-docker/
 .kb1-dev/
-.kb2-docker/
-.kb2-dev/
+.kb1-docker/
+.kb1-dev/
 apps/*/dist/
 apps/*/node_modules/
 packages/*/dist/

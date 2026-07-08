@@ -8,7 +8,7 @@ export const MESSAGE_ACKED_SYNC_UPDATE = 3;
 export const MESSAGE_SYNC_UPDATE_ACK = 4;
 export const MESSAGE_ATTRIBUTED_SYNC_UPDATE = 5;
 
-const DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN = Symbol('kb2.document-update-attribution-origin');
+const DOCUMENT_UPDATE_ATTRIBUTION_ORIGIN = Symbol('kb1.document-update-attribution-origin');
 
 export type DocumentSessionEventKind =
   | 'content-persisted'

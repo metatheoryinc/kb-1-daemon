@@ -43,8 +43,8 @@ export function validateVaultPath(input: string, kind: VaultPathKind): string {
     if (segment.length > MAX_SEGMENT_LENGTH) {
       throw new InvalidPathError(input, `segment exceeds ${MAX_SEGMENT_LENGTH} chars`);
     }
-    if (segment === '.kb2') {
-      throw new InvalidPathError(input, '.kb2 is reserved for vault metadata');
+    if (segment === '.kb1') {
+      throw new InvalidPathError(input, '.kb1 is reserved for vault metadata');
     }
   }
 

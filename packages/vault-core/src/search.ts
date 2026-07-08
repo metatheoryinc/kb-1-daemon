@@ -120,8 +120,8 @@ function vaultPath(root: string, relPath: string): string {
 }
 
 function isExcludedSearchPath(relPath: string): boolean {
-  return relPath === '.kb2' ||
-    relPath.startsWith('.kb2/') ||
+  return relPath === '.kb1' ||
+    relPath.startsWith('.kb1/') ||
     relPath === 'trash' ||
     relPath.startsWith('trash/');
 }

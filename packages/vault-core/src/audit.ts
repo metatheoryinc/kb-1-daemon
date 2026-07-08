@@ -86,7 +86,7 @@ async function writeAuditEntry(input: AuditInput): Promise<AuditEntry> {
     ...(input.toPath !== undefined ? { toPath: input.toPath } : {}),
     summary: input.summary
   };
-  const dir = path.join(input.root, '.kb2', 'audit');
+  const dir = path.join(input.root, '.kb1', 'audit');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, 'changes.jsonl'), `${JSON.stringify(entry)}\n`, 'utf8');
   return entry;

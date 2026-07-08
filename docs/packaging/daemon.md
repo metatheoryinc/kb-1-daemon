@@ -5,9 +5,8 @@ same local service can run from pnpm, Docker, or a future npm CLI package.
 
 ## Public Naming
 
-The product is **KB-1 Local**. New installs should use `KB1_*` environment
-variables, `~/.kb1`, `@kb-1/*` packages, and the `kb1d` binary. `KB2_*`,
-`~/.kb2`, and `kb2d` remain compatibility surfaces for existing deployments.
+The product is **KB-1 Local**. Installs use `KB1_*` environment variables,
+`~/.kb1`, `@kb-1/*` packages, and the `kb1d` binary.
 
 ## Local Development
 
@@ -24,9 +23,9 @@ The daemon reads configuration from environment variables owned by KB-1 code:
 - `KB1_PORT`: HTTP port, defaulting to `7382`
 - `KB1_WEB_PROXY_TARGET`: optional dev-only Vite target for non-API UI requests
 
-For in-place upgrades, the daemon still honors the legacy `KB2_*` equivalents
-with a startup deprecation notice. If `~/.kb2` exists and `~/.kb1` does not, the
-daemon uses the existing `~/.kb2` home rather than orphaning data.
+For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
+The daemon does not honor `KB2_*` environment variables; runtime configuration is
+KB1-only.
 
 The root `.env` only disables Nx implicit env loading with
 `NX_LOAD_DOT_ENV_FILES=false`; runtime env loading remains explicit.
@@ -81,17 +80,9 @@ container. The daemon status file is therefore visible at:
 .kb1-docker/daemon/status.json
 ```
 
-For in-place upgrades from the old Compose default, `pnpm docker:up` detects an
-existing non-empty `.kb2-docker/` directory when `.kb1-docker/` is absent and
-uses that directory at `/data/kb2` instead. To choose explicitly:
-
-```bash
-KB1_DOCKER_HOST_HOME=./.kb2-docker KB1_DOCKER_CONTAINER_HOME=/data/kb2 pnpm docker:up
-```
-
-The image entrypoint has the same direct-container compatibility behavior: if
-the default `/data/kb1` home is empty and `/data/kb2` has data, it starts with
-`KB1_HOME=/data/kb2`. Set `KB1_HOME` to override this detection.
+For in-place upgrades from the old Docker data path, keep the legacy data mounted
+at `/data/kb2` for the first boot and keep `KB1_HOME=/data/kb1`. The daemon
+copies, verifies, and removes the legacy input before running from `/data/kb1`.
 
 Compose builds the daemon image and runs the compiled `dist/main.js` inside the
 container. Source is copied into the image during `docker compose up --build`;
@@ -133,11 +124,11 @@ docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 kb-1-daemon
 The container defaults `KB1_HOME` to `/data/kb1` and writes daemon status to
 `/data/kb1/daemon/status.json`.
 
-Legacy direct-image deployments that mounted data at `/data/kb2` can keep that
-mount for upgrade:
+Legacy direct-image deployments that mounted data at `/data/kb2` can mount both
+paths for one upgrade boot:
 
 ```bash
-docker run --rm -p 7382:7382 -v kb2-home:/data/kb2 kb-1-daemon
+docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 -v kb2-home:/data/kb2 kb-1-daemon
 ```
 
 ## npm CLI
@@ -148,13 +139,12 @@ The daemon package reserves the future CLI binary name:
 {
   "bin": {
     "kb1d": "./dist/main.js",
-    "kb2d": "./dist/main.js"
+    "kb1d": "./dist/main.js"
   }
 }
 ```
 
-`kb2d` is a compatibility alias for existing service definitions. Publishing is
-deferred. The supported public setup path is `git clone` plus the
+Publishing is deferred. The supported public setup path is `git clone` plus the
 setup skill while packaging is hardened. Packaging hardening should make
 `@kb-1/daemon` publishable, add provenance/signing rules, define whether the
 open-source package publishes from this package directly or from a dedicated

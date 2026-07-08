@@ -532,9 +532,9 @@ async function writeDefaultGitignore(root: string): Promise<void> {
   const gitignorePath = path.join(root, GITIGNORE_RELATIVE_PATH);
   const content = [
     "# Managed by KB-1 daemon history.",
-    ".kb2/cache/",
-    ".kb2/runtime/",
-    ".kb2/tmp/",
+    ".kb1/cache/",
+    ".kb1/runtime/",
+    ".kb1/tmp/",
     "",
   ].join("\n");
   try {

@@ -89,7 +89,7 @@ describe('OneFileDocumentSession', () => {
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, 'stable\n', 'utf8');
 
-    const invalidStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'invalid.json');
+    const invalidStateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'invalid.json');
     await mkdir(dirname(invalidStateFilePath), { recursive: true });
     await writeFile(invalidStateFilePath, '{not-json', 'utf8');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -107,7 +107,7 @@ describe('OneFileDocumentSession', () => {
 
     const mismatchedDoc = new Y.Doc();
     mismatchedDoc.getText('markdown').insert(0, 'different\n');
-    const mismatchedStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'mismatched.json');
+    const mismatchedStateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'mismatched.json');
     const mismatchedUpdateBase64 = Buffer.from(Y.encodeStateAsUpdate(mismatchedDoc)).toString('base64');
     await writeFile(mismatchedStateFilePath, JSON.stringify({
       version: 1,
@@ -121,7 +121,7 @@ describe('OneFileDocumentSession', () => {
     expect(mismatchedStateSession.ydoc.getText('markdown').toString()).toBe('stable\n');
     await mismatchedStateSession.close();
 
-    const staleStateFilePath = join(kb1Home, '.kb2', 'doc-session-state', 'stale.json');
+    const staleStateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'stale.json');
     await writeFile(staleStateFilePath, JSON.stringify({
       version: 1,
       contentHash: createHash('sha256').update('old\n').digest('hex'),

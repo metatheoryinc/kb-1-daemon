@@ -37,7 +37,7 @@ export function createKbQueryClient(options: KbQueryClientOptions = {}): KbQuery
 
   const persister: Persister = createAsyncStoragePersister({
     storage: localforage,
-    key: 'kb2-query-cache',
+    key: 'kb1-query-cache',
     retry: removeOldestQuery,
     serialize: (persistedClient) => JSON.stringify(trimPersistedClient(persistedClient)),
   });

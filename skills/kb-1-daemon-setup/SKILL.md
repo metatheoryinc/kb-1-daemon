@@ -9,7 +9,7 @@ Use this skill to install or repair the open-source KB-1 local daemon, verify it
 
 Release posture: the daemon is local-first and local-only by default. It currently has no application authentication or authorization. Keep it bound to loopback unless the user explicitly approves private-network exposure and understands that any tailnet device allowed by ACLs can read and write through the daemon.
 
-Naming reality: the public product and repo internals now use KB-1 names. Existing `KB2_*` env vars, `~/.kb2` homes, `kb2d`, `kb2d.service`, and `dev.metatheory.kb1.kb2d` remain compatibility surfaces for upgrades.
+Naming reality: the public product and repo internals use KB-1 names: `KB1_*` env vars, `~/.kb1` homes, `kb1d`, `kb1d.service`, and `dev.metatheory.kb1.kb1d`.
 
 ## Safety Rules
 
@@ -43,9 +43,9 @@ command -v node pnpm corepack git curl systemctl launchctl tailscale claude code
 node --version 2>/dev/null || true
 pnpm --version 2>/dev/null || true
 systemctl --user status kb1d.service --no-pager 2>/dev/null || true
-systemctl --user status kb2d.service --no-pager 2>/dev/null || true
+systemctl --user status kb1d.service --no-pager 2>/dev/null || true
 launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb1d" 2>/dev/null || true
-launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb2d" 2>/dev/null || true
+launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb1d" 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/health 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/vaults 2>/dev/null || true
 tailscale status 2>/dev/null || true
@@ -67,9 +67,9 @@ Defaults:
 - macOS service: user LaunchAgent `dev.metatheory.kb1.kb1d`
 - MCP endpoint: `http://127.0.0.1:7382/mcp`
 
-For in-place upgrades, the installer uses existing `$HOME/.kb2` daemon data if
-`$HOME/.kb1` does not exist. Existing `kb2d.service` and
-`dev.metatheory.kb1.kb2d` service definitions are also detected and updated in
+For in-place upgrades, the installer uses existing `$HOME/.kb1` daemon data if
+`$HOME/.kb1` does not exist. Existing `kb1d.service` and
+`dev.metatheory.kb1.kb1d` service definitions are also detected and updated in
 place when the new KB-1 service file is not present. Set `KB1_HOME`,
 `KB1_SERVICE_NAME`, or `KB1_LAUNCHD_LABEL` to choose explicitly.
 
@@ -124,7 +124,7 @@ curl -fsS http://127.0.0.1:7382/api/vaults
 
 ## Existing Vault Or Obsidian Copy
 
-The daemon discovers vaults under `$KB1_HOME/vaults/`. Each vault folder gets identity at the legacy internal metadata path `<vault>/.kb2/vault.json`:
+The daemon discovers vaults under `$KB1_HOME/vaults/`. Each vault folder gets identity at the legacy internal metadata path `<vault>/.kb1/vault.json`:
 
 ```json
 {
@@ -140,7 +140,7 @@ If the user has an existing Markdown/Obsidian folder:
 3. Preserve Obsidian in place unless the user explicitly asks to remove it.
 4. Refuse source vaults with symlinks by default; the daemon follows filesystem symlinks, so copied links can expose files outside the vault.
 5. Exclude volatile Obsidian workspace files by default.
-6. Restart or start `kb1d` (`kb2d` is still accepted), then verify `GET /api/vaults` shows the expected id.
+6. Restart or start `kb1d` (`kb1d` is still accepted), then verify `GET /api/vaults` shows the expected id.
 
 Safe copy pattern:
 
@@ -201,8 +201,8 @@ command -v node >/dev/null 2>&1 || {
 
 mkdir -p "$target"
 rsync -rt --exclude='.git' --exclude='.obsidian/workspace*' "$source_vault"/ "$target"/
-mkdir -p "$target/.kb2"
-node - "$target/.kb2/vault.json" "$slug" "$display_name" <<'JS'
+mkdir -p "$target/.kb1"
+node - "$target/.kb1/vault.json" "$slug" "$display_name" <<'JS'
 const fs = require('node:fs');
 const [identityPath, id, displayName] = process.argv.slice(2);
 fs.writeFileSync(identityPath, `${JSON.stringify({ id, displayName }, null, 2)}\n`);
@@ -304,7 +304,7 @@ MCP smoke once tools are loaded:
 - Port 7382 busy: identify the process, or set `KB1_PORT` in the service and update MCP/Tailscale URLs to match.
 - Linux `systemctl --user` fails in a container: install/run on the host OS or use the foreground run path.
 - Linux service stops after logout: ask before enabling lingering with `sudo loginctl enable-linger "$USER"`.
-- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb1d`; use `dev.metatheory.kb1.kb2d` only for legacy LaunchAgent upgrades.
+- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb1d`; use `dev.metatheory.kb1.kb1d` only for legacy LaunchAgent upgrades.
 - Tailscale not installed or logged in: keep KB-1 local-only and give the user Tailscale setup steps.
 - Tailscale Serve already has unrelated routes: do not overwrite in auto mode; require explicit approval and a chosen port.
 - UI works but agents cannot edit: check the MCP URL, restart the client, and ensure every data tool call includes `vaultId`.

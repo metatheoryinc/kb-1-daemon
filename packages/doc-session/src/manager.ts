@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { OneFileDocumentSession, type DocumentSessionEventHandler, type OneFileDocumentSessionOptions } from './session.js';
 
 export const DEFAULT_IDLE_SESSION_GRACE_MS = 30_000;
-const DOCUMENT_SESSION_STATE_DIR = '.kb2/doc-session-state';
+const DOCUMENT_SESSION_STATE_DIR = '.kb1/doc-session-state';
 
 export interface DocumentSessionManagerOptions extends OneFileDocumentSessionOptions {
   root: string;

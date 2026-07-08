@@ -7,14 +7,13 @@ import type { VaultChangeEventKind } from '@kb-1/vault-service';
 import { realpathSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-1/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import {
   ACTOR_HEADER,
-  LEGACY_ACTOR_HEADER,
   actorFromHeaders,
   createApp,
   mcpVaultProvider,
@@ -22,10 +21,14 @@ import {
 } from './app.js';
 import {
   createDaemonConfig,
+  DEFAULT_KB1_HOME_DIRNAME,
   DEFAULT_VAULT_SLUG,
+  LEGACY_KB2_HOME_DIRNAME,
   LEGACY_VAULT_DIRNAME,
-  type DaemonConfig
+  type DaemonConfig,
+  type ResolveConfigOptions
 } from './config.js';
+import { migrateDirectoryCopyVerifyCleanup } from './migrations.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
 import {
   migrateLegacyVaultLayout,
@@ -53,12 +56,16 @@ export interface StartedDaemon {
   close: () => Promise<void>;
 }
 
-export async function startDaemon(): Promise<StartedDaemon> {
-  const config = createDaemonConfig();
+export type StartDaemonOptions = ResolveConfigOptions;
+
+export async function startDaemon(options: StartDaemonOptions = {}): Promise<StartedDaemon> {
+  const config = createDaemonConfig(options);
 
   for (const warning of config.deprecationWarnings) {
     console.warn(`[${config.serviceName}] ${warning}`);
   }
+
+  await migrateLegacyDaemonHome(config.kb1Home);
 
   // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
   await migrateLegacyVaultLayout({
@@ -202,6 +209,27 @@ export async function startDaemon(): Promise<StartedDaemon> {
   });
 }
 
+async function migrateLegacyDaemonHome(kb1Home: string): Promise<void> {
+  const legacyHome = legacyDaemonHomeFor(kb1Home);
+  if (!legacyHome) return;
+
+  await migrateDirectoryCopyVerifyCleanup({
+    source: legacyHome,
+    target: kb1Home
+  });
+}
+
+function legacyDaemonHomeFor(kb1Home: string): string | undefined {
+  const leaf = basename(kb1Home);
+  if (leaf === DEFAULT_KB1_HOME_DIRNAME) {
+    return join(dirname(kb1Home), LEGACY_KB2_HOME_DIRNAME);
+  }
+  if (leaf === 'kb1') {
+    return join(dirname(kb1Home), 'kb2');
+  }
+  return undefined;
+}
+
 function createRelayLifecycleController(
   config: DaemonConfig,
   registry: VaultRegistry
@@ -309,8 +337,7 @@ function documentUpdateAttributionFromRequest(
   request: IncomingMessage
 ): { ok: true; attribution?: DocumentUpdateAttribution } | { ok: false } {
   const parsed = actorFromHeaders(
-    firstHeaderValue(request.headers[ACTOR_HEADER]),
-    firstHeaderValue(request.headers[LEGACY_ACTOR_HEADER])
+    firstHeaderValue(request.headers[ACTOR_HEADER])
   );
   if (!parsed.ok) return { ok: false };
   return {

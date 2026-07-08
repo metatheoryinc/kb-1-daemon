@@ -39,12 +39,12 @@ concepts unless a future local collaboration mode explicitly adds them.
 ## Filesystem Canonical Model
 
 The filesystem is canonical. On startup, the server can bootstrap from Markdown,
-images, attachments, and `.kb2` metadata. It may eagerly rebuild indexes and
+images, attachments, and `.kb1` metadata. It may eagerly rebuild indexes and
 document runtime state, or it may do so lazily as files are requested.
 
 Yjs state is runtime state. It exists so active edits can be conflict-free and
 multi-author. It is not the durable source of truth. If only the Markdown files
-and durable `.kb2` metadata are restored, the server should be able to serve the
+and durable `.kb1` metadata are restored, the server should be able to serve the
 vault again.
 
 ## Service-Mediated Writes
@@ -106,7 +106,7 @@ The local server should maintain an append-only product audit log. Daily JSONL
 files are a good default:
 
 ```text
-.kb2/audit/
+.kb1/audit/
   2026-06-10.jsonl
   2026-06-11.jsonl
 ```

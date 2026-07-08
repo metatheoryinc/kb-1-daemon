@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${KB1_PORT:-${KB2_PORT:-7382}}"
-HOST="${KB1_HOST:-${KB2_HOST:-127.0.0.1}}"
+PORT="${KB1_PORT:-7382}"
+HOST="${KB1_HOST:-127.0.0.1}"
 BASE="http://$HOST:$PORT"
 VAULT_ID="${KB1_VAULT_ID:-}"
 FLUSH_VAULT="${KB1_FLUSH_VAULT:-0}"
@@ -15,11 +15,6 @@ resolve_linux_service_name_default() {
     return 0
   fi
 
-  if [ -f "$HOME/.config/systemd/user/kb2d.service" ] && [ ! -f "$HOME/.config/systemd/user/kb1d.service" ]; then
-    printf '%s\n' "kb2d.service"
-    return 0
-  fi
-
   printf '%s\n' "kb1d.service"
 }
 
@@ -29,8 +24,8 @@ resolve_macos_label_default() {
     return 0
   fi
 
-  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb2d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
-    printf '%s\n' "dev.metatheory.kb1.kb2d"
+  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
+    printf '%s\n' "dev.metatheory.kb1.kb1d"
     return 0
   fi
 

@@ -144,7 +144,7 @@ export type FolderMetadataMap = Record<string, FolderMetadata>;
 
 const DEFAULT_DEPTH = 10;
 const DEFAULT_ENTRY_CAP = 5000;
-const FOLDER_METADATA_RELATIVE_PATH = path.posix.join(".kb2", "folders.yml");
+const FOLDER_METADATA_RELATIVE_PATH = path.posix.join(".kb1", "folders.yml");
 const folderMetadataMutationQueues = new Map<string, Promise<void>>();
 
 function ignoreMutationQueueResult(): void {
@@ -202,7 +202,7 @@ function folderMetadataPath(root: string): string {
 
 function trashRelativePath(originalPath: string): string {
   return path.posix.join(
-    ".kb2",
+    ".kb1",
     "trash",
     new Date().toISOString(),
     originalPath,
@@ -211,8 +211,8 @@ function trashRelativePath(originalPath: string): string {
 
 function isHiddenMetadataPath(relPath: string): boolean {
   return (
-    relPath === ".kb2" ||
-    relPath.startsWith(".kb2/") ||
+    relPath === ".kb1" ||
+    relPath.startsWith(".kb1/") ||
     relPath === ".git" ||
     relPath.startsWith(".git/")
   );

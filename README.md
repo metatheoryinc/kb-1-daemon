@@ -21,8 +21,8 @@ pnpm dev     # one command: web UI + API behind one daemon port
 | Storybook | http://localhost:6006 | `pnpm storybook`; pass `-p <port>` if 6006 is taken |
 
 Port/env overrides: `KB1_PORT` (daemon), `KB1_WEB_PORT` (internal Vite dev
-server), `KB1_HOME` (daemon state directory, defaults to `~/.kb1`). Existing
-`KB2_*` overrides and `~/.kb2` homes are still accepted for in-place upgrades.
+server), `KB1_HOME` (daemon state directory, defaults to `~/.kb1`). Legacy
+`~/.kb2` homes migrate to `~/.kb1` on first boot; runtime config is KB1-only.
 
 ## Local API Primitives
 
@@ -81,7 +81,7 @@ pnpm docker:up     # daemon in Docker (host port 17382); pnpm docker:down to sto
 
 ## Layout
 
-- `apps/daemon` — the local server (`kb1d`; `kb2d` remains a compatibility alias), the only runtime writer
+- `apps/daemon` — the local server (`kb1d`), the only runtime writer
 - `apps/web` — the local web UI, served by the daemon
 - `packages/doc-session` — Yjs document sessions backed by Markdown files
 - `packages/ui` — component library + Storybook

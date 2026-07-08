@@ -1,7 +1,7 @@
 # Vault Format
 
 KB-1 vaults are filesystem directories. Markdown, images, attachments, and
-selected `.kb2` metadata are portable user-owned data. Runtime caches, local
+selected `.kb1` metadata are portable user-owned data. Runtime caches, local
 locks, and secrets are local implementation details.
 
 ## Example Layout
@@ -12,7 +12,7 @@ vault/
     example.md
   assets/
     image.png
-  .kb2/
+  .kb1/
     vault.yml
     folders.yml
     audit/
@@ -38,14 +38,14 @@ Canonical durable content includes:
 The server should be able to bootstrap from this data after a fresh checkout or
 restore.
 
-## `.kb2` Directory
+## `.kb1` Directory
 
-`.kb2` separates durable product metadata from rebuildable implementation state.
+`.kb1` separates durable product metadata from rebuildable implementation state.
 
 Recommended structure:
 
 ```text
-.kb2/
+.kb1/
   vault.yml       # portable vault identity/config
   folders.yml     # folder colors and presentation metadata
   audit/          # durable product event history
@@ -76,7 +76,7 @@ affordances.
 
 Caches, locks, runtime sessions, and secrets should not be committed.
 
-`.kb2/.gitignore` can start with:
+`.kb1/.gitignore` can start with:
 
 ```gitignore
 cache/
@@ -105,11 +105,11 @@ The audit log remains useful even when Git is disabled or commits are batched.
 
 ## Open Questions
 
-- Which `.kb2` files are part of the portable vault contract for v1?
+- Which `.kb1` files are part of the portable vault contract for v1?
 - Should `vault.yml` contain a stable vault ID, display name, schema version, or
   cloud registration metadata?
 - Should folder metadata be path-keyed only, or should it tolerate moves with
   explicit move events?
 - Should audit logs include content snippets, hashes only, or operation metadata
   only?
-- Should `.kb2` support migrations from the beginning?
+- Should `.kb1` support migrations from the beginning?

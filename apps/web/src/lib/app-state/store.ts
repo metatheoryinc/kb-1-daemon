@@ -43,8 +43,6 @@ function favoriteKey(e: Pick<FavoriteEntry, 'kind' | 'vaultId' | 'path'>): strin
 
 /** Default persistence slot for KB-1 app chrome preferences. */
 export const DEFAULT_PERSIST_KEY = 'kb1:app-state';
-/** Legacy persistence slot read for upgrade compatibility. New writes use KB-1. */
-export const LEGACY_PERSIST_KEY = 'kb2:app-state';
 
 /**
  * Secondary (files) rail width bounds, in px. The setter clamps every
@@ -258,7 +256,7 @@ function readPersisted(
   key: string,
 ): Partial<PersistedSlice> {
   if (!storage) return {};
-  const raw = storage.getItem(key) ?? (key === DEFAULT_PERSIST_KEY ? storage.getItem(LEGACY_PERSIST_KEY) : null);
+  const raw = storage.getItem(key);
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as unknown;

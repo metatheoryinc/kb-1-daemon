@@ -18,7 +18,7 @@ import {
 
 const Y_TEXT_NAME = 'markdown';
 const DOCUMENT_SESSION_STATE_VERSION = 1;
-const EXTERNAL_CHANGE_ORIGIN = Symbol('kb2.external-change');
+const EXTERNAL_CHANGE_ORIGIN = Symbol('kb1.external-change');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
 

@@ -254,7 +254,7 @@ function sanitizeFilenamePart(input: string): string {
     .replace(/^-|-$/g, "")
     .replace(/^\.+$/, "")
     .trim();
-  if (cleaned.length === 0 || cleaned === ".kb2") return "image";
+  if (cleaned.length === 0 || cleaned === ".kb1") return "image";
   return cleaned;
 }
 

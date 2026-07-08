@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "kb1d": "./dist/main.js",
-    "kb2d": "./dist/main.js"
+    "kb1d": "./dist/main.js"
   },
   "files": [
     "dist"

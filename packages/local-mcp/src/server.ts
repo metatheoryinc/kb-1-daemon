@@ -124,7 +124,7 @@ export function createLocalMcpServer(
   const server = new McpServer({
     // Coordinated wire identifier: keep byte-for-byte stable until all clients
     // and the cloud relay are migrated together.
-    name: "kb-2-local-daemon",
+    name: "kb-1-local-daemon",
     version: "0.0.0",
   });
 
@@ -342,7 +342,7 @@ export function createLocalMcpServer(
     "get_folder_metadata",
     {
       description:
-        "Read durable folder color metadata from .kb2/folders.yml. Read-only; writes no audit row.",
+        "Read durable folder color metadata from .kb1/folders.yml. Read-only; writes no audit row.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
       },
@@ -359,7 +359,7 @@ export function createLocalMcpServer(
     "set_folder_metadata",
     {
       description:
-        "Merge durable folder color metadata into .kb2/folders.yml. Use null to clear the color. Mutations are audited as mcp_client.",
+        "Merge durable folder color metadata into .kb1/folders.yml. Use null to clear the color. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
         color: z
@@ -523,7 +523,7 @@ export function createLocalMcpServer(
     "delete_note",
     {
       description:
-        "Delete a note. By default it is moved into .kb2/trash; set permanent for an irreversible delete. Mutations are audited as mcp_client.",
+        "Delete a note. By default it is moved into .kb1/trash; set permanent for an irreversible delete. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative Markdown file path."),
         permanent: z
@@ -585,7 +585,7 @@ export function createLocalMcpServer(
     "delete_folder",
     {
       description:
-        "Delete a folder. Non-empty folders require recursive=true. By default deletion moves to .kb2/trash; permanent removes directly. Mutations are audited as mcp_client.",
+        "Delete a folder. Non-empty folders require recursive=true. By default deletion moves to .kb1/trash; permanent removes directly. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
         recursive: z

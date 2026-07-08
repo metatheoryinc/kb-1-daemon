@@ -7,10 +7,9 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 const messageSync = 0;
-const port = process.env.KB1_PORT || process.env.KB2_PORT || '8787';
-const host = process.env.KB1_HOST || process.env.KB2_HOST || '127.0.0.1';
+const port = process.env.KB1_PORT || '8787';
+const host = process.env.KB1_HOST || '127.0.0.1';
 const url = process.env.KB1_YJS_URL
-  || process.env.KB2_YJS_URL
   || `ws://${host}:${port}/api/vaults/demo-vault/files/README.md/yjs`;
 
 const clientA = await connectYjsClient(url);
