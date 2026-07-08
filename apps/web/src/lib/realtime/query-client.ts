@@ -8,16 +8,16 @@ import {
 import localforage from 'localforage';
 import { trimPersistedClient } from './query-persistence';
 
-export const CACHE_BUSTER = '20260707-note-snapshots';
+const CACHE_BUSTER = '20260707-note-snapshots';
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-export interface KbQueryClient {
+interface KbQueryClient {
   client: QueryClient;
   restored: Promise<void>;
 }
 
-export interface KbQueryClientOptions {
+interface KbQueryClientOptions {
   persist?: boolean;
 }
 

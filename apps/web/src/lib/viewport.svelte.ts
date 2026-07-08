@@ -8,11 +8,11 @@ import { onDestroy } from 'svelte';
  * the rail + the secondary panel + a usable canvas, and matches the
  * `880px` content breakpoint the document column already uses.
  */
-export const DESKTOP_BREAKPOINT_PX = 880;
+const DESKTOP_BREAKPOINT_PX = 880;
 
-export type ViewportMode = 'desktop' | 'mobile';
+type ViewportMode = 'desktop' | 'mobile';
 
-export interface ViewportStore {
+interface ViewportStore {
   readonly mode: ViewportMode;
 }
 

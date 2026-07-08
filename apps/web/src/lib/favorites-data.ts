@@ -23,7 +23,7 @@ import {
 } from "@kb-1/ui";
 import { encodeVaultPath } from "$lib/yjs/local-document-provider";
 
-export interface StarredRow {
+interface StarredRow {
   /** Stable id for keyed iteration + active-row matching. `kind:vaultId:path`. */
   id: string;
   kind: "note" | "folder";
@@ -45,7 +45,7 @@ export interface StarredRow {
   addedAt: number;
 }
 
-export interface StarredViewData {
+interface StarredViewData {
   folders: StarredRow[];
   notes: StarredRow[];
   /** Total renderable rows; convenience for the empty-state check. */
