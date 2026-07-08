@@ -302,7 +302,7 @@ describe("daemon routing", () => {
     const body = await response.json();
 
     expect(response.status).toBe(404);
-    expect(body).toEqual({ ok: false, error: "Not found" });
+    expect(body).toEqual({ ok: false, error: "not_found", message: "Not found" });
 
     await rm(webBuildDir, { force: true, recursive: true });
   });

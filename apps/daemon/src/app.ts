@@ -34,7 +34,7 @@ import type {
 export const ACTOR_HEADER = 'x-kb1-actor';
 const MAX_ACTOR_HEADER_BYTES = 1024;
 
-export interface CreateAppOptions {
+interface CreateAppOptions {
   statusFile: string;
   /** Live multi-vault registry powering vault CRUD and the `:id`-scoped data routes. */
   registry?: VaultRegistry;
@@ -225,7 +225,7 @@ export function createApp(options: CreateAppOptions): Hono {
       const { pathname } = new URL(context.req.url);
 
       if (pathname === '/api' || pathname.startsWith('/api/')) {
-        return context.json({ ok: false, error: 'Not found' }, 404);
+        return notFoundResponse(context);
       }
 
       if (webProxyTarget) {
@@ -434,7 +434,7 @@ function registerVaultDataRoutes(
     }
 
     if (!context.req.path.endsWith('/move')) {
-      return context.json({ ok: false, error: 'Not found' }, 404);
+      return notFoundResponse(context);
     }
 
     const fromPath = filePathParam(context.req.path, filesPrefix, '/move');
@@ -468,7 +468,7 @@ function registerVaultDataRoutes(
 
   router.get(`${basePath}/folders/*`, async (context) => {
     if (!context.req.path.endsWith('/metadata')) {
-      return context.json({ ok: false, error: 'Not found' }, 404);
+      return notFoundResponse(context);
     }
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
@@ -478,7 +478,7 @@ function registerVaultDataRoutes(
 
   router.put(`${basePath}/folders/*`, async (context) => {
     if (!context.req.path.endsWith('/metadata')) {
-      return context.json({ ok: false, error: 'Not found' }, 404);
+      return notFoundResponse(context);
     }
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
@@ -514,7 +514,7 @@ function registerVaultDataRoutes(
 
   router.post(`${basePath}/folders/*`, async (context) => {
     if (!context.req.path.endsWith('/move')) {
-      return context.json({ ok: false, error: 'Not found' }, 404);
+      return notFoundResponse(context);
     }
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
@@ -625,6 +625,10 @@ function mapServiceResult(
   return context.json(result, statusForServiceError(result.error));
 }
 
+function notFoundResponse(context: Context, message = 'Not found'): Response {
+  return mapServiceResult(context, { ok: false, error: 'not_found', message });
+}
+
 /**
  * Adapt the live registry to the MCP layer's vault provider. vaultId resolution
  * and vault enumeration both read from the same registry the HTTP routes use, so
@@ -715,7 +719,7 @@ export function actorFromHeaders(
   return actorFromHeader(rawKb1Actor, ACTOR_HEADER);
 }
 
-export function actorFromHeader(
+function actorFromHeader(
   rawActor: string | undefined,
   headerName = ACTOR_HEADER
 ): ServiceResult<{ actor?: VaultActor }> {
