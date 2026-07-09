@@ -879,10 +879,7 @@
 
   function openRawFile(vaultId: string, path: string): void {
     const url = kbService.rawSrc(vaultId, path);
-    const opened = window.open(url, '_blank', 'noopener,noreferrer');
-    if (!opened) {
-      window.location.assign(url);
-    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 
   function openFilePath(vaultId: string, path: string): void {
@@ -2222,6 +2219,10 @@
             href={kbService.rawSrc(vaultId, activeAttachmentNode.path)}
             target="_blank"
             rel="noreferrer"
+            onclick={(event) => {
+              event.preventDefault();
+              openRawFile(vaultId, activeAttachmentNode.path);
+            }}
           >
             Open {activeAttachmentNode.name}
           </a>

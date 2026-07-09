@@ -380,9 +380,24 @@ describe("local editor route", () => {
     expect((link as HTMLAnchorElement).getAttribute("href")).toBe(
       "/api/vaults/demo-vault/raw/attachments/live.png",
     );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false }) as Window);
+
+    await fireEvent.click(link);
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(mocks.goto).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/demo-vault/attachments/live.png");
     await waitFor(() => {
       expect(screen.queryByLabelText("Markdown editor")).toBeNull();
     });
+
+    openSpy.mockRestore();
   });
 
   it("hides the vault tree when the vault is toggled off in the filter", async () => {
