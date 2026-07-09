@@ -37,6 +37,7 @@
     type DialogField,
     type LocalFolderNode,
     type LocalFolderMetadata,
+    type LocalTreeMoveDrop,
     type LocalTreeAction,
     type LocalTreeNode,
     type NewVaultSubmit,
@@ -1314,6 +1315,12 @@
     return path.split('/').filter(Boolean).at(-1) ?? path;
   }
 
+  function movedDescendantPath(openPath: string, sourcePath: string, targetPath: string): string | null {
+    if (openPath === sourcePath) return targetPath;
+    if (!openPath.startsWith(`${sourcePath}/`)) return null;
+    return joinPath(targetPath, openPath.slice(sourcePath.length + 1));
+  }
+
   // Ensure a note name carries a `.md` extension so the daemon writes a
   // markdown file regardless of what the user typed.
   function withMarkdownExtension(name: string): string {
@@ -1403,6 +1410,38 @@
       openFolderDialog(action);
     } else {
       openVaultDialog(action);
+    }
+  }
+
+  async function handleTreeMoveDrop(move: LocalTreeMoveDrop): Promise<void> {
+    if (move.source.vaultId !== move.target.vaultId) return;
+    if (!knownVaults.some((v) => v.id === move.source.vaultId)) return;
+
+    try {
+      error = null;
+      if (move.source.kind === 'file') {
+        const wasViewing =
+          move.source.vaultId === activeVaultId &&
+          !viewingFolder &&
+          documentPath === move.source.path;
+        await kbService.moveNote(move.source.vaultId, move.source.path, move.targetPath);
+        appState.favoritesOnNoteRenamed(move.source.vaultId, move.source.path, move.targetPath);
+        if (wasViewing) await goto(vaultRoute(move.source.vaultId, move.targetPath), { noScroll: true, keepFocus: true });
+      } else {
+        const movedActivePath =
+          move.source.vaultId === activeVaultId
+            ? movedDescendantPath(documentPath, move.source.path, move.targetPath)
+            : null;
+        await kbService.moveFolder(move.source.vaultId, move.source.path, move.targetPath);
+        appState.favoritesOnFolderRenamed(move.source.vaultId, move.source.path, move.targetPath);
+        if (movedActivePath) {
+          await goto(vaultRoute(move.source.vaultId, movedActivePath), { noScroll: true, keepFocus: true });
+        }
+      }
+
+      await refreshTreeForVault(move.source.vaultId);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
     }
   }
 
@@ -2321,6 +2360,9 @@
     onOpenFolder={openFolder}
     onOpenVault={openVaultFromKey}
     onTreeAction={handleTreeAction}
+    onTreeMoveDrop={(move) => {
+      void handleTreeMoveDrop(move);
+    }}
     onNewVault={openNewVaultDialog}
   >
     {@render canvasBody()}
@@ -2368,6 +2410,9 @@
     onOpenFolder={openFolder}
     onOpenVault={openVaultFromKey}
     onTreeAction={handleTreeAction}
+    onTreeMoveDrop={(move) => {
+      void handleTreeMoveDrop(move);
+    }}
     onNewVault={openNewVaultDialog}
   >
     {@render canvasBody()}

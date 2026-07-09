@@ -2,6 +2,7 @@
   import Icon from '../primitives/Icon.svelte';
   import ContextMenu from '../menus/ContextMenu.svelte';
   import { noteKey } from './expansion';
+  import type { LocalTreeDragSource } from './tree-drag-drop';
   import type { LocalFileNode, LocalTreeAction } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
 
@@ -27,6 +28,9 @@
         one. */
     onOpen?: (key: string) => void;
     onAction?: (action: LocalTreeAction) => void;
+    dragSource?: LocalTreeDragSource | null;
+    onTreeDragStart?: (source: LocalTreeDragSource, event: DragEvent) => void;
+    onTreeDragEnd?: () => void;
   }
 
   let {
@@ -38,6 +42,9 @@
     kebabAlwaysVisible = false,
     onOpen,
     onAction,
+    dragSource = null,
+    onTreeDragStart,
+    onTreeDragEnd,
   }: Props = $props();
   // The kebab and right-click open the same menu; the kebab hangs from the
   // button rect (anchor) while right-click pins to the cursor.
@@ -49,6 +56,16 @@
   // Mirror the folder indent (12 + depth * 14) plus a 4px nudge so the
   // file icon lands under the folder label, not under the caret.
   const indent = $derived(12 + depth * 14 + 4);
+  const source = $derived<LocalTreeDragSource>({
+    kind: 'file',
+    vaultId,
+    path: node.path,
+  });
+  const dragging = $derived(
+    dragSource?.kind === source.kind &&
+      dragSource.vaultId === source.vaultId &&
+      dragSource.path === source.path,
+  );
 
   const items = $derived<MenuItem[]>([
     favorited
@@ -80,13 +97,18 @@
   <div
     class="row"
     class:active
+    class:dragging
+    draggable="true"
     style="padding-left: {indent}px;"
     oncontextmenu={openMenu}
+    ondragstart={(event) => onTreeDragStart?.(source, event)}
+    ondragend={() => onTreeDragEnd?.()}
   >
     <button
       type="button"
       class="activate"
       aria-current={active ? 'page' : undefined}
+      draggable="false"
       onclick={() => onOpen?.(noteKey(vaultId, node.path))}
     >
       <span class="spacer" aria-hidden="true"></span>
@@ -101,6 +123,7 @@
       class:always-visible={kebabAlwaysVisible}
       aria-label={`Actions for ${node.name}`}
       title={`Actions for ${node.name}`}
+      draggable="false"
       onclick={openKebabMenu}
     >
       <Icon name="dots" size={14} weight="bold" />
@@ -147,6 +170,14 @@
     background: var(--rd-active);
     color: var(--rd-ink-1);
     font-weight: 500;
+  }
+
+  .row.dragging {
+    opacity: 0.48;
+  }
+
+  .row.dragging .activate {
+    cursor: grabbing;
   }
 
   .activate {

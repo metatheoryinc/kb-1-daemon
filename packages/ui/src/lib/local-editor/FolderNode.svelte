@@ -6,6 +6,11 @@
   import FolderNode from './FolderNode.svelte';
   import { folderKey } from './expansion';
   import { ROOT_DEFAULT_COLOR, resolveFolderColor } from './folder-presentation';
+  import {
+    resolveLocalTreeDrop,
+    type LocalTreeDragSource,
+    type LocalTreeDropTarget,
+  } from './tree-drag-drop';
   import type { LocalFolderNode, LocalTreeAction, LocalTreeNode } from './types';
   import type { MenuItem } from '../menus/ContextMenu.svelte';
 
@@ -53,6 +58,13 @@
         collapsing. When unset, that branch is a no-op. */
     onOpenFolder?: (key: string) => void;
     onAction?: (action: LocalTreeAction) => void;
+    dragSource?: LocalTreeDragSource | null;
+    dragOverTarget?: LocalTreeDropTarget | null;
+    onTreeDragStart?: (source: LocalTreeDragSource, event: DragEvent) => void;
+    onTreeDragEnd?: () => void;
+    onTreeDropTargetOver?: (target: LocalTreeDropTarget, event: DragEvent) => void;
+    onTreeDropTargetLeave?: (target: LocalTreeDropTarget, event: DragEvent) => void;
+    onTreeDropTargetDrop?: (target: LocalTreeDropTarget, event: DragEvent) => void;
   }
 
   let {
@@ -70,6 +82,13 @@
     onOpen,
     onOpenFolder,
     onAction,
+    dragSource = null,
+    dragOverTarget = null,
+    onTreeDragStart,
+    onTreeDragEnd,
+    onTreeDropTargetOver,
+    onTreeDropTargetLeave,
+    onTreeDropTargetDrop,
   }: Props = $props();
 
   // The kebab and right-click open the same menu; the kebab hangs from the
@@ -87,6 +106,32 @@
   // count shown on the folder row.
   const count = $derived(countNotes(node.children));
   const folderColor = $derived(resolveFolderColor(node.metadata, inheritedColor));
+  const source = $derived<LocalTreeDragSource>({
+    kind: 'folder',
+    vaultId,
+    path: node.path,
+  });
+  const dropTarget = $derived<LocalTreeDropTarget>({
+    kind: 'folder',
+    vaultId,
+    path: node.path,
+  });
+  const dragging = $derived(
+    dragSource?.kind === source.kind &&
+      dragSource.vaultId === source.vaultId &&
+      dragSource.path === source.path,
+  );
+  const dropState = $derived.by<'valid' | 'invalid' | null>(() => {
+    if (!dragSource || !dragOverTarget) return null;
+    if (
+      dragOverTarget.kind !== dropTarget.kind ||
+      dragOverTarget.vaultId !== dropTarget.vaultId ||
+      dragOverTarget.path !== dropTarget.path
+    ) {
+      return null;
+    }
+    return resolveLocalTreeDrop(dragSource, dropTarget).valid ? 'valid' : 'invalid';
+  });
 
   const items = $derived<MenuItem[]>([
     { label: 'New Note', onSelect: () => onAction?.({ kind: 'folder', action: 'new-note', path: node.path }) },
@@ -145,21 +190,37 @@
   <div
     class="row"
     class:active
+    class:dragging
+    class:drop-valid={dropState === 'valid'}
+    class:drop-invalid={dropState === 'invalid'}
+    draggable="true"
     style="padding-left: {indent}px;"
     oncontextmenu={openMenu}
+    ondragstart={(event) => onTreeDragStart?.(source, event)}
+    ondragend={() => onTreeDragEnd?.()}
+    ondragover={(event) => onTreeDropTargetOver?.(dropTarget, event)}
+    ondragleave={(event) => onTreeDropTargetLeave?.(dropTarget, event)}
+    ondrop={(event) => onTreeDropTargetDrop?.(dropTarget, event)}
   >
     <button
       type="button"
       class="caret"
       aria-label={open ? `Collapse ${node.name}` : `Expand ${node.name}`}
       aria-expanded={open}
+      draggable="false"
       onclick={handleCaretClick}
     >
       <span class="chev" class:collapsed={!open} aria-hidden="true">
         <Icon name="chevron-down" size={12} weight="bold" />
       </span>
     </button>
-    <button type="button" class="activate" onclick={handleClick}>
+    <button
+      type="button"
+      class="activate"
+      aria-current={active ? 'page' : undefined}
+      draggable="false"
+      onclick={handleClick}
+    >
       <FolderIcon color={folderColor} size="sm" variant="filled" label={`${node.name} folder`} />
       <span class="name">{node.name}</span>
     </button>
@@ -170,6 +231,7 @@
       class:always-visible={kebabAlwaysVisible}
       aria-label={`Actions for ${node.name}`}
       title={`Actions for ${node.name}`}
+      draggable="false"
       onclick={openKebabMenu}
     >
       <Icon name="dots" size={14} weight="bold" />
@@ -195,6 +257,13 @@
             {onOpen}
             {onOpenFolder}
             {onAction}
+            {dragSource}
+            {dragOverTarget}
+            {onTreeDragStart}
+            {onTreeDragEnd}
+            {onTreeDropTargetOver}
+            {onTreeDropTargetLeave}
+            {onTreeDropTargetDrop}
           />
         {:else}
           <FileNode
@@ -206,6 +275,9 @@
             {kebabAlwaysVisible}
             {onOpen}
             {onAction}
+            {dragSource}
+            {onTreeDragStart}
+            {onTreeDragEnd}
           />
         {/if}
       {/each}
@@ -247,6 +319,28 @@
     background: var(--rd-active);
     color: var(--rd-ink-1);
     font-weight: 500;
+  }
+
+  .row.dragging {
+    opacity: 0.48;
+  }
+
+  .row.drop-valid {
+    background: color-mix(in srgb, var(--rd-active) 78%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rd-ink-3) 34%, transparent);
+  }
+
+  .row.drop-invalid {
+    background: color-mix(in srgb, var(--rd-danger-ink, #a13a3a) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rd-danger-ink, #a13a3a) 42%, transparent);
+  }
+
+  .row.dragging .activate {
+    cursor: grabbing;
+  }
+
+  .row.drop-invalid .activate {
+    cursor: not-allowed;
   }
 
   .caret {

@@ -73,6 +73,20 @@ export {
   type FolderPresentation,
   type FolderPresentationResolver,
 } from "./local-editor/folder-presentation";
+export {
+  LOCAL_TREE_DRAG_MIME,
+  joinTreePath,
+  leafTreeName,
+  parentTreePath,
+  parseLocalTreeDragSource,
+  resolveLocalTreeDrop,
+  serializeLocalTreeDragSource,
+  type LocalTreeDragSource,
+  type LocalTreeDropRejectionReason,
+  type LocalTreeDropResolution,
+  type LocalTreeDropTarget,
+  type LocalTreeMoveDrop,
+} from "./local-editor/tree-drag-drop";
 export { default as LocalEditorShell } from "./local-editor/LocalEditorShell.svelte";
 export { default as LocalEditorMobileShell } from "./local-editor/LocalEditorMobileShell.svelte";
 export { default as StarredPanel } from "./local-editor/StarredPanel.svelte";

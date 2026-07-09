@@ -29,15 +29,16 @@
     oncancel,
   }: Props = $props();
 
-  let selected = $state<string>('');
+  let selected = $state<string | null>(null);
 
   $effect(() => {
-    if (open) selected = currentParent;
+    if (open) selected = null;
   });
 
   const sortedPaths = $derived(
     [...folderPaths].sort((a, b) => a.localeCompare(b)),
   );
+  const canSubmit = $derived(selected !== null && selected !== currentParent);
 </script>
 
 <DialogShell {open} onclose={oncancel} {title} {description}>
@@ -46,20 +47,36 @@
       <li>
         <button
           type="button"
-          class={cn('move-option', selected === '' && 'selected')}
+          class={cn(
+            'move-option',
+            selected === '' && 'selected',
+            currentParent === '' && 'current',
+          )}
+          aria-current={currentParent === '' ? 'location' : undefined}
           onclick={() => (selected = '')}
         >
           <span class="move-label">Vault root</span>
+          {#if currentParent === ''}
+            <span class="move-current">Current</span>
+          {/if}
         </button>
       </li>
       {#each sortedPaths as path (path)}
         <li>
           <button
             type="button"
-            class={cn('move-option', selected === path && 'selected')}
+            class={cn(
+              'move-option',
+              selected === path && 'selected',
+              currentParent === path && 'current',
+            )}
+            aria-current={currentParent === path ? 'location' : undefined}
             onclick={() => (selected = path)}
           >
             <span class="move-label">{path}</span>
+            {#if currentParent === path}
+              <span class="move-current">Current</span>
+            {/if}
           </button>
         </li>
       {/each}
@@ -75,9 +92,11 @@
     <Button
       size="sm"
       onclick={() => {
-        onsubmit(selected);
+        const destination = selected;
+        if (destination === null || destination === currentParent) return;
+        onsubmit(destination);
       }}
-      disabled={busy}
+      disabled={busy || !canSubmit}
     >
       {busy ? 'Working…' : submitLabel}
     </Button>
@@ -126,6 +145,10 @@
     color: var(--accent-foreground);
   }
 
+  .move-option.current:not(.selected) {
+    color: var(--muted-foreground);
+  }
+
   .move-option:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--ring) 50%, transparent);
     outline-offset: -2px;
@@ -133,9 +156,18 @@
 
   .move-label {
     min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .move-current {
+    flex-shrink: 0;
+    color: inherit;
+    font-family: var(--rd-mono);
+    font-size: 11px;
+    opacity: 0.72;
   }
 
   .dialog-error {
