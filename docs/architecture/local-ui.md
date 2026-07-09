@@ -92,7 +92,5 @@ unknown vault id is a normal not-found state, not a fallback to a default vault.
 
 - How should the UI represent an MCP/API edit when no user identity exists?
 - Should local UI access require localhost-only binding at first?
-- Should public daemon relay/tunnel docs stay in the local-server docs or split
-  from cloud policy docs beyond factual env and endpoint mention?
 - Should `docs/daemon/**` become a canonical public docs namespace, or should
   public docs stay under `docs/architecture/**` plus packaging docs?

@@ -29,6 +29,30 @@ The daemon reads configuration from environment variables owned by KB-1 code:
 - `KB1_ACTOR_DEFAULT`: default local actor attribution, `user` or `unknown`
 - `KB1_HISTORY_COALESCE_WINDOW_MS`: non-negative note-history coalescing window
 
+Relay is optional, but `KB1_RELAY_URL` and `KB1_RELAY_TOKEN` are all-or-nothing.
+When both are set, the daemon connects to the relay endpoint after startup over
+outbound WebSockets. `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD` are optional
+registration metadata.
+
+```bash
+KB1_RELAY_URL=https://relay.example/tunnel/my-daemon \
+KB1_RELAY_TOKEN=... \
+KB1_DAEMON_VERSION=0.1.0 \
+pnpm --filter @kb-1/daemon dev
+```
+
+The relay lifecycle API is available on the daemon port:
+
+```bash
+curl http://127.0.0.1:7382/api/relay/status
+curl -X POST http://127.0.0.1:7382/api/relay/connect
+curl -X POST http://127.0.0.1:7382/api/relay/disconnect
+```
+
+Internally the tunnel client appends `/__kb1_tunnel/control` and
+`/__kb1_tunnel/dialback` to the configured relay URL. These are relay endpoint
+paths, not routes served by the daemon.
+
 For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
 The daemon does not honor `KB2_*` environment variables; runtime configuration is
 KB1-only.

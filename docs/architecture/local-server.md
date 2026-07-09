@@ -117,16 +117,29 @@ The Yjs socket is also vault-scoped at
 `/api/vaults/:id/files/{path}/yjs`. Unknown vault ids return a normal not-found
 failure.
 
+Relay lifecycle routes are daemon-scoped:
+
+- `GET /api/relay/status`
+- `POST /api/relay/connect`
+- `POST /api/relay/disconnect`
+
+`GET /api/relay/status` returns `{ ok: true, relay }` with `configured`,
+`started`, `controlConnected`, and `reconnectScheduled`. If relay config is
+absent, status remains readable, `connect` returns `relay_not_configured`, and
+`disconnect` is a successful no-op. When relay config is present, the daemon
+connects automatically after startup; the lifecycle routes are still available
+for observability and operator control.
+
 ## Document Identity
 
-KB-1 can begin path-keyed:
+KB-1 Local can begin path-keyed:
 
 ```text
 document identity = canonical vault-relative path
 ```
 
-This differs from KB-1. In KB-1, path became metadata and stable note IDs became
-the real identity. In KB-1, the filesystem path is part of the source of truth.
+This is a deliberate local-first tradeoff. Stable note IDs can come later if
+needed, but today the filesystem path is part of the source of truth.
 
 Rename and move operations must be explicit:
 
@@ -212,6 +225,15 @@ The daemon reads `KB1_*` environment variables only:
 Legacy `KB2_*` env vars are ignored. Legacy `~/.kb2` homes and the old
 single-vault layout are migration inputs only.
 
+Relay config points the daemon at a relay endpoint or private cloud side. The
+tunnel client opens outbound WebSockets to stable internal relay paths derived
+from `KB1_RELAY_URL`: `/__kb1_tunnel/control` and
+`/__kb1_tunnel/dialback`. Relayed content operations still use vault-scoped
+local routes; the daemon has no relay-only default vault. For request
+attribution, relayed writes may pass `x-kb1-actor` as a JSON actor object with
+`kind: "user"` or `kind: "integration"` plus optional `id`, `name`, and
+`client`.
+
 ## Local Web UI
 
 The local web UI is a first-class open-source surface. It should start with the
@@ -243,6 +265,4 @@ cloud relay requests will use.
 - Should local API auth be required on localhost, and how should local agent
   credentials be issued?
 - Whether MCP parity requires a history tool.
-- Whether public daemon relay/tunnel contract docs should split from cloud
-  policy docs beyond factual env and endpoint mention.
 - Whether `docs/daemon/**` should become a canonical public docs namespace.

@@ -30,6 +30,37 @@ default local actor attribution (`user` or `unknown`), and
 Legacy `~/.kb2` homes migrate to `~/.kb1` on first boot; runtime config is
 KB1-only.
 
+## Relay / Tunnel
+
+Relay is an optional daemon-side public feature. To point a daemon at a relay
+endpoint, set both `KB1_RELAY_URL` and `KB1_RELAY_TOKEN`; supplying only one is
+a startup configuration error. `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD` are
+optional identity metadata sent during relay registration.
+
+When relay config is present, the daemon opens an outbound WebSocket connection
+after the local HTTP server starts. The relay endpoint receives no inbound port
+exposure from the user's machine. Internally the tunnel client appends stable
+wire paths to the configured relay URL: `/__kb1_tunnel/control` for the control
+socket and `/__kb1_tunnel/dialback` for WebSocket dial-back streams.
+
+The local lifecycle API is:
+
+- `GET /api/relay/status`
+- `POST /api/relay/connect`
+- `POST /api/relay/disconnect`
+
+Status responses use `{ ok: true, relay }`, where `relay` has `configured`,
+`started`, `controlConnected`, and `reconnectScheduled`. If relay is not
+configured, status remains readable with `configured: false`, `connect` returns
+`relay_not_configured`, and `disconnect` is a no-op.
+
+Relayed content requests still use the normal vault-scoped API surface. There
+is no default vault assumption: callers discover vaults first, then address a
+specific vault id. Relayed writes can attribute the upstream actor with the
+`x-kb1-actor` JSON header using `kind: "user"` or `kind: "integration"` plus
+optional `id`, `name`, and `client` strings. Without that header, the daemon
+uses `KB1_ACTOR_DEFAULT`.
+
 ## Local API Primitives
 
 `GET /api/vaults` is the discovery primitive. It lists every served vault as

@@ -1,121 +1,86 @@
 # Remote Relay Boundary
 
-Remote relay is an optional remote-access and collaboration layer for KB-1
-Local. It keeps the KB-1-style web, API, and MCP experience while durable
-content storage stays on the user's local server.
+Remote relay is an optional daemon-side feature for connecting KB-1 Local to a
+relay endpoint. Durable vault content remains on the user's local server. The
+open-source daemon, local web UI, REST API, and MCP endpoint remain useful over
+localhost or a private network without any relay configured.
 
-Cloud relay is not required for the first useful local KB-1 product. The
-open-source local service can host a local web UI and local MCP/API tools before
-remote relay is enabled. The local product should remain useful over localhost
-and private networks without requiring any remote account.
+This document describes the public daemon contract. The server behind the relay
+endpoint may be a private cloud service, but its hosting, product policy, and
+commercial model are outside this repository.
 
-## Responsibilities
+## Daemon Configuration
 
-The cloud layer owns:
+Relay is enabled by supplying `KB1_RELAY_URL` and `KB1_RELAY_TOKEN` together.
+Supplying only one is a startup configuration error. `KB1_DAEMON_VERSION` and
+`KB1_DAEMON_BUILD` are optional daemon identity metadata sent to the relay during
+registration.
 
-- user and organization authentication
-- API key and device registration
-- active tunnel registry
-- per-vault routing
-- permissions and access-control policy
-- cloud MCP/API endpoints
-- web app delivery
-- ephemeral presence, cursors, selections, and follow-mode state
-- relay observability that avoids storing content payloads
-
-It does not own customer vault content at rest.
-
-## Tunnel Model
-
-The local server establishes an outbound WebSocket connection to the cloud. The
-outbound connection avoids requiring users to expose inbound ports.
+When relay config is present, the daemon starts its local HTTP server and then
+opens an outbound WebSocket connection to the relay endpoint. Users do not need
+to expose inbound ports. A relay URL may include a path prefix; the tunnel client
+preserves that prefix and appends the internal tunnel paths.
 
 ```text
-Local Server -> Cloud Relay
+KB-1 daemon -> outbound WebSocket -> relay endpoint
 ```
 
-The connection is authenticated by a key or credential generated for the owning
-user or organization. The cloud binds the tunnel to one or more vaults served by
-that server.
+## Internal Tunnel Paths
 
-## Active Authority
+The daemon-side tunnel client uses stable KB1 wire paths:
 
-For each vault, the cloud should accept only one active authoritative local
-server connection. If another server attempts to connect for the same vault, the
-cloud should reject it or require an explicit takeover flow.
+- `/__kb1_tunnel/control`: long-lived control WebSocket
+- `/__kb1_tunnel/dialback`: dial-back WebSocket path for relayed WebSocket
+  streams
 
-The server-level connection can host many vaults, but routing and authorization
-remain per vault.
+These are internal relay paths, not local daemon routes. The local daemon routes
+for operator control live under `/api/relay/*`.
 
-## Permission Checks
+## Local Lifecycle Routes
 
-Every edge should check permissions:
+The daemon exposes a small relay lifecycle API:
 
-- requester authentication
-- user or organization membership
-- vault access
-- operation permission: read, search, write, admin
-- collaboration policy
-- tunnel authority for the target vault
-- request envelope validity at the local server
+- `GET /api/relay/status`
+- `POST /api/relay/connect`
+- `POST /api/relay/disconnect`
 
-The open-source local app should remain useful without a remote account.
-Collaboration policy can enable other users to read, write, or collaborate in
-shared vaults.
+`GET /api/relay/status` always returns `200` with:
 
-## Content Plane
-
-Content operations route to the local server:
-
-```text
-Cloud API/MCP/Web request
-  -> auth and policy
-  -> relay envelope
-  -> active vault tunnel
-  -> local server operation
-  -> response
+```json
+{
+  "ok": true,
+  "relay": {
+    "configured": true,
+    "started": true,
+    "controlConnected": true,
+    "reconnectScheduled": false
+  }
+}
 ```
 
-The cloud should avoid logging content payloads. It may need operation metadata
-for routing, authorization, metrics, and debugging.
+The `relay` status fields are:
 
-## Awareness Plane
+- `configured`: both relay env vars were supplied at daemon startup
+- `started`: the tunnel client has been started and has not been stopped
+- `controlConnected`: the control WebSocket is currently open
+- `reconnectScheduled`: the control socket closed and the client has a retry
+  timer scheduled
 
-Presence, cursors, selections, and follow-mode can live in the cloud layer:
+When relay is not configured, status remains readable with all fields `false`.
+`POST /api/relay/connect` returns `409` with `relay_not_configured`; `POST
+/api/relay/disconnect` returns a successful no-op status.
 
-```text
-Web client -> Cloud realtime service -> Web clients
-```
+## Request Model
 
-The local server does not need cursor state to perform content writes. The cloud
-already knows authenticated users and connected browser sessions, making it the
-natural place for ephemeral awareness.
+The relay forwards work to the daemon over the outbound tunnel. HTTP requests
+use the same local REST surface as direct clients, and relayed WebSocket streams
+are bridged to the matching daemon WebSocket path. Relay RPC currently includes
+`vault.list` for vault discovery.
 
-The local-first UI intentionally does not implement presence. If a local user is
-editing a document and some other local process or agent changes that file, the
-local product should surface a file-change event or direct-write warning rather
-than attempting to show remote cursors or user presence.
+There is no default vault over the relay. Callers first discover vaults, then
+address a specific vault id with the normal `/api/vaults/:id/...` routes.
 
-## Collaboration Policy
-
-The cloud can enforce collaboration policy without changing the open-source
-local server:
-
-- individual owner access
-- owner-owned agents
-- read-only org members
-- write-capable org members
-
-The local server still validates that relayed requests are well-formed and belong
-to a registered vault, but collaboration policy belongs in the relay layer.
-
-## Open Questions
-
-- Are cloud relay envelopes content-visible to the cloud service, or can some
-  payloads be encrypted so the cloud only routes them?
-- What metadata can be safely logged for debugging without weakening the data
-  custody promise?
-- What does tunnel takeover look like in the web UI?
-- What guarantees do cloud APIs provide when a vault server is offline?
-- What, if anything, should the cloud presence layer know about edits that
-  originated in the local-only UI before a relay session exists?
+Relayed writes can attribute the upstream actor with `x-kb1-actor`. The header
+value is a JSON object with `kind: "user"` or `kind: "integration"` and optional
+`id`, `name`, and `client` strings. If the header is absent, the daemon uses
+`KB1_ACTOR_DEFAULT` for local attribution.
