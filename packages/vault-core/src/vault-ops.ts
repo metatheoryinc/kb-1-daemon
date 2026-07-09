@@ -20,6 +20,7 @@ import {
 import { isNodeError, statOrNull } from "./fs.js";
 import {
   InvalidPathError,
+  isInternalVaultPath,
   relativeDescendantPath,
   resolveVaultPath,
   validateOptionalVaultPath,
@@ -206,15 +207,6 @@ function trashRelativePath(originalPath: string): string {
   );
 }
 
-function isHiddenMetadataPath(relPath: string): boolean {
-  return (
-    relPath === ".kb1" ||
-    relPath.startsWith(".kb1/") ||
-    relPath === ".git" ||
-    relPath.startsWith(".git/")
-  );
-}
-
 const TEXT_ARTIFACT_EXTENSIONS: Record<string, { contentType: string; preview: ArtifactPreview }> = {
   ".md": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
   ".markdown": { contentType: "text/markdown; charset=utf-8", preview: "markdown" },
@@ -328,7 +320,7 @@ async function walkEntries(
   for (const dirent of dirents) {
     const rel =
       relDir.length === 0 ? dirent.name : path.posix.join(relDir, dirent.name);
-    if (isHiddenMetadataPath(rel)) continue;
+    if (isInternalVaultPath(rel)) continue;
     const abs = vaultPath(root, rel);
     const s = await stat(abs);
     if (dirent.isDirectory()) {
