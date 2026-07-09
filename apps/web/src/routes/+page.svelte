@@ -2162,7 +2162,7 @@
 </script>
 
 <svelte:head>
-  <title>KB-1 Editor</title>
+  <title>KB-1</title>
 </svelte:head>
 
 <!-- Shared canvas body. Both shells render identical content — the

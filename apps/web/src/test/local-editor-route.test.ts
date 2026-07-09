@@ -108,6 +108,7 @@ describe("local editor route", () => {
     mocks.providers = [];
     mocks.delayedSyncPaths.clear();
     mocks.pendingSyncs.clear();
+    document.title = "";
     // The harness builds the app-state store against `localStorage`, which
     // persists tree expansion and vault filters. Clear it so each test
     // starts from the clean first-load defaults rather than inheriting a
@@ -250,6 +251,14 @@ describe("local editor route", () => {
         );
       }),
     );
+  });
+
+  it("uses a stable product tab title", async () => {
+    render(AppStateHarness);
+
+    expect(await screen.findByLabelText("Markdown editor")).toBeTruthy();
+    expect(document.title).toBe("KB-1");
+    expect(document.title).not.toContain("demo-vault");
   });
 
   it("fetches the vault tree, renders it, and rebinds the editor when a file is opened", async () => {
