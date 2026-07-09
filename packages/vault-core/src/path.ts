@@ -2,6 +2,7 @@ import path from 'node:path';
 
 const MAX_PATH_LENGTH = 1024;
 const MAX_SEGMENT_LENGTH = 255;
+const INTERNAL_VAULT_PATH_SEGMENTS = new Set(['.git', '.kb1']);
 
 type VaultPathKind = 'file' | 'folder' | 'artifact';
 
@@ -43,8 +44,8 @@ export function validateVaultPath(input: string, kind: VaultPathKind): string {
     if (segment.length > MAX_SEGMENT_LENGTH) {
       throw new InvalidPathError(input, `segment exceeds ${MAX_SEGMENT_LENGTH} chars`);
     }
-    if (segment === '.kb1') {
-      throw new InvalidPathError(input, '.kb1 is reserved for vault metadata');
+    if (INTERNAL_VAULT_PATH_SEGMENTS.has(segment)) {
+      throw new InvalidPathError(input, `${segment} is reserved for vault metadata`);
     }
   }
 
@@ -62,6 +63,11 @@ export function validateVaultPath(input: string, kind: VaultPathKind): string {
 export function validateOptionalVaultPath(input: string | undefined, kind: VaultPathKind): string | undefined {
   if (input === undefined || input.length === 0) return undefined;
   return validateVaultPath(input, kind);
+}
+
+export function isInternalVaultPath(input: string): boolean {
+  if (input.length === 0) return false;
+  return input.split('/').some((segment) => INTERNAL_VAULT_PATH_SEGMENTS.has(segment));
 }
 
 export function relativeDescendantPath(parent: string, child: string): string | null {

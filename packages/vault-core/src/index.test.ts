@@ -52,7 +52,7 @@ import {
   recordFileHistory,
 } from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
-import { validateVaultPath } from "./path.js";
+import { isInternalVaultPath, validateVaultPath } from "./path.js";
 import { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";
 
 const CORAL = "#fda4af";
@@ -101,6 +101,9 @@ describe("vault path validation", () => {
     ["folder/trailing.", "file"],
     [".kb1/audit.md", "file"],
     [".kb1/audit.bin", "artifact"],
+    [".git", "folder"],
+    [".git/COMMIT_EDITMSG", "artifact"],
+    [".git/objects/aa/bb.txt", "file"],
     [`${"a".repeat(256)}.md`, "file"],
     [`${"a".repeat(1025)}.md`, "file"],
   ] as const)("rejects invalid %s as %s", (input, kind) => {
@@ -121,6 +124,12 @@ describe("vault path validation", () => {
     expect(() => validateVaultPath(123 as unknown as string, "file")).toThrow(
       "path must be a string",
     );
+  });
+
+  it("identifies daemon-internal path segments without hiding all dotfolders", () => {
+    expect(isInternalVaultPath("")).toBe(false);
+    expect(isInternalVaultPath("notes/.git/COMMIT_EDITMSG")).toBe(true);
+    expect(isInternalVaultPath("notes/.obsidian/config.json")).toBe(false);
   });
 
   it("property: valid file paths validate idempotently and resolve inside the vault root", () => {
@@ -359,6 +368,18 @@ describe("vault-core filesystem operations", () => {
     });
 
     await expect(readVaultRawFile(ctx, "../outside.png")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await mkdir(path.join(root, ".git"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await expect(
+      readVaultRawFile(ctx, ".git/COMMIT_EDITMSG"),
+    ).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
     });
@@ -971,14 +992,35 @@ describe("vault-core filesystem operations", () => {
     });
     await writeVaultFile(ctx, { path: "notes/a.md", content: "a" });
     await deleteVaultFile(ctx, { path: "notes/a.md" });
-    await mkdir(path.join(root, ".git", "objects"), { recursive: true });
-    await writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+    await writeVaultFile(ctx, { path: "normal.md", content: "normal" });
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "HEAD"),
+      "ref: refs/heads/main\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "internal object\n",
+      "utf8",
+    );
 
     const tree = await listVaultTree(ctx);
     expect(tree.ok).toBe(true);
-    expect(
-      tree.ok ? tree.value.entries.map((entry) => entry.path) : [],
-    ).toEqual(["notes"]);
+    const paths = tree.ok
+      ? tree.value.entries.map((entry) => entry.path).sort()
+      : [];
+    expect(paths).toEqual(["normal.md", "notes"]);
+    expect(paths.some((entryPath) => entryPath.startsWith(".git"))).toBe(false);
+    await expect(listVaultTree(ctx, { under: ".git" })).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
   });
 
   it("lists subtrees with depth limits and entry-cap errors", async () => {
@@ -1009,6 +1051,17 @@ describe("vault-core filesystem operations", () => {
   it("reports vault counts from durable files", async () => {
     await writeVaultFile(ctx, { path: "notes/a.md", content: "a" });
     await writeVaultFile(ctx, { path: "notes/deep/b.md", content: "b" });
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "internal object\n",
+      "utf8",
+    );
 
     const info = await getVaultInfo(ctx);
     expect(info).toMatchObject({
@@ -1938,6 +1991,18 @@ describe("scan search", () => {
   });
 
   it("searches from the vault root and excludes metadata and trash folders", async () => {
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "target internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "target internal object\n",
+      "utf8",
+    );
+
     const result = await searchVaultFiles(root, {
       q: "target",
       context: 0,
@@ -1949,6 +2014,9 @@ describe("scan search", () => {
       "notes/a.md",
       "notes/deep/b.txt",
     ]);
+    expect(result.results.some((hit) => hit.path.startsWith(".git"))).toBe(
+      false,
+    );
     expect(
       result.results.every(
         (hit) =>
