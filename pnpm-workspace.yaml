@@ -8,19 +8,24 @@ allowBuilds:
 
 minimumReleaseAge: 1440
 
+overrides:
+  cookie: 0.7.2
+  esbuild: 0.28.1
+  form-data: 4.0.6
+
 catalog:
-  '@storybook/addon-docs': 10.2.13
-  '@storybook/addon-svelte-csf': 5.0.11
-  '@storybook/svelte': 10.2.13
-  '@storybook/sveltekit': 10.2.13
-  storybook: 10.2.13
+  '@storybook/addon-docs': 10.4.6
+  '@storybook/addon-svelte-csf': 5.1.2
+  '@storybook/svelte': 10.4.6
+  '@storybook/sveltekit': 10.4.6
+  storybook: 10.4.6
   '@sveltejs/adapter-static': 3.0.10
-  '@sveltejs/kit': 2.57.1
-  '@sveltejs/vite-plugin-svelte': 6.2.4
-  '@tailwindcss/vite': 4.1.18
-  svelte: 5.55.5
+  '@sveltejs/kit': 2.69.2
+  '@sveltejs/vite-plugin-svelte': 7.2.0
+  '@tailwindcss/vite': 4.3.2
+  svelte: 5.55.7
   svelte-check: 4.6.0
-  tailwindcss: 4.1.18
+  tailwindcss: 4.3.2
   typescript: 6.0.3
-  vite: 7.3.5
+  vite: 8.0.16
   vitest: 4.1.8

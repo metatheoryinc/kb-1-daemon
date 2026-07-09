@@ -32,7 +32,7 @@
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@tailwindcss/vite": "catalog:",
-    "@testing-library/svelte": "^5.3.1",
+    "@testing-library/svelte": "5.4.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/ws": "8.18.1",
     "happy-dom": "^20.10.2",
