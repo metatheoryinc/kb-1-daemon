@@ -53,7 +53,12 @@ Internally the tunnel client appends `/__kb1_tunnel/control` and
 `/__kb1_tunnel/dialback` to the configured relay URL. These are relay endpoint
 paths, not routes served by the daemon.
 
-For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
+For in-place upgrades, first boot copies legacy `~/.kb2` homes into `~/.kb1`.
+Before removing the source, the daemon checks that every regular source file
+exists at the same relative path in the target with the same byte length.
+Symlinks and empty directories are not checked, and a pre-existing target may
+contain additional files. Operators should make a separate backup first when
+they need content-level verification or a rollback copy.
 The daemon does not honor `KB2_*` environment variables; runtime configuration is
 KB1-only.
 

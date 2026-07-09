@@ -7,8 +7,8 @@ write the filesystem directly.
 
 ## Purpose
 
-The local UI lets KB-1 become useful before remote relay, auth, org management,
-or collaboration services exist.
+The local UI makes KB-1 useful without requiring remote relay, auth, org
+management, or collaboration services.
 
 The shipped local product lets a single local user:
 
@@ -21,8 +21,8 @@ The shipped local product lets a single local user:
 - work from a zero-vault state after deleting every vault
 - view Git-backed best-effort note history for a selected note
 
-This same local API surface should be exercised by local MCP tools and later by
-cloud relay requests.
+This same local API surface is exercised by local MCP tools and Cloud relay
+requests.
 
 ## Non-Goals
 
@@ -39,7 +39,7 @@ The local UI should not include:
 - follow mode
 - presence
 
-These belong to the later cloud-connected collaboration layer.
+These belong to the Cloud collaboration layer.
 
 ## Content Events Instead Of Presence
 

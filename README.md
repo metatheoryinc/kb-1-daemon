@@ -43,8 +43,12 @@ Port/env overrides: `KB1_PORT` (daemon), `KB1_HOST` (bind host),
 `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD`. `KB1_ACTOR_DEFAULT` controls
 default local actor attribution (`user` or `unknown`), and
 `KB1_HISTORY_COALESCE_WINDOW_MS` controls note-history commit coalescing.
-Legacy `~/.kb2` homes migrate to `~/.kb1` on first boot; runtime config is
-KB1-only.
+On first boot, legacy `~/.kb2` homes are copied into `~/.kb1`. Before removing
+the source, the daemon checks that every regular source file exists at the same
+relative path in the target with the same byte length. Symlinks and empty
+directories are not checked, and a pre-existing target may contain additional
+files. Make a separate backup first if you need content-level verification or a
+rollback copy. Runtime config is KB1-only.
 
 ## Relay / Tunnel
 

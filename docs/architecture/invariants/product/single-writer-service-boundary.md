@@ -5,7 +5,7 @@
 The daemon is the only legitimate runtime writer of vault content, and every
 client reaches it through the same service boundary.
 
-Local UI, local MCP tools, smoke scripts, tests, and the future cloud relay
+Local UI, local MCP tools, smoke scripts, tests, and Cloud relay
 all perform vault reads and writes through the daemon's service APIs. No
 client gets a private side door, and no second write path exists.
 
@@ -26,7 +26,7 @@ client gets a private side door, and no second write path exists.
 
 - `packages/doc-session` owning the document edit path, consumed by daemon
   routes.
-- A future MCP `edit` tool calling the same splice service as the UI editor.
+- The MCP `edit_note` tool calling the same splice service as the UI editor.
 - A verification script driving edits through the daemon's WebSocket/API
   rather than writing the Markdown file.
 

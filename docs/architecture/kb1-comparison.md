@@ -32,19 +32,18 @@ friction and a first-class MCP/tooling surface.
 
 ## What KB-1 Local Preserves
 
-KB-1 Local should preserve:
+KB-1 Local preserves:
 
 - Markdown-centered knowledge work
 - a rich web UI
-- a useful local web UI before cloud relay
+- a useful local web UI without cloud relay
 - MCP/API access for agents
 - service-mediated reads and writes
 - splice edits and structured content operations
 - move and rename operations
 - search
 - Yjs-backed active collaboration
-- visible humans and agents
-- presence and follow-mode style affordances
+- visible service-mediated human and agent changes
 - folder colors and presentation metadata
 - one canonical write path for browsers and agents
 - strong architecture docs and substrate invariants
@@ -56,7 +55,7 @@ The central change is custody.
 | Concern | Original KB-1 | KB-1 Local |
 |---|---|---|
 | Durable content | Remote D1/R2/DO substrate | User filesystem |
-| Cloud role | Source of truth and app backend | Optional relay, auth, policy, presence |
+| Cloud role | Source of truth and app backend | Additive identity, relay, policy, presence, and hosting |
 | Local role | Optional desktop wrapper | Authoritative vault server and local app host |
 | Open source surface | Optional/unclear | Local server and local UI are the public open-source foundation |
 | Multi-tenancy | Shared remote storage substrate | Tenant content outside remote storage |
@@ -80,8 +79,8 @@ Git is valuable for backup, diffs, rollback, and user-owned remotes. It is not
 ideal as the only source of product history because product events and Git
 commits have different cadence and semantics.
 
-KB-1 Local should maintain an append-only local audit log and optionally
-summarize that history into Git commits.
+KB-1 Local maintains an append-only local audit log and Git-backed, best-effort
+note history for human inspection.
 
 ## Better Multi-Tenant Posture
 
@@ -93,17 +92,16 @@ KB-1 Local removes customer knowledge content from the remote substrate. A relay
 layer still needs account and routing metadata, but the default path keeps the
 user's actual vault content with the user.
 
-## Local Product Before Cloud Relay
+## Local Product Without Cloud Relay
 
 KB-1's primary useful experience depended on the remote app and remote
 substrate.
-KB-1 Local should become useful earlier: the open-source local server should
-host a local UI for file-tree browsing and Markdown editing, while local agents
-use local MCP/API tools against the same service.
+KB-1 Local is independently useful: the open-source local server hosts a local
+UI for file-tree browsing and Markdown editing, while local agents use local
+MCP/API tools against the same service.
 
-This changes execution order, not the service contract. Remote relay, auth, org
-management, and presence can arrive as remote and multi-user layers around the
-same service contract.
+This changes custody, not the service contract. Cloud relay, auth, org
+management, and presence wrap the same daemon service contract.
 
 ## Open Questions
 
