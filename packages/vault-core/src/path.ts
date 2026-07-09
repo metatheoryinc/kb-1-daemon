@@ -2,7 +2,13 @@ import path from 'node:path';
 
 const MAX_PATH_LENGTH = 1024;
 const MAX_SEGMENT_LENGTH = 255;
-const INTERNAL_VAULT_PATH_SEGMENTS = new Set(['.git', '.kb1']);
+const INTERNAL_VAULT_PATH_SEGMENTS = new Set([
+  '.git',
+  '.gitattributes',
+  '.gitignore',
+  '.gitmodules',
+  '.kb1',
+]);
 
 type VaultPathKind = 'file' | 'folder' | 'artifact';
 
