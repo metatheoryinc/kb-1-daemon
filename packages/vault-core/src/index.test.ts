@@ -102,6 +102,10 @@ describe("vault path validation", () => {
     [".kb1/audit.md", "file"],
     [".kb1/audit.bin", "artifact"],
     [".git", "folder"],
+    [".gitignore", "artifact"],
+    [".gitattributes", "artifact"],
+    [".gitmodules", "artifact"],
+    ["notes/.gitignore", "artifact"],
     [".git/COMMIT_EDITMSG", "artifact"],
     [".git/objects/aa/bb.txt", "file"],
     [`${"a".repeat(256)}.md`, "file"],
@@ -129,6 +133,8 @@ describe("vault path validation", () => {
   it("identifies daemon-internal path segments without hiding all dotfolders", () => {
     expect(isInternalVaultPath("")).toBe(false);
     expect(isInternalVaultPath("notes/.git/COMMIT_EDITMSG")).toBe(true);
+    expect(isInternalVaultPath(".gitignore")).toBe(true);
+    expect(isInternalVaultPath("notes/.gitattributes")).toBe(true);
     expect(isInternalVaultPath("notes/.obsidian/config.json")).toBe(false);
   });
 
@@ -377,9 +383,14 @@ describe("vault-core filesystem operations", () => {
       "internal commit\n",
       "utf8",
     );
+    await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
     await expect(
       readVaultRawFile(ctx, ".git/COMMIT_EDITMSG"),
     ).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(readVaultRawFile(ctx, ".gitignore")).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
     });
@@ -1009,6 +1020,9 @@ describe("vault-core filesystem operations", () => {
       "internal object\n",
       "utf8",
     );
+    await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
+    await writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
+    await writeFile(path.join(root, ".gitmodules"), "[submodule]\n", "utf8");
 
     const tree = await listVaultTree(ctx);
     expect(tree.ok).toBe(true);
@@ -1017,6 +1031,7 @@ describe("vault-core filesystem operations", () => {
       : [];
     expect(paths).toEqual(["normal.md", "notes"]);
     expect(paths.some((entryPath) => entryPath.startsWith(".git"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".gitattributes"))).toBe(false);
     await expect(listVaultTree(ctx, { under: ".git" })).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
@@ -2000,6 +2015,12 @@ describe("scan search", () => {
     await writeFile(
       path.join(root, ".git", "objects", "aa", "bb.txt"),
       "target internal object\n",
+      "utf8",
+    );
+    await writeFile(path.join(root, ".gitignore"), "target ignored\n", "utf8");
+    await writeFile(
+      path.join(root, ".gitattributes"),
+      "target attributes\n",
       "utf8",
     );
 
