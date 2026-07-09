@@ -6,6 +6,7 @@
     EditorState,
     Annotation,
     Compartment,
+    Facet,
     type Extension,
   } from '@codemirror/state';
   import {
@@ -30,10 +31,11 @@
     plaintextLinkHover,
   } from './plaintext-link-affordance';
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
+  import { plaintextMentionAutocomplete } from './plaintext-mention-autocomplete.svelte';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
   import { plaintextImageUpload } from './plaintext-image-upload';
-  // Remote-cursor layer (cloud-014 part-6). Mounted only when the host supplies
+  // Remote-cursor layer. Mounted only when the host supplies
   // both `awareness` and `noteId` — the daemon UI, which has no presence,
   // passes neither and the producer/consumer are skipped entirely.
   import type { Awareness } from 'y-protocols/awareness';
@@ -41,6 +43,121 @@
     plaintextCursorProducer,
     plaintextCursorConsumer,
   } from './plaintext-awareness';
+
+  interface PlaintextSyncConfig {
+    ydoc: Doc;
+    ytext: Y.Text;
+  }
+
+  const plaintextSyncConfig = Facet.define<
+    PlaintextSyncConfig,
+    PlaintextSyncConfig | null
+  >({
+    combine(values) {
+      return values.at(-1) ?? null;
+    },
+  });
+
+  const syncAnnotation = Annotation.define<symbol>();
+  const SYNC_MARK = Symbol('plaintext-sync');
+
+  class PlaintextSyncPlugin implements PluginValue {
+    private view: EditorView;
+    private ydoc: Doc;
+    private ytext: Y.Text;
+    private observer: (
+      event: Y.YTextEvent,
+      transaction: Y.Transaction,
+    ) => void;
+    private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+
+    constructor(view: EditorView) {
+      this.view = view;
+      const config = view.state.facet(plaintextSyncConfig);
+      if (!config) {
+        throw new Error('PlaintextSyncPlugin requires plaintextSyncConfig');
+      }
+      this.ydoc = config.ydoc;
+      this.ytext = config.ytext;
+      this.observer = (event, _tr) => {
+        // Skip echo of our own local writes.
+        if (event.transaction.origin === PLAINTEXT_USER_ORIGIN) return;
+        const delta = event.delta;
+        const changes: { from: number; to: number; insert: string }[] = [];
+        let pos = 0;
+        for (const d of delta) {
+          if (d.insert != null) {
+            const text = typeof d.insert === 'string' ? d.insert : '';
+            if (text.length > 0) {
+              changes.push({ from: pos, to: pos, insert: text });
+            }
+          } else if (d.delete != null) {
+            changes.push({ from: pos, to: pos + d.delete, insert: '' });
+            pos += d.delete;
+          } else if (d.retain != null) {
+            pos += d.retain;
+          }
+        }
+        if (changes.length === 0) return;
+        view.dispatch({
+          changes,
+          annotations: [syncAnnotation.of(SYNC_MARK)],
+        });
+      };
+      this.ytext.observe(this.observer);
+      this.reconcileFromYText();
+      this.reconcileTimer = setTimeout(() => {
+        this.reconcileTimer = undefined;
+        this.reconcileFromYText();
+      }, 50);
+    }
+
+    private reconcileFromYText(): void {
+      const syncedText = this.ytext.toString();
+      if (syncedText !== this.view.state.doc.toString()) {
+        this.view.dispatch({
+          changes: {
+            from: 0,
+            to: this.view.state.doc.length,
+            insert: syncedText,
+          },
+          annotations: [syncAnnotation.of(SYNC_MARK)],
+        });
+      }
+    }
+
+    update(update: ViewUpdate): void {
+      if (!update.docChanged) return;
+      // Skip CM dispatches that came from the inbound Y.Text observer.
+      for (const tr of update.transactions) {
+        if (tr.annotation(syncAnnotation) === SYNC_MARK) return;
+      }
+      // Local user edits — write them back to Y.Text with our origin.
+      this.ydoc.transact(() => {
+        let adj = 0;
+        update.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => {
+          const insertText = insert.sliceString(0, insert.length, '\n');
+          if (fromA !== toA) {
+            this.ytext.delete(fromA + adj, toA - fromA);
+          }
+          if (insertText.length > 0) {
+            this.ytext.insert(fromA + adj, insertText);
+          }
+          adj += insertText.length - (toA - fromA);
+        });
+      }, PLAINTEXT_USER_ORIGIN);
+    }
+
+    destroy(): void {
+      if (this.reconcileTimer) {
+        clearTimeout(this.reconcileTimer);
+        this.reconcileTimer = undefined;
+      }
+      this.ytext.unobserve(this.observer);
+    }
+  }
+
+  const plaintextSyncPlugin = ViewPlugin.fromClass(PlaintextSyncPlugin);
 
   interface Props {
     /** Shared Y.Doc supplied by the host app/provider. */
@@ -92,6 +209,10 @@
      *  removed), the editor dispatches a `mentionDirectoryChangedEffect`
      *  so the decoration field re-resolves without needing a doc edit. */
     orgPeople?: readonly OrgPerson[];
+    /** Enables cloud people search / insertion for `@` mentions. Off by
+     *  default so daemon contexts can render mention chips from markdown
+     *  without exposing cloud org-directory picker semantics. */
+    enableMentionAutocomplete?: boolean;
     /** Wikilink click handler (Slice 6). Fires with the URL-encoded
      *  target so the host can decode + resolve + navigate. Mirrors
      *  MarkdownEditor's prop of the same name — both editors feed the
@@ -105,7 +226,7 @@
     onUploadStart?: () => void;
     onUploadEnd?: () => void;
     onError?: (err: unknown, file: File) => void;
-    /** Vault-scoped awareness handle (cloud-014 part-6). When supplied
+    /** Vault-scoped awareness handle. When supplied
      *  (together with `noteId`), the editor publishes the local caret /
      *  selection to `awareness.cursor` and renders remote peers' carets +
      *  selections. Optional and backward-compatible: the daemon UI has no
@@ -128,6 +249,7 @@
     attachmentSrc,
     livePaths = [],
     orgPeople = [],
+    enableMentionAutocomplete = false,
     onWikilinkClick,
     uploadImage,
     onUploadStart,
@@ -206,99 +328,10 @@
     //   - Inbound Y.Text events (origin !== PLAINTEXT_USER_ORIGIN) are
     //     dispatched into CM as edits annotated `syncAnnotation` so
     //     the update() loop can skip its own echo.
-    const syncAnnotation = Annotation.define<symbol>();
-    const SYNC_MARK = Symbol('plaintext-sync');
-
-    class PlaintextSyncPlugin implements PluginValue {
-      private view: EditorView;
-      private observer: (
-        event: Y.YTextEvent,
-        transaction: Y.Transaction,
-      ) => void;
-      private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
-
-      constructor(view: EditorView) {
-        this.view = view;
-        this.observer = (event, _tr) => {
-          // Skip echo of our own local writes.
-          if (event.transaction.origin === PLAINTEXT_USER_ORIGIN) return;
-          const delta = event.delta;
-          const changes: { from: number; to: number; insert: string }[] = [];
-          let pos = 0;
-          for (const d of delta) {
-            if (d.insert != null) {
-              const text = typeof d.insert === 'string' ? d.insert : '';
-              if (text.length > 0) {
-                changes.push({ from: pos, to: pos, insert: text });
-              }
-            } else if (d.delete != null) {
-              changes.push({ from: pos, to: pos + d.delete, insert: '' });
-              pos += d.delete;
-            } else if (d.retain != null) {
-              pos += d.retain;
-            }
-          }
-          if (changes.length === 0) return;
-          view.dispatch({
-            changes,
-            annotations: [syncAnnotation.of(SYNC_MARK)],
-          });
-        };
-        stableText.observe(this.observer);
-        this.reconcileFromYText();
-        this.reconcileTimer = setTimeout(() => {
-          this.reconcileTimer = undefined;
-          this.reconcileFromYText();
-        }, 50);
-      }
-
-      private reconcileFromYText(): void {
-        const syncedText = stableText.toString();
-        if (syncedText !== this.view.state.doc.toString()) {
-          this.view.dispatch({
-            changes: {
-              from: 0,
-              to: this.view.state.doc.length,
-              insert: syncedText,
-            },
-            annotations: [syncAnnotation.of(SYNC_MARK)],
-          });
-        }
-      }
-
-      update(update: ViewUpdate): void {
-        if (!update.docChanged) return;
-        // Skip CM dispatches that came from the inbound Y.Text observer.
-        for (const tr of update.transactions) {
-          if (tr.annotation(syncAnnotation) === SYNC_MARK) return;
-        }
-        // Local user edits — write them back to Y.Text with our origin.
-        stableDoc.transact(() => {
-          let adj = 0;
-          update.changes.iterChanges(
-            (fromA, toA, _fromB, _toB, insert) => {
-              const insertText = insert.sliceString(0, insert.length, '\n');
-              if (fromA !== toA) {
-                stableText.delete(fromA + adj, toA - fromA);
-              }
-              if (insertText.length > 0) {
-                stableText.insert(fromA + adj, insertText);
-              }
-              adj += insertText.length - (toA - fromA);
-            },
-          );
-        }, PLAINTEXT_USER_ORIGIN);
-      }
-
-      destroy(): void {
-        if (this.reconcileTimer) {
-          clearTimeout(this.reconcileTimer);
-          this.reconcileTimer = undefined;
-        }
-        stableText.unobserve(this.observer);
-      }
-    }
-    const plaintextSync = ViewPlugin.fromClass(PlaintextSyncPlugin);
+    const plaintextSync: Extension = [
+      plaintextSyncConfig.of({ ydoc: stableDoc, ytext: stableText }),
+      plaintextSyncPlugin,
+    ];
 
     // --- Undo manager ----------------------------------------------
     //
@@ -405,13 +438,12 @@
       editableCompartment.of(EditorView.editable.of(!readOnly)),
       documentTheme,
       plaintextSync,
-      // Remote-cursor producer + consumer (cloud-014 part-6). LIFTED from
-      // kb-1/apps/@kb-1/web/src/lib/components/app/editor/PlaintextEditor.svelte.
-      // Mounted only when the host supplied both an `awareness` handle and a
-      // `noteId`; the daemon UI omits both, so this is a no-op there. The
-      // producer writes the local caret to `awareness.cursor`; the consumer
-      // renders remote peers' carets/selections. Must sit AFTER `plaintextSync`
-      // so the CM doc and Y.Text are in sync before RelPos are built.
+      // Remote-cursor producer + consumer. Mounted only when the host supplied
+      // both an `awareness` handle and a `noteId`; the daemon UI omits both, so
+      // this is a no-op there. The producer writes the local caret to
+      // `awareness.cursor`; the consumer renders remote peers'
+      // carets/selections. Must sit AFTER `plaintextSync` so the CM doc and
+      // Y.Text are in sync before RelPos are built.
       ...(stableAwareness && stableNoteId !== undefined
         ? [
             plaintextCursorProducer(stableAwareness, stableText, stableNoteId),
@@ -447,6 +479,9 @@
       // handler ran. Caret INSIDE the mention falls through to default
       // delete (typo-fix carve-out for the display name).
       plaintextMentionKeymap(),
+      ...(enableMentionAutocomplete
+        ? [plaintextMentionAutocomplete({ getOrgPeople: stableGetOrgPeople })]
+        : []),
       // Tab / Shift-Tab indent / outdent for list items (Apple lane
       // Feature 3). Gates on lezer `ListItem` ancestry; Tab outside
       // any list falls through (returns false) so browser focus
@@ -556,7 +591,7 @@
 
 <div
   class={[
-    'kb2-editor-shell',
+    'kb1-editor-shell',
     scroll === 'self' ? 'scroll-self' : 'scroll-external',
     className,
   ].filter(Boolean).join(' ')}
@@ -574,7 +609,7 @@
 </div>
 
 <style>
-  .kb2-editor-shell {
+  .kb1-editor-shell {
     position: relative;
     display: flex;
     width: 100%;
@@ -583,7 +618,7 @@
     background: var(--rd-panel, #ffffff);
   }
 
-  .kb2-editor-shell.scroll-self {
+  .kb1-editor-shell.scroll-self {
     height: 100%;
     overflow: hidden;
   }

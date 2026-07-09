@@ -9,7 +9,7 @@ WebSocket construction, EventSource, and daemon route paths live in apps.
 
 KB-1 proved this architecture: its entire CM6 editor makes zero API calls —
 the host supplies a Y.Doc, an upload callback, a navigation callback. That
-separation is what made the KB-2 port a transplant instead of a rewrite.
+separation is what made the KB-1 port a transplant instead of a rewrite.
 Keep it.
 
 ## This Means
@@ -28,13 +28,12 @@ Keep it.
 - `apps/web` owning the y-protocols provider and passing the bound doc into
   the editor component.
 - `LocalStatusShell` receiving health data via props, with the fetch in
-  `apps/web`'s wrapper (the chunk-004 review fix that prompted this
-  invariant).
+  `apps/web`'s wrapper.
 
 ## Violations
 
-- A component in a package calling `fetch('/api/...')` (this shipped once in
-  chunk 004 and was caught in review).
+- A component in a package calling `fetch('/api/...')` or otherwise reaching
+  across the app boundary for server data.
 - A package hardcoding daemon routes, ports, or WebSocket URLs.
 - A CM6 extension performing network I/O directly instead of routing through
   a host callback.

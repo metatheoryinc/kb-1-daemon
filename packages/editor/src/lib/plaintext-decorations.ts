@@ -187,7 +187,7 @@ import {
   type LivePath,
   type OrgPerson,
 } from './markdown-core';
-import { accentForId } from '@kb-2/ui';
+import { accentForId } from '@kb-1/ui';
 import { MentionChipWidget, type MentionChipProps } from './plaintext-mention-widget';
 
 /* ---------------------------------------------------------------- *
@@ -464,7 +464,7 @@ function lookupFenceLanguage(info: string): Language | null {
  * underlying source didn't change in a way that affects the rendered
  * output (e.g. a cursor move past the table doesn't rebuild the DOM).
  */
-export type ColumnAlignment = 'left' | 'center' | 'right';
+type ColumnAlignment = 'left' | 'center' | 'right';
 
 class TableWidget extends WidgetType {
   constructor(
@@ -565,7 +565,7 @@ type InlineElement = MarkdownElement & {
   readonly children?: readonly InlineElement[];
 };
 
-export type TableInlinePart =
+type TableInlinePart =
   | { kind: 'text'; text: string }
   | { kind: 'strong' | 'emphasis' | 'strike'; children: readonly TableInlinePart[] }
   | { kind: 'code'; text: string }
@@ -2259,7 +2259,7 @@ export function buildMarkdownDecorations(
         // Cursor inside (or header was empty) → raw source. Do not
         // descend into TableCell children, otherwise chips/links/bold
         // render while the user is trying to edit pipe syntax, which
-        // is the backwards half of FC-3294.
+        // is the backwards half of the table-cell editing behavior.
         return false;
       }
 

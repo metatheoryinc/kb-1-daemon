@@ -1,7 +1,7 @@
 # Architecture Invariants
 
 This directory captures repo-level invariants: statements that should remain
-true as KB-2 grows.
+true as KB-1 grows.
 
 Use these as review tools. A reviewer should be able to compare a change against
 an invariant and flag drift.

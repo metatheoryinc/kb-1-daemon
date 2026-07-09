@@ -35,18 +35,18 @@ import { bindYjsWebSocket } from './websocket.js';
 const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
 describe('Yjs WebSocket session', () => {
-  let kb2Home: string;
+  let kb1Home: string;
 
   beforeEach(async () => {
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-yjs-ws-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-yjs-ws-'));
   });
 
   afterEach(async () => {
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   it('syncs two clients and persists their merged edits', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
 
@@ -87,8 +87,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('acknowledges a tagged client update only after it is persisted', async () => {
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
-    const filePath = join(kb2Home, 'demo-vault', 'acked.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'acked.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
     const socket = new FakeSocket();
@@ -118,8 +118,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('sends opaque attribution sidecars for attributed session mutations', async () => {
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
-    const filePath = join(kb2Home, 'demo-vault', 'attributed.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'attributed.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
     const socket = new FakeSocket();
@@ -152,8 +152,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('sends sentinel attribution sidecars for local and unknown document updates', async () => {
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
-    const filePath = join(kb2Home, 'demo-vault', 'sentinels.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'sentinels.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
     const socket = new FakeSocket();
@@ -189,8 +189,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('labels socket-origin Yjs updates with the socket binding attribution', async () => {
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
-    const filePath = join(kb2Home, 'demo-vault', 'socket-attribution.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'socket-attribution.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
     const sender = new FakeSocket();
@@ -223,7 +223,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('defers tagged client update acknowledgement until failed persistence recovers', async () => {
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
     await mkdir(vaultDir, { recursive: true });
     const filePath = join(vaultDir, 'readonly.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
@@ -263,7 +263,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('buffers the initial client sync request while a cold session opens', async () => {
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const filePath = join(vaultDir, 'hello-world.md');
     await mkdir(vaultDir, { recursive: true });
     await writeFile(filePath, 'cold file content\n', 'utf8');
@@ -305,7 +305,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('persists the first edit from a freshly synced client after loading durable content', async () => {
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const filePath = join(vaultDir, 'hello-world.md');
     await mkdir(vaultDir, { recursive: true });
     await writeFile(filePath, 'from disk\n', 'utf8');
@@ -339,7 +339,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('protects a previously empty existing file after its first durable edit', async () => {
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const filePath = join(vaultDir, 'empty-first.md');
     await mkdir(vaultDir, { recursive: true });
     await writeFile(filePath, '', 'utf8');
@@ -392,7 +392,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('serves durable content after a daemon restart from filesystem truth', async () => {
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const filePath = join(vaultDir, 'hello-world.md');
     await mkdir(vaultDir, { recursive: true });
     await writeFile(filePath, 'restart truth\n', 'utf8');
@@ -427,7 +427,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('fails missing document binds with canonical not_found and does not create parent folders', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'typo', 'missing.md');
+    const filePath = join(kb1Home, 'demo-vault', 'typo', 'missing.md');
     const session = new OneFileDocumentSession(filePath);
     const server = createServer();
     const webSocketServer = new WebSocketServer({ noServer: true });
@@ -453,15 +453,15 @@ describe('Yjs WebSocket session', () => {
       code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
       reason: JSON.stringify({ ok: false, error: 'not_found', message: 'file not found' })
     });
-    await expect(readdir(kb2Home)).resolves.toEqual([]);
+    await expect(readdir(kb1Home)).resolves.toEqual([]);
 
     await closeWebSocketServer(webSocketServer);
     await closeServer(server);
   });
 
   it('rejects stale independent peer updates without amplifying durable bytes', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'stable bytes\n', 'utf8');
     const session = new OneFileDocumentSession(filePath);
     const socket = new FakeSocket();
@@ -490,8 +490,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('rejects divergent stale peer updates that would append duplicate durable prefixes', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'abc\n', 'utf8');
     const session = new OneFileDocumentSession(filePath);
     const socket = new FakeSocket();
@@ -520,8 +520,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('rejects short stale peer updates after a non-empty durable seed', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'short.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'short.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'x', 'utf8');
     const session = new OneFileDocumentSession(filePath);
     const socket = new FakeSocket();
@@ -550,8 +550,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('rejects the stale browser-provider response generated from the daemon sync handshake', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'stable provider bytes\n', 'utf8');
     const session = new OneFileDocumentSession(filePath);
     const socket = new FakeSocket();
@@ -580,8 +580,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('accepts a warm browser-provider response after daemon restart when Yjs state was restored', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    const stateFilePath = join(kb2Home, '.kb2', 'doc-session-state', 'hello-world.json');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'hello-world.json');
     const firstSession = new OneFileDocumentSession(filePath, {
       defaultContent: 'stable provider bytes\n',
       stateFilePath
@@ -611,8 +611,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('keeps durable bytes stable across repeated stale reconnect updates', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'stable bytes across reconnects\n', 'utf8');
     const stalePeer = new Y.Doc();
     stalePeer.getText('markdown').insert(0, 'stable bytes across reconnects\n');
@@ -644,7 +644,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('reconciles idle external file changes and broadcasts the quiet merge event to every client', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, {
       defaultContent: 'initial\n',
       watchDebounceMs: 10,
@@ -685,8 +685,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('broadcasts persist failure and recovery events to every client', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
 
@@ -731,8 +731,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('replays active persist failure to clients that bind after the failure', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    const vaultDir = join(kb2Home, 'demo-vault');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    const vaultDir = join(kb1Home, 'demo-vault');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
 
@@ -778,7 +778,7 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('closes malformed sync frames without crashing the session', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
 
@@ -817,8 +817,8 @@ describe('Yjs WebSocket session', () => {
   });
 
   it('handles alternate message payload shapes and skips sends to closed sockets', async () => {
-    const filePath = join(kb2Home, 'demo-vault', 'hello-world.md');
-    await mkdir(join(kb2Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     await writeFile(filePath, 'socket shapes\n', 'utf8');
     const session = new OneFileDocumentSession(filePath);
     const socket = new FakeSocket();

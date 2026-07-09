@@ -12,15 +12,15 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('../../node_modules/.pnpm/svelte@5.55.5/node_modules/svelte/src/index-client.js', import.meta.url))
       },
       {
-        find: /^@kb-2\/doc-session\/protocol$/,
+        find: /^@kb-1\/doc-session\/protocol$/,
         replacement: fileURLToPath(new URL('../../packages/doc-session/src/protocol.ts', import.meta.url))
       },
       {
-        find: /^@kb-2\/doc-session$/,
+        find: /^@kb-1\/doc-session$/,
         replacement: fileURLToPath(new URL('../../packages/doc-session/src/index.ts', import.meta.url))
       },
       {
-        find: /^@kb-2\/vault-core$/,
+        find: /^@kb-1\/vault-core$/,
         replacement: fileURLToPath(new URL('../../packages/vault-core/src/index.ts', import.meta.url))
       }
     ]

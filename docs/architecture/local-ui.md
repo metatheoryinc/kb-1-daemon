@@ -1,22 +1,25 @@
 # Local UI
 
-The local UI is the first open-source user experience for KB-2. It is served by,
-or alongside, the local daemon/server and talks to the local server APIs. It
-does not read or write the filesystem directly.
+The local UI is the first open-source user experience for KB-1. It is served by
+the local daemon/server in production-like runs and proxied through the daemon
+during Vite development. It talks to the local server APIs and does not read or
+write the filesystem directly.
 
 ## Purpose
 
-The local UI lets KB-2 become useful before cloud relay, auth, org management,
-or hosted collaboration exist.
+The local UI lets KB-1 become useful before remote relay, auth, org management,
+or collaboration services exist.
 
-The first local product should let a single local user:
+The shipped local product lets a single local user:
 
-- choose or configure a filesystem-backed vault
-- browse the file tree
+- discover, create, rename, and delete filesystem-backed vaults
+- browse vault-scoped file trees
 - open Markdown files
 - edit Markdown through service-mediated writes
 - see when files change outside the current editor path
-- eventually search local content
+- search local content
+- work from a zero-vault state after deleting every vault
+- view Git-backed best-effort note history for a selected note
 
 This same local API surface should be exercised by local MCP tools and later by
 cloud relay requests.
@@ -28,7 +31,7 @@ The local UI should not include:
 - authentication
 - users
 - organizations
-- billing
+- remote account administration
 - remote sharing policy
 - remote relay setup as a prerequisite for local use
 - cursors
@@ -48,7 +51,7 @@ Instead, the local UI should surface content state changes:
 
 - a service-mediated edit changed the file
 - an MCP/API caller changed the file
-- a direct filesystem write bypassed KB-2 and caused a reload
+- a direct filesystem write bypassed KB-1 and caused a reload
 - the file was moved, renamed, deleted, or recreated
 
 For direct filesystem writes, the UI should use stronger language because the
@@ -66,26 +69,28 @@ Local UI -> Local HTTP/API -> Vault service -> Filesystem/Yjs runtime
 This keeps the server as the only legitimate runtime writer and prevents the
 local UI from becoming a parallel filesystem implementation.
 
-## First Useful Scope
+Every content route is explicitly vault-scoped. The UI discovers vaults with
+`GET /api/vaults` and then addresses content with routes such as
+`/api/vaults/:id/tree`, `/api/vaults/:id/files/{path}`,
+`/api/vaults/:id/raw/{path}`, and `/api/vaults/:id/events`. A missing or
+unknown vault id is a normal not-found state, not a fallback to a default vault.
 
-A useful first local UI can be intentionally small:
+## Current Scope
 
-- left-side file tree
+- multi-vault file tree grouped by vault id/display name
 - main Markdown editor or reader
 - visible current path
 - save/edit state
 - direct-write warning state
 - health/status surface for the daemon
-
-Search, Yjs-backed concurrent editing, MCP-driven change attribution, and richer
-metadata can arrive in later chunks.
+- vault CRUD controls
+- search
+- note history panel
+- attachment-aware tree/read routes through the daemon API
 
 ## Open Questions
 
-- Should the UI be a separate workspace app or part of the daemon package?
-- Should the daemon serve a built static UI in production and proxy a dev server
-  in development?
-- What is the smallest editor integration that still exercises the service write
-  path correctly?
 - How should the UI represent an MCP/API edit when no user identity exists?
 - Should local UI access require localhost-only binding at first?
+- Should `docs/daemon/**` become a canonical public docs namespace, or should
+  public docs stay under `docs/architecture/**` plus packaging docs?

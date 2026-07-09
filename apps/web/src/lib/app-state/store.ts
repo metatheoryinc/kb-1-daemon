@@ -21,8 +21,6 @@
  */
 export type ColorMode = 'light' | 'dark' | 'system';
 
-export const colorModes: readonly ColorMode[] = ['light', 'dark', 'system'];
-
 /**
  * A pinned note or folder. `path` is the vault-relative path; `addedAt`
  * captures the toggle moment so the starred panel can sort
@@ -41,8 +39,8 @@ function favoriteKey(e: Pick<FavoriteEntry, 'kind' | 'vaultId' | 'path'>): strin
   return `${e.kind}:${e.vaultId}:${e.path}`;
 }
 
-/** Default persistence slot. Stable across releases — renaming wipes state. */
-export const DEFAULT_PERSIST_KEY = 'kb2:app-state';
+/** Default persistence slot for KB-1 app chrome preferences. */
+export const DEFAULT_PERSIST_KEY = 'kb1:app-state';
 
 /**
  * Secondary (files) rail width bounds, in px. The setter clamps every
@@ -50,11 +48,11 @@ export const DEFAULT_PERSIST_KEY = 'kb2:app-state';
  * re-clamps any out-of-range persisted blob, so consumers never have to
  * clamp themselves.
  */
-export const SECONDARY_RAIL_WIDTH_MIN = 240;
-export const SECONDARY_RAIL_WIDTH_MAX = 564;
-export const SECONDARY_RAIL_WIDTH_DEFAULT = 282;
+const SECONDARY_RAIL_WIDTH_MIN = 240;
+const SECONDARY_RAIL_WIDTH_MAX = 564;
+const SECONDARY_RAIL_WIDTH_DEFAULT = 282;
 
-export function clampSecondaryRailWidth(width: number): number {
+function clampSecondaryRailWidth(width: number): number {
   if (!Number.isFinite(width)) return SECONDARY_RAIL_WIDTH_DEFAULT;
   if (width < SECONDARY_RAIL_WIDTH_MIN) return SECONDARY_RAIL_WIDTH_MIN;
   if (width > SECONDARY_RAIL_WIDTH_MAX) return SECONDARY_RAIL_WIDTH_MAX;
@@ -88,7 +86,7 @@ interface PersistedState {
 }
 
 /** The live, in-memory app state. Mirrors the persisted slice plus actions. */
-export interface AppState {
+interface AppState {
   colorMode: ColorMode;
   /**
    * Allow-list of expanded folder keys (`folder:<vaultId>:<path>`).
@@ -183,7 +181,7 @@ export interface AppStateStore {
   favoritesOnFolderRenamed: (vaultId: string, oldPath: string, newPath: string) => void;
 }
 
-export interface CreateAppStateOptions {
+interface CreateAppStateOptions {
   /**
    * String key/value storage used for persistence (e.g. the browser's
    * `localStorage`). Omit for an in-memory store that writes nothing

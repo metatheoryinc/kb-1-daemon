@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/doc-session",
+  "name": "@kb-1/doc-session",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -24,7 +24,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/vault-core": "workspace:*",
+    "@kb-1/vault-core": "workspace:*",
     "fast-diff": "1.3.0",
     "lib0": "0.2.117",
     "y-protocols": "1.0.7",

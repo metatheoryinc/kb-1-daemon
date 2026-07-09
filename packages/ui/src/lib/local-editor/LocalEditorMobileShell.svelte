@@ -20,6 +20,7 @@
   import Icon from '../primitives/Icon.svelte';
   import type { AccentName } from '../primitives/accent';
   import type { BreadcrumbItem } from '../primitives/Breadcrumb.svelte';
+  import type { LocalTreeMoveDrop } from './tree-drag-drop';
   import type {
     LocalTreeAction,
     LocalTreeNode,
@@ -74,6 +75,7 @@
     onOpenFolder?: (key: string) => void;
     onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    onTreeMoveDrop?: (move: LocalTreeMoveDrop) => void;
     onToggleVaultHidden?: (vaultId: string) => void;
     /** Create a new vault (files-rail footer). The host collects a name. */
     onNewVault?: () => void;
@@ -120,6 +122,7 @@
     onOpenFolder,
     onOpenVault,
     onTreeAction,
+    onTreeMoveDrop,
     onToggleVaultHidden,
     onNewVault,
     navOpen = $bindable(false),
@@ -245,6 +248,7 @@
             {onToggleFolder}
             {onToggleVault}
             {onTreeAction}
+            {onTreeMoveDrop}
             {onToggleVaultHidden}
             {onNewVault}
           />

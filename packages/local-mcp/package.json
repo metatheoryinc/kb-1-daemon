@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/local-mcp",
+  "name": "@kb-1/local-mcp",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/vault-service": "workspace:*",
+    "@kb-1/vault-service": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "4.4.3"
   },

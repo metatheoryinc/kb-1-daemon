@@ -1,4 +1,4 @@
-import type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor } from '@kb-2/vault-service';
+import type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor } from '@kb-1/vault-service';
 
 export type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor };
 

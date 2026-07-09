@@ -5,8 +5,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/svelte";
+import type { QueryClient } from "@tanstack/svelte-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { queryKeys } from "$lib/realtime";
+import type { NoteSnapshot } from "$lib/note/note-snapshot";
 import AppStateHarness from "./AppStateHarness.svelte";
 import { setPageUrl } from "./page-state.svelte";
 
@@ -14,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   goto: vi.fn(),
   destroyProvider: vi.fn(),
   providers: [] as Array<{ path: string; doc: Y.Doc; text: Y.Text }>,
+  delayedSyncPaths: new Set<string>(),
+  pendingSyncs: new Map<string, () => void>(),
 }));
 
 // The route derives the active vault + open document from the URL, so the
@@ -39,36 +44,49 @@ vi.mock("$app/state", async () => {
   return { page };
 });
 
-vi.mock("@kb-2/editor", async () => {
+vi.mock("@kb-1/editor", async () => {
   const { default: PlaintextEditor } =
     await import("./FakePlaintextEditor.svelte");
   return { PlaintextEditor };
 });
 
-vi.mock("$lib/yjs/demo-document-provider", async () => {
+vi.mock("$lib/yjs/local-document-provider", async () => {
   const actual = await vi.importActual<
-    typeof import("$lib/yjs/demo-document-provider")
-  >("$lib/yjs/demo-document-provider");
+    typeof import("$lib/yjs/local-document-provider")
+  >("$lib/yjs/local-document-provider");
+  class TestLocalDocumentProviderOpenError extends Error {
+    readonly failure = {
+      ok: false as const,
+      error: "not_found" as const,
+      message: "file not found",
+    };
+
+    constructor() {
+      super("file not found");
+      this.name = "LocalDocumentProviderOpenError";
+    }
+  }
   return {
     ...actual,
-    createDemoDocumentProvider: vi.fn((options) => {
+    createLocalDocumentProvider: vi.fn((options) => {
       const path = options.path ?? "hello-world.md";
       options.onStatus?.("syncing");
       const doc = new Y.Doc();
       const text = doc.getText("markdown");
       if (path === "projects/missing.md" || path === "deleted-later.md") {
         options.onStatus?.("closed");
-        options.onError?.(
-          new actual.DemoDocumentProviderOpenError({
-            ok: false,
-            error: "not_found",
-            message: "file not found",
-          }),
-        );
+        options.onError?.(new TestLocalDocumentProviderOpenError());
       } else {
         text.insert(0, `content:${path}`);
-        options.onStatus?.("open");
-        options.onSynced?.();
+        const open = () => {
+          options.onStatus?.("open");
+          options.onSynced?.();
+        };
+        if (mocks.delayedSyncPaths.has(path)) {
+          mocks.pendingSyncs.set(path, open);
+        } else {
+          open();
+        }
       }
       mocks.providers.push({ path, doc, text });
       return {
@@ -77,6 +95,9 @@ vi.mock("$lib/yjs/demo-document-provider", async () => {
         destroy: mocks.destroyProvider,
       };
     }),
+    isLocalDocumentProviderOpenError: vi.fn(
+      (error: unknown) => error instanceof TestLocalDocumentProviderOpenError,
+    ),
   };
 });
 
@@ -85,6 +106,9 @@ describe("local editor route", () => {
     mocks.goto.mockReset();
     mocks.destroyProvider.mockReset();
     mocks.providers = [];
+    mocks.delayedSyncPaths.clear();
+    mocks.pendingSyncs.clear();
+    document.title = "";
     // The harness builds the app-state store against `localStorage`, which
     // persists tree expansion and vault filters. Clear it so each test
     // starts from the clean first-load defaults rather than inheriting a
@@ -229,6 +253,14 @@ describe("local editor route", () => {
     );
   });
 
+  it("uses a stable product tab title", async () => {
+    render(AppStateHarness);
+
+    expect(await screen.findByLabelText("Markdown editor")).toBeTruthy();
+    expect(document.title).toBe("KB-1");
+    expect(document.title).not.toContain("demo-vault");
+  });
+
   it("fetches the vault tree, renders it, and rebinds the editor when a file is opened", async () => {
     render(AppStateHarness);
 
@@ -277,6 +309,48 @@ describe("local editor route", () => {
     expect(mocks.providers[0]?.text.toString()).toBe("content:hello-world.md");
   });
 
+  it("paints a cached snapshot while syncing and preserves selection on live hydration", async () => {
+    mocks.delayedSyncPaths.add("hello-world.md");
+    const { container } = render(AppStateHarness, {
+      props: {
+        seedQueryClient: (client: QueryClient) => {
+          client.setQueryData(
+            queryKeys.note("demo-vault", "hello-world.md"),
+            noteSnapshot({
+              path: "hello-world.md",
+              content: "cached hello world",
+            }),
+          );
+        },
+      },
+    });
+
+    let snapshotEditor!: HTMLTextAreaElement;
+    await waitFor(() => {
+      snapshotEditor = container.querySelector(
+        ".snapshot-editor-layer textarea",
+      ) as HTMLTextAreaElement;
+      expect(snapshotEditor?.value).toBe("cached hello world");
+    });
+
+    snapshotEditor.focus();
+    snapshotEditor.setSelectionRange(7, 12, "forward");
+    document.dispatchEvent(new Event("selectionchange"));
+    mocks.pendingSyncs.get("hello-world.md")?.();
+
+    await waitFor(() => {
+      expect(container.querySelector(".snapshot-editor-layer")).toBeNull();
+    });
+    const liveEditor = container.querySelector(
+      ".live-editor-layer textarea",
+    ) as HTMLTextAreaElement;
+    expect(liveEditor.value).toBe("content:hello-world.md");
+    await waitFor(() => {
+      expect(liveEditor.selectionStart).toBe(7);
+      expect(liveEditor.selectionEnd).toBe(12);
+    });
+  });
+
   it("opens attachment rows through the raw route instead of the document provider", async () => {
     const openSpy = vi
       .spyOn(window, "open")
@@ -315,9 +389,24 @@ describe("local editor route", () => {
     expect((link as HTMLAnchorElement).getAttribute("href")).toBe(
       "/api/vaults/demo-vault/raw/attachments/live.png",
     );
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => ({ closed: false }) as Window);
+
+    await fireEvent.click(link);
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/vaults/demo-vault/raw/attachments/live.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(mocks.goto).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/demo-vault/attachments/live.png");
     await waitFor(() => {
       expect(screen.queryByLabelText("Markdown editor")).toBeNull();
     });
+
+    openSpy.mockRestore();
   });
 
   it("hides the vault tree when the vault is toggled off in the filter", async () => {
@@ -480,6 +569,19 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function noteSnapshot(overrides: Partial<NoteSnapshot> = {}): NoteSnapshot {
+  return {
+    vaultId: "demo-vault",
+    path: "hello-world.md",
+    version: 1,
+    mtime: 1,
+    size: overrides.content?.length ?? 0,
+    contentType: "text/markdown; charset=utf-8",
+    content: "",
+    ...overrides,
+  };
 }
 
 // History navigation (back/forward, deep-link) lands a new URL. The route

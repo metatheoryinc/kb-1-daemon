@@ -1,4 +1,4 @@
-import { encodeVaultPath } from "./yjs/demo-document-provider";
+import { encodeVaultPath } from "./yjs/local-document-provider";
 
 /**
  * Transport layer for vault, file, and folder operations. Owns every
@@ -22,9 +22,9 @@ export interface VaultSummary {
   metadata?: { color?: string };
 }
 
-export type ArtifactKind = "text" | "attachment";
+type ArtifactKind = "text" | "attachment";
 
-export type ArtifactPreview =
+type ArtifactPreview =
   | "markdown"
   | "text"
   | "image"
@@ -40,20 +40,20 @@ export interface ArtifactInfo {
   preview: ArtifactPreview;
 }
 
-export interface TreeEntry {
+interface TreeEntry {
   path: string;
   kind: "file" | "folder";
   metadata?: { color?: string };
   artifact?: ArtifactInfo;
 }
 
-export interface VaultInfo {
+interface VaultInfo {
   rootName: string;
   fileCount: number;
   folderCount: number;
 }
 
-export interface SearchHit {
+interface SearchHit {
   path: string;
   line: number;
   lineText: string;
@@ -63,9 +63,9 @@ export interface SearchHit {
   };
 }
 
-export type FileHistoryOperation = "create" | "update" | "move" | "rename";
+type FileHistoryOperation = "create" | "update" | "move" | "rename";
 
-export type FileHistoryActor = {
+type FileHistoryActor = {
   kind: string;
   id?: string;
   name?: string;
@@ -86,12 +86,12 @@ export interface FileHistoryEntry {
   contentHash: string;
 }
 
-export interface FileHistoryPage {
+interface FileHistoryPage {
   entries: FileHistoryEntry[];
   hasMore: boolean;
 }
 
-export interface ListNoteHistoryOptions {
+interface ListNoteHistoryOptions {
   before?: string;
   beforeId?: string;
   limit?: number;
@@ -254,7 +254,7 @@ function sanitizeFilenamePart(input: string): string {
     .replace(/^-|-$/g, "")
     .replace(/^\.+$/, "")
     .trim();
-  if (cleaned.length === 0 || cleaned === ".kb2") return "image";
+  if (cleaned.length === 0 || cleaned === ".kb1") return "image";
   return cleaned;
 }
 
@@ -529,5 +529,3 @@ export const kbService = {
     );
   },
 };
-
-export type KbService = typeof kbService;

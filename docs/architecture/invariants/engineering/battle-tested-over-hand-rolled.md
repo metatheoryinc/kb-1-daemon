@@ -4,7 +4,7 @@
 
 For algorithmic concerns with mature off-the-shelf solutions — text diffing,
 parsing, hashing, unicode handling, compression, date/time math, CRDT
-operations — KB-2 uses a battle-tested library (or adapts a KB-1-proven
+operations — KB-1 uses a battle-tested library (or adapts a KB-1-proven
 implementation) rather than writing a fresh algorithm. The ideal integration
 is a one-line call plus thin glue.
 
@@ -21,11 +21,11 @@ code is reviewable at a glance; algorithm code is not.
 
 ## Founding Example
 
-Chunk 006 shipped `applyMinimalTextSplice` — a 39-line hand-rolled
-prefix/suffix differ — when `fast-diff` (the extracted core of Google's
-diff-match-patch, surrogate-safe, a decade in Quill production) plus Yjs's
-built-in `Y.Text.applyDelta` do the same job as ~6 lines of glue. The user
-caught it in review. Chunk 006.5 deletes it.
+An early implementation shipped `applyMinimalTextSplice` — a 39-line
+hand-rolled prefix/suffix differ — when `fast-diff` (the extracted core of
+Google's diff-match-patch, surrogate-safe, a decade in Quill production) plus
+Yjs's built-in `Y.Text.applyDelta` do the same job as ~6 lines of glue. Review
+caught it, and the follow-up replaced it with the library-backed path.
 
 ## This Means
 

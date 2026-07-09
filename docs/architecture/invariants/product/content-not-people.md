@@ -7,14 +7,14 @@ not users, cursors, selections, follow mode, or presence. Awareness and
 collaboration affordances belong to the cloud layer.
 
 When something changes a file locally, the product surfaces a content event
-("changed outside KB-2; reloaded from disk"), with warning framing for direct
+("changed outside KB-1; reloaded from disk"), with warning framing for direct
 writes — never a presence model.
 
 ## Named Exception: Durable Actor Attribution
 
 The local store must be able to **record and retrieve** actor attribution
 even though the local product does not act on it. The audit log and reserved
-durable `.kb2` metadata may attribute operations to actors — users, agents,
+durable `.kb1` metadata may attribute operations to actors — users, agents,
 API/MCP callers (e.g. `"actor":"user:123"`, `"source":"cloud-relay"`) —
 because the user's vault is the only durable home for that history and the
 cloud layer needs it.

@@ -8,8 +8,8 @@
     "sourceMap": true,
     "types": ["node"],
     "paths": {
-      "@kb-2/doc-session": ["./packages/doc-session/dist/index.d.ts"],
-      "@kb-2/tunnel-client": ["./packages/tunnel-client/dist/index.d.ts"]
+      "@kb-1/doc-session": ["./packages/doc-session/dist/index.d.ts"],
+      "@kb-1/tunnel-client": ["./packages/tunnel-client/dist/index.d.ts"]
     }
   },
   "exclude": ["src/**/*.test.ts"]

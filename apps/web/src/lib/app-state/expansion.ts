@@ -32,7 +32,7 @@ export function expansionKey(
  * ancestors. So a deep file `a/b/c.md` yields `folder:<id>:a` and
  * `folder:<id>:a/b`; a top-level file `note.md` yields nothing.
  */
-export function expandToPath(
+function expandToPath(
   path: string,
   vaultId: string,
   expand: (key: string) => void,

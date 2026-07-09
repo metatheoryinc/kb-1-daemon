@@ -8,7 +8,7 @@ describe('seedVaultFromStarterKit', () => {
   let vaultRoot: string;
 
   beforeEach(async () => {
-    vaultRoot = await mkdtemp(join(tmpdir(), 'kb2-starter-kit-'));
+    vaultRoot = await mkdtemp(join(tmpdir(), 'kb1-starter-kit-'));
   });
 
   afterEach(async () => {
@@ -35,9 +35,9 @@ describe('seedVaultFromStarterKit', () => {
     await expect(access(join(vaultRoot, 'README.md'))).rejects.toBeTruthy();
   });
 
-  it('still seeds when only the .kb2 identity dir is present (it is not user content)', async () => {
-    await mkdir(join(vaultRoot, '.kb2'), { recursive: true });
-    await writeFile(join(vaultRoot, '.kb2', 'vault.json'), '{}\n', 'utf8');
+  it('still seeds when only the .kb1 identity dir is present (it is not user content)', async () => {
+    await mkdir(join(vaultRoot, '.kb1'), { recursive: true });
+    await writeFile(join(vaultRoot, '.kb1', 'vault.json'), '{}\n', 'utf8');
 
     const seeded = await seedVaultFromStarterKit(vaultRoot);
 

@@ -17,7 +17,7 @@ export type AuditOperation =
   | 'splice'
   | 'append'
   | 'prepend';
-export type AuditEntityKind = 'file' | 'folder';
+type AuditEntityKind = 'file' | 'folder';
 
 export interface AuditEntry {
   id: string;
@@ -69,7 +69,7 @@ function notifyVaultAuditHandlers(entry: AuditEntry, input: AuditInput): void {
     try {
       handler(entry, input);
     } catch (error) {
-      console.warn('KB-2 vault audit handler failed.', error);
+      console.warn('KB-1 vault audit handler failed.', error);
     }
   }
 }
@@ -86,7 +86,7 @@ async function writeAuditEntry(input: AuditInput): Promise<AuditEntry> {
     ...(input.toPath !== undefined ? { toPath: input.toPath } : {}),
     summary: input.summary
   };
-  const dir = path.join(input.root, '.kb2', 'audit');
+  const dir = path.join(input.root, '.kb1', 'audit');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, 'changes.jsonl'), `${JSON.stringify(entry)}\n`, 'utf8');
   return entry;

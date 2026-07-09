@@ -7,19 +7,19 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/tunnel-protocol build"
+        "command": "pnpm --filter @kb-1/tunnel-protocol build"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/tunnel-protocol test"
+        "command": "pnpm --filter @kb-1/tunnel-protocol test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/tunnel-protocol typecheck"
+        "command": "pnpm --filter @kb-1/tunnel-protocol typecheck"
       }
     }
   }

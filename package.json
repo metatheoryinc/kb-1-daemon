@@ -1,5 +1,5 @@
 {
-  "name": "kb-2",
+  "name": "kb-1-daemon",
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@11.5.3",
@@ -8,12 +8,12 @@
     "build": "nx run-many -t build",
     "check": "node scripts/check.mjs",
     "docker:down": "docker compose down",
-    "docker:up": "docker compose up --build -d daemon",
+    "docker:up": "node scripts/docker-up.mjs",
     "dev": "node scripts/dev.mjs",
-    "dev:daemon": "pnpm --filter @kb-2/daemon dev",
-    "dev:web": "pnpm --filter @kb-2/web dev",
+    "dev:daemon": "pnpm --filter @kb-1/daemon dev",
+    "dev:web": "pnpm --filter @kb-1/web dev",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
-    "storybook": "pnpm --filter @kb-2/ui storybook",
+    "storybook": "pnpm --filter @kb-1/ui storybook",
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck"
   },

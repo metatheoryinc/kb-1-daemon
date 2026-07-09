@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isNodeError, statOrNull } from './fs.js';
-import { InvalidPathError, resolveVaultPath, validateOptionalVaultPath } from './path.js';
+import { InvalidPathError, isInternalVaultPath, resolveVaultPath, validateOptionalVaultPath } from './path.js';
 
 export interface SearchInput {
   q: string;
@@ -120,8 +120,7 @@ function vaultPath(root: string, relPath: string): string {
 }
 
 function isExcludedSearchPath(relPath: string): boolean {
-  return relPath === '.kb2' ||
-    relPath.startsWith('.kb2/') ||
+  return isInternalVaultPath(relPath) ||
     relPath === 'trash' ||
     relPath.startsWith('trash/');
 }

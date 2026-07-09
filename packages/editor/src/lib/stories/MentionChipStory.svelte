@@ -1,6 +1,6 @@
 <script lang="ts">
   import MentionChip from '../MentionChip.svelte';
-  import type { AccentName } from '@kb-2/ui';
+  import type { AccentName } from '@kb-1/ui';
 
   interface MentionChipFixture {
     accent: AccentName;

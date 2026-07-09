@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import type { ServiceResult } from '@kb-2/vault-service';
+import type { ServiceResult } from '@kb-1/vault-service';
 
 export function readSpliceRequest(body: { body: Record<string, unknown> }): ServiceResult<{
   baseline: string;

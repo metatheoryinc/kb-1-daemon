@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { OneFileDocumentSession, type DocumentSessionEventHandler, type OneFileDocumentSessionOptions } from './session.js';
 
 export const DEFAULT_IDLE_SESSION_GRACE_MS = 30_000;
-const DOCUMENT_SESSION_STATE_DIR = '.kb2/doc-session-state';
+const DOCUMENT_SESSION_STATE_DIR = '.kb1/doc-session-state';
 
 export interface DocumentSessionManagerOptions extends OneFileDocumentSessionOptions {
   root: string;
@@ -20,7 +20,24 @@ export interface FlushDocumentSessionsResult {
   flushed: number;
 }
 
-export class DocumentSessionManager {
+interface DocumentSessionManagerRuntimeSurface {
+  onEvent(handler: DocumentSessionEventHandler): () => void;
+  attachClientSession(vaultPath: string): ClientDocumentSession;
+  withSession<T>(
+    vaultPath: string,
+    operation: (session: OneFileDocumentSession) => Promise<T>,
+    options?: Partial<Pick<OneFileDocumentSessionOptions, 'defaultContent'>>
+  ): Promise<T>;
+  getOpenSession(vaultPath: string): OneFileDocumentSession | undefined;
+  getOpenSessionCount(): number;
+  flushDirtySessions(): Promise<FlushDocumentSessionsResult>;
+  moveSession(fromPath: string, toPath: string, moveOnDisk: () => Promise<void>): Promise<boolean>;
+  moveSessionSubtree(fromFolder: string, toFolder: string, moveOnDisk: () => Promise<void>): Promise<string[]>;
+  deleteSessionSubtree(folderPath: string, deleteOnDisk: () => Promise<void>): Promise<string[]>;
+  close(): Promise<void>;
+}
+
+export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurface {
   private readonly root: string;
   private readonly options: Omit<OneFileDocumentSessionOptions, 'eventPath'>;
   private readonly idleSessionGraceMs: number;
@@ -212,7 +229,7 @@ export class DocumentSessionManager {
       try {
         handler(event);
       } catch (error) {
-        console.warn('KB-2 document session manager event handler failed.', error);
+        console.warn('KB-1 document session manager event handler failed.', error);
       }
     }
   }
@@ -245,7 +262,7 @@ export class DocumentSessionManager {
     }
     const timer = setTimeout(() => {
       void this.closeSession(vaultPath).catch((error: unknown) => {
-        console.warn(`KB-2 failed to close idle document session for ${vaultPath}.`, error);
+        console.warn(`KB-1 failed to close idle document session for ${vaultPath}.`, error);
       });
     }, this.idleSessionGraceMs);
     timer.unref?.();
@@ -258,7 +275,7 @@ export class DocumentSessionManager {
     const session = this.sessions.get(vaultPath);
     if (!session) return;
     if (session.hasActivePersistFailure()) {
-      console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`);
+      console.warn(`KB-1 refused to close idle document session for ${vaultPath}; content is not durably persisted.`);
       return;
     }
 
@@ -270,7 +287,7 @@ export class DocumentSessionManager {
     } catch (error) {
       if (session.hasActivePersistFailure()) {
         this.sessions.set(vaultPath, session);
-        console.warn(`KB-2 refused to close idle document session for ${vaultPath}; content is not durably persisted.`, error);
+        console.warn(`KB-1 refused to close idle document session for ${vaultPath}; content is not durably persisted.`, error);
         return;
       }
       throw error;

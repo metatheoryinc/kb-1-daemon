@@ -56,7 +56,7 @@ export const localEditorSearchFixture: LocalSearchResult[] = [
     lineText:
       "Search results show file paths with enough surrounding snippet context to choose quickly.",
     before: ["The vault is the durable truth."],
-    after: ["Folder colors live in .kb2/folders.yml."],
+    after: ["Folder colors live in .kb1/folders.yml."],
   },
 ];
 

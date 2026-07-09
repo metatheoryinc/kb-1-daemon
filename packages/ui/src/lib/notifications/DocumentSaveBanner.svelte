@@ -30,7 +30,7 @@
   const variantConfig: Record<DocumentSaveBannerVariant, VariantConfig> = {
     'external-merge': {
       title: 'External edit merged',
-      message: 'Merged an edit made outside KB-2.',
+      message: 'Merged an edit made outside KB-1.',
       icon: 'refresh',
       role: 'status',
       ariaLive: 'polite',
@@ -51,14 +51,14 @@
     },
     'persist-failure': {
       title: 'Changes are not saving',
-      message: 'Your edits are still in this session, but KB-2 cannot persist them right now.',
+      message: 'Your edits are still in this session, but KB-1 cannot persist them right now.',
       icon: 'bell',
       role: 'alert',
       ariaLive: 'assertive',
     },
     'persist-recovered': {
       title: 'Saving restored',
-      message: 'KB-2 is persisting changes again.',
+      message: 'KB-1 is persisting changes again.',
       icon: 'cloud',
       role: 'status',
       ariaLive: 'polite',
@@ -67,7 +67,7 @@
 </script>
 
 <script lang="ts">
-  import { Button } from '../button';
+  import Button from '../button/button.svelte';
   import Icon from '../primitives/Icon.svelte';
   import IconButton from '../primitives/IconButton.svelte';
   import { cn } from '../utils';
@@ -164,12 +164,12 @@
     line-height: 1.35;
   }
 
-  :global(.document-save-banner .kb2-button) {
+  :global(.document-save-banner .kb1-button) {
     background: color-mix(in srgb, var(--banner-accent) 8%, var(--rd-panel));
     color: var(--rd-ink-2);
   }
 
-  :global(.document-save-banner .kb2-button:hover) {
+  :global(.document-save-banner .kb1-button:hover) {
     background: color-mix(in srgb, var(--banner-accent) 14%, var(--rd-panel));
   }
 
@@ -214,7 +214,7 @@
       align-items: start;
     }
 
-    :global(.document-save-banner .kb2-button) {
+    :global(.document-save-banner .kb1-button) {
       grid-column: 2 / -1;
       justify-self: start;
     }

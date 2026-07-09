@@ -21,7 +21,7 @@ that the underlying file changed beneath them.
   subsequent write succeeds.
 - An external change to a file backing an active session is detected, the
   session state is reconciled to reflect it, all clients converge, and all
-  clients display a clear notice that the file changed outside KB-2.
+  clients display a clear notice that the file changed outside KB-1.
 - No code path swallows a write error into a server-side log alone — the log
   line exists for operators; the user-facing signal exists for the user.
 - Recovery is also visible: when saving resumes, the warning clears.
@@ -31,15 +31,8 @@ that the underlying file changed beneath them.
 Transient WebSocket disconnects: while the socket is down, edits are not
 saving and the only indicator is the connection status chip. Accepted for
 now because offline detection, reconnect, and read-only-on-disconnect have
-not been built. This exception expires when those ship (see horizons); it
-must not be used to justify any new silent-failure path.
-
-Cloud 004 demo polish: the cloud editor may suppress successful/idle and
-recovered save banners, and may render save-failure warnings as non-layout-
-shifting chrome (the connection dot turns red, with an overlay warning) instead
-of an in-flow banner. This is only for the live staging demo polish pass and
-must be reverted or reworked into a full non-reflowing loud-save design before
-any real use.
+not been built. This exception expires when those ship; it must not be used to
+justify any new silent-failure path.
 
 ## Violations
 

@@ -2,10 +2,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { writeVaultFile } from '@kb-2/vault-core';
+import { writeVaultFile } from '@kb-1/vault-core';
 
 /** Vault-internal directory that holds identity/state, never user content. */
-const VAULT_IDENTITY_DIR = '.kb2';
+const VAULT_IDENTITY_DIR = '.kb1';
 
 /**
  * Absolute path to the bundled starter-kit template tree. Resolved relative to
@@ -13,13 +13,13 @@ const VAULT_IDENTITY_DIR = '.kb2';
  * where the build step copies the template directory alongside the compiled
  * module (dist tree).
  */
-export const STARTER_KIT_DIR = fileURLToPath(new URL('./starter-kit-template/', import.meta.url));
+const STARTER_KIT_DIR = fileURLToPath(new URL('./starter-kit-template/', import.meta.url));
 
 /**
  * Recursively copy the bundled starter-kit template tree into a vault root.
  *
  * Safe to call on any vault: it seeds only when the vault has no user content
- * yet (the vault-identity `.kb2` directory does not count), so an existing or
+ * yet (the vault-identity `.kb1` directory does not count), so an existing or
  * already-seeded vault is never overwritten or duplicated. Files are written
  * through the shared vault-core write path so seeding follows the same fs and
  * audit conventions as every other vault write.
@@ -49,7 +49,7 @@ export async function seedVaultFromStarterKit(vaultRoot: string): Promise<boolea
   return true;
 }
 
-/** A vault holds user content when it has any entry other than the `.kb2` dir. */
+/** A vault holds user content when it has any entry other than the `.kb1` dir. */
 async function hasUserContent(vaultRoot: string): Promise<boolean> {
   let entries;
   try {

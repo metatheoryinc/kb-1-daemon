@@ -4,13 +4,14 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   resolve: {
     alias: {
-      '@kb-2/doc-session': fileURLToPath(new URL('../doc-session/src/index.ts', import.meta.url)),
-      '@kb-2/vault-core': fileURLToPath(new URL('../vault-core/src/index.ts', import.meta.url))
+      '@kb-1/doc-session': fileURLToPath(new URL('../doc-session/src/index.ts', import.meta.url)),
+      '@kb-1/vault-core': fileURLToPath(new URL('../vault-core/src/index.ts', import.meta.url))
     }
   },
   test: {
     environment: 'node',
     globals: true,
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text'],

@@ -24,6 +24,7 @@ export {
 } from './manager.js';
 export {
   bindYjsWebSocket,
+  type BoundYjsWebSocket,
   type YjsWebSocketBindingOptions,
   type YjsWebSocketLike
 } from './websocket.js';

@@ -10,7 +10,7 @@ export async function proxyUi(webProxyTarget: string, request: Request): Promise
   try {
     return await fetch(new Request(upstreamUrl, request));
   } catch (error) {
-    return new Response(`KB-2 web dev server is unavailable at ${webProxyTarget}.\n${String(error)}\n`, {
+    return new Response(`KB-1 web dev server is unavailable at ${webProxyTarget}.\n${String(error)}\n`, {
       status: 502,
       headers: {
         'content-type': 'text/plain; charset=utf-8'
@@ -41,9 +41,9 @@ export async function serveUi(webBuildDir: string, pathname: string): Promise<Re
 export function missingUiBuildResponse(root: string): Response {
   return new Response(
     [
-      'KB-2 local UI is not built yet.',
+      'KB-1 local UI is not built yet.',
       '',
-      'Run `pnpm --filter @kb-2/web build` before starting the daemon,',
+      'Run `pnpm --filter @kb-1/web build` before starting the daemon,',
       'or run `pnpm dev` to start the daemon with the Vite dev proxy.',
       '',
       `Expected UI entry: ${join(root, 'index.html')}`,

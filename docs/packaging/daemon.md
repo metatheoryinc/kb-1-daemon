@@ -1,53 +1,79 @@
 # KB-1 Local Packaging Paths
 
-Release automation is intentionally light, but the scaffold is structured so
-the same local service can run from pnpm, Docker, a user service, or a future
-npm/Homebrew-style package.
+Release automation is intentionally light, but the scaffold is structured so the
+same local service can run from pnpm, Docker, or a future npm CLI package.
 
 ## Public Naming
 
-The product is **KB-1 Local**. This repo still exposes `KB2_HOME`, `KB2_PORT`,
-`kb2d`, and `@kb-2/*` while the implementation rename is deferred. Public docs
-should explain that mismatch once, then use KB-1 Local for the product and
-`kb2d` only where a literal command or environment variable requires it.
-
-KB-1 launches local and Cloud paths together. Local-only is the free
-open-source path with no Cloud login. Self-hosted full experience uses KB-1
-Cloud login and relay while the daemon remains the vault home. Hosted full
-experience uses the same Cloud login while KB-1 operates the vault engine.
+The product is **KB-1 Local**. Installs use `KB1_*` environment variables,
+`~/.kb1`, `@kb-1/*` packages, and the `kb1d` binary.
 
 ## Local Development
 
 ```bash
 pnpm install
-pnpm --filter @kb-2/daemon dev
+pnpm --filter @kb-1/daemon dev
 ```
 
-The daemon reads configuration from the implementation environment variables:
+The daemon reads configuration from environment variables owned by KB-1 code:
 
-- `KB2_HOME`: home directory for daemon-managed local state, defaulting to
-  `~/.kb2`
-- `KB2_HOST`: HTTP bind host, defaulting to `127.0.0.1`
-- `KB2_PORT`: HTTP port, defaulting to `7382`
-- `KB2_WEB_PROXY_TARGET`: optional dev-only Vite target for non-API UI requests
+- `KB1_HOME`: home directory for daemon-managed local state, defaulting to
+  `~/.kb1`
+- `KB1_HOST`: HTTP bind host, defaulting to `127.0.0.1`
+- `KB1_PORT`: HTTP port, defaulting to `7382`
+- `KB1_WEB_PROXY_TARGET`: optional dev-only Vite target for non-API UI requests
+- `KB1_RELAY_URL` and `KB1_RELAY_TOKEN`: relay/tunnel connection, supplied
+  together
+- `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD`: optional daemon identity fields
+  sent to the relay
+- `KB1_ACTOR_DEFAULT`: default local actor attribution, `user` or `unknown`
+- `KB1_HISTORY_COALESCE_WINDOW_MS`: non-negative note-history coalescing window
+
+Relay is optional, but `KB1_RELAY_URL` and `KB1_RELAY_TOKEN` are all-or-nothing.
+When both are set, the daemon connects to the relay endpoint after startup over
+outbound WebSockets. `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD` are optional
+registration metadata.
+
+```bash
+KB1_RELAY_URL=https://relay.example/tunnel/my-daemon \
+KB1_RELAY_TOKEN=... \
+KB1_DAEMON_VERSION=0.1.0 \
+pnpm --filter @kb-1/daemon dev
+```
+
+The relay lifecycle API is available on the daemon port:
+
+```bash
+curl http://127.0.0.1:7382/api/relay/status
+curl -X POST http://127.0.0.1:7382/api/relay/connect
+curl -X POST http://127.0.0.1:7382/api/relay/disconnect
+```
+
+Internally the tunnel client appends `/__kb1_tunnel/control` and
+`/__kb1_tunnel/dialback` to the configured relay URL. These are relay endpoint
+paths, not routes served by the daemon.
+
+For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
+The daemon does not honor `KB2_*` environment variables; runtime configuration is
+KB1-only.
 
 The root `.env` only disables Nx implicit env loading with
 `NX_LOAD_DOT_ENV_FILES=false`; runtime env loading remains explicit.
 
 ## Local UI Development
 
-Chunk 002 adds a SvelteKit local UI at `apps/web`. Product development still
-uses the daemon as the browser front door: `pnpm dev` starts Vite and the daemon,
-sets `KB2_WEB_PROXY_TARGET` for the daemon, and leaves Vite HMR connected
-directly to the Vite port.
+The SvelteKit local UI lives at `apps/web`. Product development still uses the
+daemon as the browser front door: `pnpm dev` starts Vite and the daemon, sets
+`KB1_WEB_PROXY_TARGET` for the daemon, and leaves Vite HMR connected directly to
+the Vite port.
 
 ```bash
-KB2_HOME=/tmp/kb2-ui-dev KB2_PORT=7382 pnpm dev
+KB1_HOME=/tmp/kb1-ui-dev KB1_PORT=7382 pnpm dev
 open http://127.0.0.1:7382/
 ```
 
 In this mode, `/api/*` is handled by the daemon and non-API HTTP requests are
-proxied to Vite. When `KB2_WEB_PROXY_TARGET` is not set, the daemon serves the
+proxied to Vite. When `KB1_WEB_PROXY_TARGET` is not set, the daemon serves the
 built static UI instead. If neither the built UI nor the dev proxy is available,
 the daemon returns an instructional response that tells the developer which
 command to run.
@@ -57,7 +83,7 @@ same daemon port:
 
 ```bash
 pnpm check
-KB2_HOME=/tmp/kb2-ui-smoke KB2_PORT=8787 pnpm --filter @kb-2/daemon dev
+KB1_HOME=/tmp/kb1-ui-smoke KB1_PORT=8787 pnpm --filter @kb-1/daemon dev
 curl http://127.0.0.1:8787/api/health
 open http://127.0.0.1:8787/
 ```
@@ -76,24 +102,37 @@ For the standard development container:
 pnpm docker:up
 ```
 
-This starts `kb-2-daemon-dev`, maps host port `17382` to container port `7382`,
-and mounts the repo-local `.kb2-docker/` directory to `/data/kb2` inside the
+This starts `kb-1-daemon-dev`, maps host port `17382` to container port `7382`,
+and mounts the repo-local `.kb1-docker/` directory to `/data/kb1` inside the
 container. The daemon status file is therefore visible at:
 
 ```text
-.kb2-docker/daemon/status.json
+.kb1-docker/daemon/status.json
 ```
+
+For in-place upgrades from the old Docker data path, keep the legacy data mounted
+at `/data/kb2` for the first boot and keep `KB1_HOME=/data/kb1`. The daemon
+copies, verifies, and removes the legacy input before running from `/data/kb1`.
 
 Compose builds the daemon image and runs the compiled `dist/main.js` inside the
 container. Source is copied into the image during `docker compose up --build`;
 code changes require rerunning `pnpm docker:up`.
 
-The Docker image does not reuse host `node_modules`. The Dockerfile installs and
-builds inside Linux, then the runtime stage performs a production-only
-`pnpm install --prod --frozen-lockfile --filter @kb-2/daemon` and copies only the
-compiled daemon output from the build stage. Platform-specific npm packages are
-therefore selected for the container platform, not macOS, and dev/build tools do
-not need to ship in the runtime image.
+The Docker image does not reuse host `node_modules`. The Dockerfile copies the
+monorepo workspace into the build context, excluding local install/build output
+with `.dockerignore`, so pnpm can resolve `apps/*` and `packages/*` workspace
+dependencies from a clean checkout. The build stage installs with
+`pnpm install --frozen-lockfile`, builds the static web UI, and runs
+`pnpm --filter @kb-1/daemon... build` so the daemon and its workspace package
+dependencies emit their `dist/` outputs inside Linux.
+
+After the build, the Dockerfile replaces the build install with a production-only
+`pnpm install --prod --frozen-lockfile --filter @kb-1/daemon...` and prepares a
+runtime tree containing the production install, package manifests, compiled
+daemon output, compiled workspace package outputs, and built web UI. The final
+runtime image copies only that prepared runtime tree. Platform-specific npm
+packages are therefore selected for the container platform, not macOS, and
+dev/build tools do not need to ship in the runtime image.
 
 For an outside-the-container smoke:
 
@@ -101,19 +140,26 @@ For an outside-the-container smoke:
 pnpm docker:up
 curl http://127.0.0.1:17382/api/health
 open http://127.0.0.1:17382/
-cat .kb2-docker/daemon/status.json
+cat .kb1-docker/daemon/status.json
 pnpm docker:down
 ```
 
 The direct image path is also available:
 
 ```bash
-docker build -f apps/daemon/Dockerfile -t kb-2-daemon .
-docker run --rm -p 7382:7382 -v kb2-home:/data/kb2 kb-2-daemon
+docker build -f apps/daemon/Dockerfile -t kb-1-daemon .
+docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 kb-1-daemon
 ```
 
-The container defaults `KB2_HOME` to `/data/kb2` and writes daemon status to
-`/data/kb2/daemon/status.json`.
+The container defaults `KB1_HOME` to `/data/kb1` and writes daemon status to
+`/data/kb1/daemon/status.json`.
+
+Legacy direct-image deployments that mounted data at `/data/kb2` can mount both
+paths for one upgrade boot:
+
+```bash
+docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 -v kb2-home:/data/kb2 kb-1-daemon
+```
 
 ## npm CLI
 
@@ -122,36 +168,13 @@ The daemon package reserves the future CLI binary name:
 ```json
 {
   "bin": {
-    "kb2d": "./dist/main.js"
+    "kb1d": "./dist/main.js"
   }
 }
 ```
 
-Publishing is deferred. The current public path can be `git clone` plus the
-setup skill while packaging is hardened. A future release chunk can make
-`@kb-2/daemon` publishable, add provenance/signing rules, decide whether the
+Publishing is deferred. The supported public setup path is `git clone` plus the
+setup skill while packaging is hardened. Packaging hardening should make
+`@kb-1/daemon` publishable, add provenance/signing rules, define whether the
 open-source package publishes from this package directly or from a dedicated
-release wrapper, and choose the final public binary/package names.
-
-## Release Essentials
-
-Present:
-
-- `pnpm check` runs typecheck, tests, and builds.
-- `pnpm dev` starts the local web UI and daemon behind one front-door port.
-- `pnpm --filter @kb-2/daemon dev` runs the daemon foreground-only.
-- `skills/kb-1-daemon-setup/scripts/install_kb1_daemon_user_service.sh`
-  installs a Linux systemd user service or macOS LaunchAgent.
-- `skills/kb-1-daemon-setup/scripts/kb1_daemon_healthcheck.sh` checks health,
-  vault listing, optional vault info/flush, and MCP initialize.
-- Dockerfile and Compose path exist for container smoke runs.
-
-Not decided or not shipped:
-
-- The repo currently has no `LICENSE` file. Legal/product must choose the
-  open-source license before public release.
-- npm/Homebrew distribution, package signing, and provenance are not shipped.
-- Managed binary attachment APIs and MCP tools are not shipped.
-- Local-only mode has no application auth; loopback is the default safety
-  boundary.
-- Obsidian migration is a guarded copy workflow, not a polished importer.
+release wrapper, and choose the public binary/package names.

@@ -2,7 +2,7 @@
   export interface DaemonStatus {
     serviceName: string;
     startedAt: string;
-    kb2Home: string;
+    kb1Home: string;
     daemonHome: string;
     statusFile: string;
     pid: number;
@@ -19,7 +19,7 @@
 <script lang="ts">
   import Badge from '../primitives/Badge.svelte';
   import BrandMark from '../primitives/BrandMark.svelte';
-  import { Button } from '../button';
+  import Button from '../button/button.svelte';
   import Panel from './Panel.svelte';
 
   let {
@@ -41,7 +41,7 @@
       <BrandMark size={34} />
       <div>
         <p class="eyebrow">{routeLabel}</p>
-        <h1>KB-2 Local</h1>
+        <h1>KB-1 Local</h1>
         <p class="summary">One local daemon port is serving the API and this SvelteKit shell.</p>
       </div>
     </div>
@@ -88,8 +88,8 @@
         {#if health}
           <div class="path-list">
             <div>
-              <p>KB2_HOME</p>
-              <code>{health.status.kb2Home}</code>
+              <p>KB1_HOME</p>
+              <code>{health.status.kb1Home}</code>
             </div>
             <div>
               <p>Status file</p>
@@ -193,7 +193,7 @@
     overflow-wrap: anywhere;
   }
 
-  :global(.kb2-panel.dark-panel) {
+  :global(.kb1-panel.dark-panel) {
     background: #101418;
     color: #fff;
     --rd-ink-1: #fff;
@@ -201,7 +201,7 @@
     --rd-rule: rgba(255, 255, 255, 0.1);
   }
 
-  :global(.kb2-panel.dark-panel) .path-list {
+  :global(.kb1-panel.dark-panel) .path-list {
     display: grid;
     gap: 18px;
   }

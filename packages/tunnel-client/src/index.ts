@@ -27,7 +27,7 @@ import {
   type TunnelHttpResponseEnvelope,
   type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketOpenEnvelope,
-} from '@kb-2/tunnel-protocol';
+} from '@kb-1/tunnel-protocol';
 import { gunzipSync } from 'node:zlib';
 import { WebSocket } from 'ws';
 
@@ -177,7 +177,9 @@ export class TunnelClient {
   private connectControl(): void {
     if (this.stopped) return;
 
-    const controlUrl = relayInternalUrl(this.config.relayUrl, '/__kb2_tunnel/control');
+    // Coordinated relay wire paths: keep `/__kb1_tunnel/*` stable until the
+    // cloud relay and all clients migrate together.
+    const controlUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/control');
     const control = new WebSocket(controlUrl);
     this.control = control;
 
@@ -468,7 +470,8 @@ export class TunnelClient {
   }
 
   private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {
-    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb2_tunnel/dialback');
+    // Coordinated relay wire path; see the control URL comment above.
+    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
     dialbackUrl.searchParams.set('streamId', envelope.streamId);
 
     const daemonWsUrl = new URL(envelope.path, this.config.daemonUrl);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAppState } from './store';
+import { createAppState, DEFAULT_PERSIST_KEY } from './store';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { dump: () => string | null } {
   let value: string | null = null;
@@ -54,7 +54,7 @@ describe('lastOpenedVaultId slice', () => {
 
   it('ignores a non-string persisted value', () => {
     const storage = memoryStorage();
-    storage.setItem('kb2:app-state', JSON.stringify({ lastOpenedVaultId: 42 }));
+    storage.setItem(DEFAULT_PERSIST_KEY, JSON.stringify({ lastOpenedVaultId: 42 }));
     expect(createAppState({ storage }).getState().lastOpenedVaultId).toBe(null);
   });
 });

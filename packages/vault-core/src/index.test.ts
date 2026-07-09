@@ -52,7 +52,7 @@ import {
   recordFileHistory,
 } from "./file-history.js";
 import { searchVaultFiles } from "./search.js";
-import { validateVaultPath } from "./path.js";
+import { isInternalVaultPath, validateVaultPath } from "./path.js";
 import { anchoredSpliceContractCases } from "./splice-contract-cases.test-support.js";
 
 const CORAL = "#fda4af";
@@ -69,7 +69,7 @@ describe("vault path validation", () => {
       (segment) =>
         segment !== "." &&
         segment !== ".." &&
-        segment !== ".kb2" &&
+        segment !== ".kb1" &&
         !segment.includes("/") &&
         !segment.includes("\\"),
     );
@@ -99,8 +99,15 @@ describe("vault path validation", () => {
     ["folder/no-extension", "file"],
     ["folder/.hidden", "file"],
     ["folder/trailing.", "file"],
-    [".kb2/audit.md", "file"],
-    [".kb2/audit.bin", "artifact"],
+    [".kb1/audit.md", "file"],
+    [".kb1/audit.bin", "artifact"],
+    [".git", "folder"],
+    [".gitignore", "artifact"],
+    [".gitattributes", "artifact"],
+    [".gitmodules", "artifact"],
+    ["notes/.gitignore", "artifact"],
+    [".git/COMMIT_EDITMSG", "artifact"],
+    [".git/objects/aa/bb.txt", "file"],
     [`${"a".repeat(256)}.md`, "file"],
     [`${"a".repeat(1025)}.md`, "file"],
   ] as const)("rejects invalid %s as %s", (input, kind) => {
@@ -123,6 +130,14 @@ describe("vault path validation", () => {
     );
   });
 
+  it("identifies daemon-internal path segments without hiding all dotfolders", () => {
+    expect(isInternalVaultPath("")).toBe(false);
+    expect(isInternalVaultPath("notes/.git/COMMIT_EDITMSG")).toBe(true);
+    expect(isInternalVaultPath(".gitignore")).toBe(true);
+    expect(isInternalVaultPath("notes/.gitattributes")).toBe(true);
+    expect(isInternalVaultPath("notes/.obsidian/config.json")).toBe(false);
+  });
+
   it("property: valid file paths validate idempotently and resolve inside the vault root", () => {
     fc.assert(
       fc.property(validFilePath, (candidate) => {
@@ -130,8 +145,8 @@ describe("vault path validation", () => {
         expect(validateVaultPath(validated, "file")).toBe(validated);
         expect(
           path
-            .resolve("/tmp/kb2-property-vault", validated)
-            .startsWith("/tmp/kb2-property-vault/"),
+            .resolve("/tmp/kb1-property-vault", validated)
+            .startsWith("/tmp/kb1-property-vault/"),
         ).toBe(true);
       }),
     );
@@ -144,8 +159,8 @@ describe("vault path validation", () => {
         expect(validateVaultPath(validated, "folder")).toBe(validated);
         expect(
           path
-            .resolve("/tmp/kb2-property-vault", validated)
-            .startsWith("/tmp/kb2-property-vault/"),
+            .resolve("/tmp/kb1-property-vault", validated)
+            .startsWith("/tmp/kb1-property-vault/"),
         ).toBe(true);
       }),
     );
@@ -183,7 +198,7 @@ describe("vault-core filesystem operations", () => {
   let ctx: VaultContext;
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), "kb2-vault-core-"));
+    root = await mkdtemp(path.join(tmpdir(), "kb1-vault-core-"));
     ctx = { root, actor: { kind: "user", client: "vitest" } };
   });
 
@@ -359,6 +374,23 @@ describe("vault-core filesystem operations", () => {
     });
 
     await expect(readVaultRawFile(ctx, "../outside.png")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await mkdir(path.join(root, ".git"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
+    await expect(
+      readVaultRawFile(ctx, ".git/COMMIT_EDITMSG"),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(readVaultRawFile(ctx, ".gitignore")).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
     });
@@ -960,7 +992,7 @@ describe("vault-core filesystem operations", () => {
     }
   });
 
-  it("creates folders idempotently and lists trees excluding .kb2 trash/audit", async () => {
+  it("creates folders idempotently and lists trees excluding internal metadata", async () => {
     await expect(makeVaultFolder(ctx, "notes")).resolves.toMatchObject({
       ok: true,
       value: { path: "notes" },
@@ -971,12 +1003,39 @@ describe("vault-core filesystem operations", () => {
     });
     await writeVaultFile(ctx, { path: "notes/a.md", content: "a" });
     await deleteVaultFile(ctx, { path: "notes/a.md" });
+    await writeVaultFile(ctx, { path: "normal.md", content: "normal" });
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "HEAD"),
+      "ref: refs/heads/main\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "internal object\n",
+      "utf8",
+    );
+    await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
+    await writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
+    await writeFile(path.join(root, ".gitmodules"), "[submodule]\n", "utf8");
 
     const tree = await listVaultTree(ctx);
     expect(tree.ok).toBe(true);
-    expect(
-      tree.ok ? tree.value.entries.map((entry) => entry.path) : [],
-    ).toEqual(["notes"]);
+    const paths = tree.ok
+      ? tree.value.entries.map((entry) => entry.path).sort()
+      : [];
+    expect(paths).toEqual(["normal.md", "notes"]);
+    expect(paths.some((entryPath) => entryPath.startsWith(".git"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".gitattributes"))).toBe(false);
+    await expect(listVaultTree(ctx, { under: ".git" })).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
   });
 
   it("lists subtrees with depth limits and entry-cap errors", async () => {
@@ -1007,6 +1066,17 @@ describe("vault-core filesystem operations", () => {
   it("reports vault counts from durable files", async () => {
     await writeVaultFile(ctx, { path: "notes/a.md", content: "a" });
     await writeVaultFile(ctx, { path: "notes/deep/b.md", content: "b" });
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "internal object\n",
+      "utf8",
+    );
 
     const info = await getVaultInfo(ctx);
     expect(info).toMatchObject({
@@ -1175,7 +1245,7 @@ describe("vault-core filesystem operations", () => {
     });
     expect(deleted.ok).toBe(true);
     const trashPath = deleted.ok ? deleted.value.trashPath : undefined;
-    expect(trashPath).toMatch(/^\.kb2\/trash\/.+\/folder$/);
+    expect(trashPath).toMatch(/^\.kb1\/trash\/.+\/folder$/);
     await expect(
       readFile(path.join(root, trashPath!, "file.md"), "utf8"),
     ).resolves.toBe("x");
@@ -1368,7 +1438,7 @@ describe("vault-core filesystem operations", () => {
     await expect(
       setFolderMetadata(ctx, "notes", { color: null }),
     ).resolves.toMatchObject({ ok: true, value: { metadata: {} } });
-    await rm(path.join(root, ".kb2/folders.yml"), { force: true });
+    await rm(path.join(root, ".kb1/folders.yml"), { force: true });
 
     await expect(
       setFolderMetadata(ctx, "notes", { color: 42 as unknown as string }),
@@ -1377,14 +1447,14 @@ describe("vault-core filesystem operations", () => {
       setFolderMetadata(ctx, "notes", { color: "amber" }),
     ).resolves.toMatchObject({ ok: false, error: "invalid_metadata" });
     await expect(
-      stat(path.join(root, ".kb2", "folders.yml")),
+      stat(path.join(root, ".kb1", "folders.yml")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fails loudly for malformed folders.yml instead of silently defaulting", async () => {
     await makeVaultFolder(ctx, "notes");
     await writeFileWithParents(
-      path.join(root, ".kb2", "folders.yml"),
+      path.join(root, ".kb1", "folders.yml"),
       "folders: [",
       "utf8",
     );
@@ -1425,7 +1495,7 @@ describe("vault-core filesystem operations", () => {
     "folders:\n  ../escape:\n    color: coral\n",
   ])("fails loudly for invalid folders.yml shape %#", async (content) => {
     await writeFileWithParents(
-      path.join(root, ".kb2", "folders.yml"),
+      path.join(root, ".kb1", "folders.yml"),
       content,
       "utf8",
     );
@@ -1436,7 +1506,7 @@ describe("vault-core filesystem operations", () => {
   });
 
   it("rethrows unexpected folders.yml read errors instead of converting them to defaults", async () => {
-    await mkdir(path.join(root, ".kb2", "folders.yml"), { recursive: true });
+    await mkdir(path.join(root, ".kb1", "folders.yml"), { recursive: true });
     await expect(listFolderMetadata(ctx)).rejects.toMatchObject({
       code: "EISDIR",
     });
@@ -1576,7 +1646,7 @@ describe("vault-core filesystem operations", () => {
 
   it("continues folder metadata mutations after queued write failures", async () => {
     await makeVaultFolder(ctx, "notes");
-    await mkdir(path.join(root, ".kb2", "folders.yml"), { recursive: true });
+    await mkdir(path.join(root, ".kb1", "folders.yml"), { recursive: true });
     try {
       await expect(
         Promise.all([
@@ -1585,7 +1655,7 @@ describe("vault-core filesystem operations", () => {
         ]),
       ).rejects.toMatchObject({ code: "EISDIR" });
     } finally {
-      await rm(path.join(root, ".kb2", "folders.yml"), {
+      await rm(path.join(root, ".kb1", "folders.yml"), {
         recursive: true,
         force: true,
       });
@@ -1617,7 +1687,7 @@ describe("vault-core filesystem operations", () => {
     await fc.assert(
       fc.asyncProperty(folderSet, async (folders) => {
         const propertyRoot = await mkdtemp(
-          path.join(tmpdir(), "kb2-vault-core-metadata-property-"),
+          path.join(tmpdir(), "kb1-vault-core-metadata-property-"),
         );
         const propertyCtx: VaultContext = {
           root: propertyRoot,
@@ -1799,8 +1869,8 @@ describe("anchored splice and positioned content helpers", () => {
         (left, oldText, right, replacement, edgeBefore, edgeAfter) => {
           const splicedText = `${edgeBefore}${oldText}${edgeAfter}`;
           fc.pre(splicedText.length > 0);
-          const before = "__KB2_LEFT__";
-          const after = "__KB2_RIGHT__";
+          const before = "__KB1_LEFT__";
+          const after = "__KB1_RIGHT__";
           fc.pre(!left.includes(before + splicedText + after));
           fc.pre(!right.includes(before + splicedText + after));
           const source = `${left}${before}${splicedText}${after}${right}`;
@@ -1872,7 +1942,7 @@ describe("scan search", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), "kb2-search-"));
+    root = await mkdtemp(path.join(tmpdir(), "kb1-search-"));
     await writeFileWithParents(
       path.join(root, "notes", "a.md"),
       "alpha\nBeta target\ngamma\n",
@@ -1894,7 +1964,7 @@ describe("scan search", () => {
       "utf8",
     );
     await writeFileWithParents(
-      path.join(root, ".kb2", "audit", "hidden.md"),
+      path.join(root, ".kb1", "audit", "hidden.md"),
       "target hidden\n",
       "utf8",
     );
@@ -1936,6 +2006,24 @@ describe("scan search", () => {
   });
 
   it("searches from the vault root and excludes metadata and trash folders", async () => {
+    await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
+    await writeFile(
+      path.join(root, ".git", "COMMIT_EDITMSG"),
+      "target internal commit\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".git", "objects", "aa", "bb.txt"),
+      "target internal object\n",
+      "utf8",
+    );
+    await writeFile(path.join(root, ".gitignore"), "target ignored\n", "utf8");
+    await writeFile(
+      path.join(root, ".gitattributes"),
+      "target attributes\n",
+      "utf8",
+    );
+
     const result = await searchVaultFiles(root, {
       q: "target",
       context: 0,
@@ -1947,6 +2035,9 @@ describe("scan search", () => {
       "notes/a.md",
       "notes/deep/b.txt",
     ]);
+    expect(result.results.some((hit) => hit.path.startsWith(".git"))).toBe(
+      false,
+    );
     expect(
       result.results.every(
         (hit) =>
@@ -1956,9 +2047,9 @@ describe("scan search", () => {
   });
 
   it("caps the searchable file walk before unbounded scans", async () => {
-    const cappedRoot = await mkdtemp(path.join(tmpdir(), "kb2-search-cap-"));
+    const cappedRoot = await mkdtemp(path.join(tmpdir(), "kb1-search-cap-"));
     const nestedRoot = await mkdtemp(
-      path.join(tmpdir(), "kb2-search-nested-cap-"),
+      path.join(tmpdir(), "kb1-search-nested-cap-"),
     );
     try {
       await Promise.all(
@@ -2021,7 +2112,7 @@ describe("scan search", () => {
     await fc.assert(
       fc.asyncProperty(fileSet, async (files) => {
         const propertyRoot = await mkdtemp(
-          path.join(tmpdir(), "kb2-search-property-"),
+          path.join(tmpdir(), "kb1-search-property-"),
         );
         try {
           const expectedLines = new Map<string, string[]>();
@@ -2097,7 +2188,7 @@ describe("scan search", () => {
 
 async function readAuditLines(root: string): Promise<unknown[]> {
   const content = await readFile(
-    path.join(root, ".kb2/audit/changes.jsonl"),
+    path.join(root, ".kb1/audit/changes.jsonl"),
     "utf8",
   );
   return content
@@ -2109,7 +2200,7 @@ async function readAuditLines(root: string): Promise<unknown[]> {
 async function readRawFolderMetadata(
   root: string,
 ): Promise<{ raw: string; parsed: unknown }> {
-  const raw = await readFile(path.join(root, ".kb2/folders.yml"), "utf8");
+  const raw = await readFile(path.join(root, ".kb1/folders.yml"), "utf8");
   return { raw, parsed: parseYaml(raw) };
 }
 

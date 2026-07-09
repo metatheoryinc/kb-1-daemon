@@ -1,6 +1,6 @@
 ---
 name: kb-1-daemon-setup
-description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux or macOS. Use when setting up kb-1-daemon, configuring MCP clients such as Claude Code, Codex, or Hermes, copying a Markdown/Obsidian vault into KB2_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
+description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux or macOS. Use when setting up kb-1-daemon, configuring MCP clients, copying a Markdown/Obsidian vault into KB1_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
 ---
 
 # KB-1 Daemon Setup
@@ -9,7 +9,7 @@ Use this skill to install or repair the open-source KB-1 local daemon, verify it
 
 Release posture: KB-1 Local is the free open-source local-only path and launches alongside KB-1 Cloud relay/Hosted. Local-only does not require Cloud login and the open-source daemon has no Cloud users, orgs, team presence, or per-user org permissions. Self-hosted full experience means Cloud login plus this daemon running on the user's machine; relay adds remote access and agent access beyond the daemon host while the daemon remains the vault home. The daemon currently has no application authentication or authorization in local-only mode. Keep it bound to loopback unless the user explicitly approves private-network exposure and understands that any tailnet device allowed by ACLs can read and write through the daemon.
 
-Naming reality: the public product is KB-1, while current repo internals still use KB-2 names: repo `kb-1-daemon`, package `kb-2`, process `kb2d`, env vars `KB2_*`, default home `~/.kb2`, and default port `7382`. Do not rename those during setup unless the repo changes.
+Naming reality: the public product and repo internals use KB-1 names: `KB1_*` env vars, `~/.kb1` homes, `kb1d`, `kb1d.service`, and `dev.metatheory.kb1.kb1d`.
 
 ## Safety Rules
 
@@ -39,11 +39,13 @@ Before changing anything, inspect the live machine:
 uname -a
 whoami
 pwd
-command -v node pnpm corepack git curl systemctl launchctl tailscale claude codex hermes || true
+command -v node pnpm corepack git curl systemctl launchctl tailscale claude codex || true
 node --version 2>/dev/null || true
 pnpm --version 2>/dev/null || true
-systemctl --user status kb2d --no-pager 2>/dev/null || true
-launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb2d" 2>/dev/null || true
+systemctl --user status kb1d.service --no-pager 2>/dev/null || true
+systemctl --user status kb1d.service --no-pager 2>/dev/null || true
+launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb1d" 2>/dev/null || true
+launchctl print "gui/$(id -u)/dev.metatheory.kb1.kb1d" 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/health 2>/dev/null || true
 curl -fsS http://127.0.0.1:7382/api/vaults 2>/dev/null || true
 tailscale status 2>/dev/null || true
@@ -57,13 +59,19 @@ If running inside a container, remote shell, or Codex sandbox, remember `127.0.0
 Defaults:
 
 - Repo: `$HOME/repos/kb-1-daemon`
-- Daemon home: `$HOME/.kb2`
-- Vaults: `$HOME/.kb2/vaults/<vault-slug>`
+- Daemon home: `$HOME/.kb1`
+- Vaults: `$HOME/.kb1/vaults/<vault-slug>`
 - Host bind: `127.0.0.1`
 - Port: `7382`
-- Linux service: user systemd unit `kb2d.service`
-- macOS service: user LaunchAgent `dev.metatheory.kb1.kb2d`
+- Linux service: user systemd unit `kb1d.service`
+- macOS service: user LaunchAgent `dev.metatheory.kb1.kb1d`
 - MCP endpoint: `http://127.0.0.1:7382/mcp`
+
+For in-place upgrades, the installer uses existing `$HOME/.kb1` daemon data if
+`$HOME/.kb1` does not exist. Existing `kb1d.service` and
+`dev.metatheory.kb1.kb1d` service definitions are also detected and updated in
+place when the new KB-1 service file is not present. Set `KB1_HOME`,
+`KB1_SERVICE_NAME`, or `KB1_LAUNCHD_LABEL` to choose explicitly.
 
 Run the support script from the skill directory when available. Its default mode installs KB-1 locally, configures a user service, optionally configures local MCP clients, and does not change Tailscale:
 
@@ -71,7 +79,7 @@ Run the support script from the skill directory when available. Its default mode
 bash scripts/install_kb1_daemon_user_service.sh
 ```
 
-The installer refuses non-loopback `KB2_HOST` values unless `KB1_CONFIRM_NON_LOOPBACK_BIND=1` is set. Prefer keeping the daemon on loopback and using Tailscale Serve for private tailnet access.
+The installer refuses non-loopback `KB1_HOST` values unless `KB1_CONFIRM_NON_LOOPBACK_BIND=1` is set. Prefer keeping the daemon on loopback and using Tailscale Serve for private tailnet access.
 
 Useful overrides:
 
@@ -83,7 +91,7 @@ KB1_TAILSCALE_MODE=local-only bash scripts/install_kb1_daemon_user_service.sh
 KB1_RUN_CHECKS=0 bash scripts/install_kb1_daemon_user_service.sh
 
 # Use a different repo checkout, daemon home, or port.
-KB1_REPO_DIR="$HOME/src/kb-1-daemon" KB2_HOME="$HOME/.kb2" KB2_PORT=7382 bash scripts/install_kb1_daemon_user_service.sh
+KB1_REPO_DIR="$HOME/src/kb-1-daemon" KB1_HOME="$HOME/.kb1" KB1_PORT=7382 bash scripts/install_kb1_daemon_user_service.sh
 ```
 
 For Linux services that should survive logout/reboot, ask the user before running:
@@ -104,7 +112,7 @@ corepack enable || true
 corepack prepare pnpm@11.5.3 --activate || true
 pnpm install --frozen-lockfile
 pnpm check
-KB2_HOST=127.0.0.1 KB2_PORT=7382 pnpm --filter @kb-2/daemon dev
+KB1_HOST=127.0.0.1 KB1_PORT=7382 pnpm --filter @kb-1/daemon dev
 ```
 
 Then verify from another shell:
@@ -116,7 +124,7 @@ curl -fsS http://127.0.0.1:7382/api/vaults
 
 ## Existing Vault Or Obsidian Copy
 
-The daemon discovers vaults under `$KB2_HOME/vaults/`. Each vault folder gets identity at `<vault>/.kb2/vault.json`:
+The daemon discovers vaults under `$KB1_HOME/vaults/`. Each vault folder gets identity at the legacy internal metadata path `<vault>/.kb1/vault.json`:
 
 ```json
 {
@@ -132,14 +140,14 @@ If the user has an existing Markdown/Obsidian folder:
 3. Preserve Obsidian in place unless the user explicitly asks to remove it.
 4. Refuse source vaults with symlinks by default; the daemon follows filesystem symlinks, so copied links can expose files outside the vault.
 5. Exclude volatile Obsidian workspace files by default.
-6. Restart or start `kb2d`, then verify `GET /api/vaults` shows the expected id.
+6. Restart or start `kb1d` (`kb1d` is still accepted), then verify `GET /api/vaults` shows the expected id.
 
 Safe copy pattern:
 
 ```bash
 source_vault="/path/to/source-vault"
-kb2_home="${KB2_HOME:-$HOME/.kb2}"
-vault_root="$kb2_home/vaults"
+kb1_home="${KB1_HOME:-$HOME/.kb1}"
+vault_root="$kb1_home/vaults"
 slug="my-vault"
 display_name="My Vault"
 
@@ -148,7 +156,7 @@ if [[ ! "$slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [[ "$slug" == *..* ]]; the
   exit 1
 fi
 
-if [ -L "$kb2_home" ] || [ -L "$vault_root" ]; then
+if [ -L "$kb1_home" ] || [ -L "$vault_root" ]; then
   echo "Refusing to copy through symlinked KB-1 home/vaults path." >&2
   exit 1
 fi
@@ -193,8 +201,8 @@ command -v node >/dev/null 2>&1 || {
 
 mkdir -p "$target"
 rsync -rt --exclude='.git' --exclude='.obsidian/workspace*' "$source_vault"/ "$target"/
-mkdir -p "$target/.kb2"
-node - "$target/.kb2/vault.json" "$slug" "$display_name" <<'JS'
+mkdir -p "$target/.kb1"
+node - "$target/.kb1/vault.json" "$slug" "$display_name" <<'JS'
 const fs = require('node:fs');
 const [identityPath, id, displayName] = process.argv.slice(2);
 fs.writeFileSync(identityPath, `${JSON.stringify({ id, displayName }, null, 2)}\n`);
@@ -222,14 +230,6 @@ Claude Code:
 
 ```bash
 claude mcp add kb1 --transport http http://127.0.0.1:7382/mcp
-```
-
-Hermes:
-
-```bash
-hermes mcp list
-hermes mcp add kb1 --url http://127.0.0.1:7382/mcp
-hermes mcp test kb1
 ```
 
 Codex and other MCP-capable agents:
@@ -298,18 +298,18 @@ MCP smoke once tools are loaded:
 
 ## Troubleshooting
 
-- Repo clone fails: verify the public repo URL, GitHub availability, and local Git credentials if the repo is still private during pre-release.
+- Repo clone fails: verify the public repo URL, GitHub availability, and local Git credentials for the account performing the clone.
 - `pnpm` missing: use Corepack with `corepack prepare pnpm@11.5.3 --activate`; if Corepack is absent, install Node 22+ first.
 - `apps/daemon/dist/main.js` missing: run `pnpm build` or `pnpm check` from the repo root.
-- Port 7382 busy: identify the process, or set `KB2_PORT` in the service and update MCP/Tailscale URLs to match.
+- Port 7382 busy: identify the process, or set `KB1_PORT` in the service and update MCP/Tailscale URLs to match.
 - Linux `systemctl --user` fails in a container: install/run on the host OS or use the foreground run path.
 - Linux service stops after logout: ask before enabling lingering with `sudo loginctl enable-linger "$USER"`.
-- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb2d`.
+- macOS service does not start: inspect `~/Library/Logs/kb1-daemon.*.log` and `launchctl print gui/$(id -u)/dev.metatheory.kb1.kb1d`; use `dev.metatheory.kb1.kb1d` only for legacy LaunchAgent upgrades.
 - Tailscale not installed or logged in: keep KB-1 local-only and give the user Tailscale setup steps.
 - Tailscale Serve already has unrelated routes: do not overwrite in auto mode; require explicit approval and a chosen port.
 - UI works but agents cannot edit: check the MCP URL, restart the client, and ensure every data tool call includes `vaultId`.
 
-## Handoff Summary
+## Report Summary
 
 When finished, report:
 

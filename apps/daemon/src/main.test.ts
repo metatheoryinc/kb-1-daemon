@@ -1,27 +1,28 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-2/doc-session';
-import { startDaemon } from './main.js';
+import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
+import { isDaemonCliEntrypoint, startDaemon } from './main.js';
 
 describe('daemon startup', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     originalEnv = { ...process.env };
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-startup-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-startup-'));
   });
 
   afterEach(async () => {
     process.env = originalEnv;
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   it('does not write status when the HTTP server fails to bind', async () => {
@@ -31,24 +32,70 @@ describe('daemon startup', () => {
 
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     await expect(startDaemon()).rejects.toBeTruthy();
-    await expect(access(join(kb2Home, 'daemon', 'status.json'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'daemon', 'status.json'))).rejects.toBeTruthy();
 
     await close(blocker);
+  });
+
+  it('ignores KB2_* env vars during startup', async () => {
+    const port = await reservePort();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ignoredHome = join(kb1Home, 'ignored-kb2-home');
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port),
+      KB2_HOME: ignoredHome,
+      KB2_HOST: '0.0.0.0',
+      KB2_PORT: '1'
+    };
+
+    const started = await startDaemon();
+
+    expect(started.config.kb1Home).toBe(kb1Home);
+    expect(started.config.host).toBe('127.0.0.1');
+    expect(started.config.port).toBe(port);
+    expect(started.config.serviceName).toBe('kb1d');
+    await expect(readFile(join(kb1Home, 'daemon', 'status.json'), 'utf8')).resolves.toContain('"kb1Home"');
+    await expect(access(ignoredHome)).rejects.toBeTruthy();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    await started.close();
+    warnSpy.mockRestore();
+  });
+
+  it('recognizes the installed kb1d symlink bin as a daemon entrypoint', async () => {
+    const installRoot = await mkdtemp(join(tmpdir(), 'kb1-bin-entrypoint-'));
+    try {
+      const distDir = join(installRoot, 'node_modules', '@kb-1', 'daemon', 'dist');
+      const binDir = join(installRoot, 'bin');
+      await mkdir(distDir, { recursive: true });
+      await mkdir(binDir, { recursive: true });
+      const entrypoint = join(distDir, 'main.js');
+      await writeFile(entrypoint, '#!/usr/bin/env node\n', 'utf8');
+
+      const binPath = join(binDir, 'kb1d');
+      await symlink(entrypoint, binPath);
+      expect(isDaemonCliEntrypoint(pathToFileURL(entrypoint).href, binPath)).toBe(true);
+    } finally {
+      await rm(installRoot, { force: true, recursive: true });
+    }
   });
 
   it('seeds and serves the first-boot starter vault through its scoped route', async () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     const started = await startDaemon();
@@ -80,9 +127,9 @@ describe('daemon startup', () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     const firstBoot = await startDaemon();
@@ -102,12 +149,12 @@ describe('daemon startup', () => {
     await restartedAfterDelete.close();
 
     // A pre-existing (non-empty) vault is migrated but never seeded with the kit.
-    const populatedHome = await mkdtemp(join(tmpdir(), 'kb2-populated-startup-'));
+    const populatedHome = await mkdtemp(join(tmpdir(), 'kb1-populated-startup-'));
     process.env = {
       ...originalEnv,
-      KB2_HOME: populatedHome,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: populatedHome,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
     const populatedVault = join(populatedHome, 'demo-vault');
     await mkdir(join(populatedVault, 'notes'), { recursive: true });
@@ -124,9 +171,9 @@ describe('daemon startup', () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     const started = await startDaemon();
@@ -149,9 +196,9 @@ describe('daemon startup', () => {
     const port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     const started = await startDaemon();
@@ -179,7 +226,7 @@ describe('daemon startup', () => {
 });
 
 describe('daemon boot migration', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
 
   const SEEDED_NOTES: ReadonlyArray<{ readonly path: string; readonly content: string }> = [
@@ -190,16 +237,16 @@ describe('daemon boot migration', () => {
 
   beforeEach(async () => {
     originalEnv = { ...process.env };
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-migration-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-migration-'));
   });
 
   afterEach(async () => {
     process.env = originalEnv;
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   async function seedLegacyLayout(): Promise<void> {
-    const legacyVault = join(kb2Home, 'demo-vault');
+    const legacyVault = join(kb1Home, 'demo-vault');
     for (const note of SEEDED_NOTES) {
       const absolute = join(legacyVault, note.path);
       await mkdir(join(absolute, '..'), { recursive: true });
@@ -207,23 +254,116 @@ describe('daemon boot migration', () => {
     }
   }
 
+  it('migrates a legacy .kb2 daemon home to .kb1 on boot and is idempotent', async () => {
+    const homeDir = join(kb1Home, 'user-home');
+    const legacyHome = join(homeDir, '.kb2');
+    const migratedHome = join(homeDir, '.kb1');
+    const legacyVaultRoot = join(legacyHome, 'vaults', 'demo-vault');
+    await mkdir(join(legacyHome, 'daemon'), { recursive: true });
+    await writeFile(join(legacyHome, 'daemon', 'legacy-marker.txt'), 'legacy daemon data\n', 'utf8');
+    await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
+    await writeFile(join(legacyVaultRoot, 'notes', 'from-old-home.md'), 'from old home\n', 'utf8');
+
+    const firstPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(firstPort)
+    };
+
+    const firstBoot = await startDaemon({ homeDir });
+    expect(firstBoot.config.kb1Home).toBe(migratedHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(migratedHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
+      'legacy daemon data\n'
+    );
+    await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
+      'from old home\n'
+    );
+    await firstBoot.close();
+
+    const secondPort = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(secondPort)
+    };
+    const secondBoot = await startDaemon({ homeDir });
+    expect(secondBoot.config.kb1Home).toBe(migratedHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
+      'from old home\n'
+    );
+    await secondBoot.close();
+  });
+
+  it('migrates a Docker-style sibling kb2 home to an explicit kb1 home and is idempotent', async () => {
+    const dataRoot = join(kb1Home, 'data');
+    const legacyHome = join(dataRoot, 'kb2');
+    const targetHome = join(dataRoot, 'kb1');
+    const legacyVaultRoot = join(legacyHome, 'vaults', 'demo-vault');
+    await mkdir(join(legacyHome, 'daemon'), { recursive: true });
+    await writeFile(join(legacyHome, 'daemon', 'docker-marker.txt'), 'legacy docker data\n', 'utf8');
+    await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
+    await writeFile(join(legacyVaultRoot, 'notes', 'from-docker-home.md'), 'from docker home\n', 'utf8');
+
+    const firstPort = await reservePort();
+    const firstBoot = await startDaemon({
+      env: {
+        ...originalEnv,
+        KB1_HOME: targetHome,
+        KB1_HOST: '127.0.0.1',
+        KB1_PORT: String(firstPort)
+      },
+      homeDir: join(kb1Home, 'ignored-home')
+    });
+
+    expect(firstBoot.config.kb1Home).toBe(targetHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(targetHome, 'daemon', 'docker-marker.txt'), 'utf8')).resolves.toBe(
+      'legacy docker data\n'
+    );
+    await expect(readFile(join(targetHome, 'vaults', 'demo-vault', 'notes', 'from-docker-home.md'), 'utf8')).resolves.toBe(
+      'from docker home\n'
+    );
+    await firstBoot.close();
+
+    const secondPort = await reservePort();
+    const secondBoot = await startDaemon({
+      env: {
+        ...originalEnv,
+        KB1_HOME: targetHome,
+        KB1_HOST: '127.0.0.1',
+        KB1_PORT: String(secondPort)
+      },
+      homeDir: join(kb1Home, 'ignored-home')
+    });
+
+    expect(secondBoot.config.kb1Home).toBe(targetHome);
+    await expect(access(legacyHome)).rejects.toBeTruthy();
+    await expect(readFile(join(targetHome, 'vaults', 'demo-vault', 'notes', 'from-docker-home.md'), 'utf8')).resolves.toBe(
+      'from docker home\n'
+    );
+    await secondBoot.close();
+  });
+
   it('migrates a legacy single-vault layout into the registry layout on boot, preserving every note', async () => {
     await seedLegacyLayout();
 
     const port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
 
     const started = await startDaemon();
     const vaultRoot = started.config.vaultRoot;
 
     // The migrated vault lives under <home>/vaults/<slug>/ and the legacy root is gone.
-    expect(vaultRoot).toBe(join(kb2Home, 'vaults', 'demo-vault'));
-    await expect(access(join(kb2Home, 'demo-vault'))).rejects.toBeTruthy();
+    expect(vaultRoot).toBe(join(kb1Home, 'vaults', 'demo-vault'));
+    await expect(access(join(kb1Home, 'demo-vault'))).rejects.toBeTruthy();
 
     // Data-safety: every seeded note, including the nested one, survives byte-for-byte.
     for (const note of SEEDED_NOTES) {
@@ -231,7 +371,7 @@ describe('daemon boot migration', () => {
     }
 
     // A durable vault identity was minted with a non-empty slug and display name.
-    const identity = JSON.parse(await readFile(join(vaultRoot, '.kb2', 'vault.json'), 'utf8'));
+    const identity = JSON.parse(await readFile(join(vaultRoot, '.kb1', 'vault.json'), 'utf8'));
     expect(typeof identity).toBe('object');
     expect(identity).not.toBeNull();
     expect(identity.id).toBe('demo-vault');
@@ -247,14 +387,14 @@ describe('daemon boot migration', () => {
     const firstPort = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(firstPort)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(firstPort)
     };
 
     const firstBoot = await startDaemon();
     const vaultRoot = firstBoot.config.vaultRoot;
-    const identityFile = join(vaultRoot, '.kb2', 'vault.json');
+    const identityFile = join(vaultRoot, '.kb1', 'vault.json');
     const identityAfterFirstBoot = await readFile(identityFile, 'utf8');
     const contentsAfterFirstBoot = await Promise.all(
       SEEDED_NOTES.map((note) => readFile(join(vaultRoot, note.path), 'utf8'))
@@ -264,9 +404,9 @@ describe('daemon boot migration', () => {
     const secondPort = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(secondPort)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(secondPort)
     };
 
     const secondBoot = await startDaemon();
@@ -274,7 +414,7 @@ describe('daemon boot migration', () => {
 
     // The legacy root is not recreated, and the identity is byte-for-byte identical
     // (the slug is read back, never recomputed).
-    await expect(access(join(kb2Home, 'demo-vault'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'demo-vault'))).rejects.toBeTruthy();
     await expect(readFile(identityFile, 'utf8')).resolves.toBe(identityAfterFirstBoot);
 
     // Every note is still present with its original content unchanged.
@@ -289,20 +429,20 @@ describe('daemon boot migration', () => {
 });
 
 describe('daemon vault management API', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
   let port: number;
   let started: Awaited<ReturnType<typeof startDaemon>>;
 
   beforeEach(async () => {
     originalEnv = { ...process.env };
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-vaults-api-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-vaults-api-'));
     port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
     started = await startDaemon();
   });
@@ -310,7 +450,7 @@ describe('daemon vault management API', () => {
   afterEach(async () => {
     await started.close();
     process.env = originalEnv;
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   const base = () => `http://127.0.0.1:${port}`;
@@ -340,7 +480,7 @@ describe('daemon vault management API', () => {
 
     // A real, valid empty vault landed on disk with minted identity.
     const identity = JSON.parse(
-      await readFile(join(kb2Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(identity).toEqual({ id: 'field-notes', displayName: 'Field Notes' });
 
@@ -365,9 +505,9 @@ describe('daemon vault management API', () => {
     });
     expect(await listVaults()).toContainEqual({ id: 'field-notes', displayName: 'Field Journal' });
     // The on-disk folder did not move; only identity changed.
-    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).resolves.toBeUndefined();
+    await expect(access(join(kb1Home, 'vaults', 'field-notes'))).resolves.toBeUndefined();
     const renamedIdentity = JSON.parse(
-      await readFile(join(kb2Home, 'vaults', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, 'vaults', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(renamedIdentity).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
 
@@ -376,10 +516,10 @@ describe('daemon vault management API', () => {
     expect(deleteResponse.status).toBe(200);
     await expect(deleteResponse.json()).resolves.toMatchObject({ ok: true });
     expect((await listVaults()).some((v) => v.id === 'field-notes')).toBe(false);
-    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
     // The data still exists under the home-level trash (never hard-deleted).
     const trashed = JSON.parse(
-      await readFile(join(kb2Home, '.trash', 'field-notes', '.kb2', 'vault.json'), 'utf8')
+      await readFile(join(kb1Home, '.trash', 'field-notes', '.kb1', 'vault.json'), 'utf8')
     );
     expect(trashed).toEqual({ id: 'field-notes', displayName: 'Field Journal' });
 
@@ -406,7 +546,7 @@ describe('daemon vault management API', () => {
 
     // It is on disk under the scoped vault's folder.
     await expect(
-      readFile(join(kb2Home, 'vaults', 'scoped', 'only-here.md'), 'utf8')
+      readFile(join(kb1Home, 'vaults', 'scoped', 'only-here.md'), 'utf8')
     ).resolves.toBe('scoped content\n');
 
     // Readable back through the scoped route.
@@ -470,7 +610,7 @@ describe('daemon vault management API', () => {
     await expect(missing.json()).resolves.toMatchObject({ ok: false, error: 'invalid_request' });
 
     // Nothing landed on disk for the rejected slug.
-    await expect(access(join(kb2Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'vaults', 'field-notes'))).rejects.toBeTruthy();
   });
 
   it('treats zero vaults as a valid state: deleting the last vault still serves', async () => {
@@ -534,7 +674,7 @@ describe('daemon vault management API', () => {
 });
 
 describe('daemon multi-vault MCP surface', () => {
-  let kb2Home: string;
+  let kb1Home: string;
   let originalEnv: NodeJS.ProcessEnv;
   let port: number;
   let started: Awaited<ReturnType<typeof startDaemon>>;
@@ -543,13 +683,13 @@ describe('daemon multi-vault MCP surface', () => {
 
   beforeEach(async () => {
     originalEnv = { ...process.env };
-    kb2Home = await mkdtemp(join(tmpdir(), 'kb2-mcp-vaults-'));
+    kb1Home = await mkdtemp(join(tmpdir(), 'kb1-mcp-vaults-'));
     port = await reservePort();
     process.env = {
       ...originalEnv,
-      KB2_HOME: kb2Home,
-      KB2_HOST: '127.0.0.1',
-      KB2_PORT: String(port)
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
     };
     started = await startDaemon();
     client = new Client({ name: 'mcp-multi-vault-test', version: '1.0.0' });
@@ -561,7 +701,7 @@ describe('daemon multi-vault MCP surface', () => {
     await transport.terminateSession().catch(() => undefined);
     await started.close();
     process.env = originalEnv;
-    await rm(kb2Home, { force: true, recursive: true });
+    await rm(kb1Home, { force: true, recursive: true });
   });
 
   const base = () => `http://127.0.0.1:${port}`;
@@ -608,12 +748,12 @@ describe('daemon multi-vault MCP surface', () => {
     expect(missing.isError).toBe(true);
 
     // Nothing was written into any vault.
-    await expect(access(join(kb2Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
 
     // The same call WITH a valid vaultId succeeds.
     await expect(mcpToolJson(client, 'create_note', { vaultId: 'demo-vault', path: 'in-starter.md', content: 'body\n' }))
       .resolves.toMatchObject({ ok: true, path: 'in-starter.md' });
-    await expect(readFile(join(kb2Home, 'vaults', 'demo-vault', 'in-starter.md'), 'utf8'))
+    await expect(readFile(join(kb1Home, 'vaults', 'demo-vault', 'in-starter.md'), 'utf8'))
       .resolves.toBe('body\n');
   });
 
@@ -629,7 +769,7 @@ describe('daemon multi-vault MCP surface', () => {
     })).resolves.toMatchObject({ ok: true, path: 'only-in-second.md' });
 
     // It is on disk under the second vault's folder.
-    await expect(readFile(join(kb2Home, 'vaults', 'second', 'only-in-second.md'), 'utf8'))
+    await expect(readFile(join(kb1Home, 'vaults', 'second', 'only-in-second.md'), 'utf8'))
       .resolves.toBe('second body\n');
 
     // Readable back addressing the second vault via MCP.
@@ -663,7 +803,7 @@ describe('daemon multi-vault MCP surface', () => {
     expect(health.status).toBe(200);
 
     // Nothing was written anywhere.
-    await expect(access(join(kb2Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'vaults', 'demo-vault', 'nope.md'))).rejects.toBeTruthy();
   });
 });
 

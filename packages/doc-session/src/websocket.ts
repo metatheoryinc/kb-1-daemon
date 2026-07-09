@@ -143,7 +143,7 @@ export async function bindYjsWebSocket(
             deferredPersistedAckIds.add(ackedUpdate.ackId);
             return;
           }
-          console.warn('KB-2 failed to acknowledge persisted Yjs update.', error);
+          console.warn('KB-1 failed to acknowledge persisted Yjs update.', error);
         });
         return;
       }

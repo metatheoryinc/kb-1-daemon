@@ -29,13 +29,13 @@ export interface LocalMcpEndpoint {
   close(): Promise<void>;
 }
 
-export interface LocalMcpEndpointOptions {
+interface LocalMcpEndpointOptions {
   actorFromRequest?: (
     request: Request,
   ) => LocalMcpActor | ServiceFailure | undefined;
 }
 
-export interface LocalMcpServerOptions {
+interface LocalMcpServerOptions {
   actor?: LocalMcpActor;
 }
 
@@ -50,7 +50,7 @@ interface SessionRecord {
  * endpoint; a bare service is normalized to a one-vault provider so the tool
  * surface is identical either way.
  */
-export type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
+type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
 
 export function createLocalMcpEndpoint(
   source: LocalMcpVaultSource,
@@ -122,7 +122,9 @@ export function createLocalMcpServer(
 ): McpServer {
   const provider = asProvider(source);
   const server = new McpServer({
-    name: "kb-2-local-daemon",
+    // Coordinated wire identifier: keep byte-for-byte stable until all clients
+    // and the cloud relay are migrated together.
+    name: "kb-1-local-daemon",
     version: "0.0.0",
   });
 
@@ -340,7 +342,7 @@ export function createLocalMcpServer(
     "get_folder_metadata",
     {
       description:
-        "Read durable folder color metadata from .kb2/folders.yml. Read-only; writes no audit row.",
+        "Read durable folder color metadata from .kb1/folders.yml. Read-only; writes no audit row.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
       },
@@ -357,7 +359,7 @@ export function createLocalMcpServer(
     "set_folder_metadata",
     {
       description:
-        "Merge durable folder color metadata into .kb2/folders.yml. Use null to clear the color. Mutations are audited as mcp_client.",
+        "Merge durable folder color metadata into .kb1/folders.yml. Use null to clear the color. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
         color: z
@@ -434,7 +436,7 @@ export function createLocalMcpServer(
     "edit_note",
     {
       description:
-        "Apply the Chunk 008 anchored splice contract verbatim. Requires a read_note baseline plus old_text/new_text and optional before/after/occurrence anchors. Rejected results are returned intact: stale_doc includes current_content and fresh baseline; ambiguous includes match_count; size rejects include limits; persist_failed means the edit was not durably saved and has no success audit row.",
+        "Apply the anchored splice contract. Requires a read_note baseline plus old_text/new_text and optional before/after/occurrence anchors. Rejected results are returned intact: stale_doc includes current_content and fresh baseline; ambiguous includes match_count; size rejects include limits; persist_failed means the edit was not durably saved and has no success audit row.",
       inputSchema: {
         path: z.string().describe("Vault-relative Markdown file path to edit."),
         baseline: z.string().describe("Baseline returned by read_note."),
@@ -521,7 +523,7 @@ export function createLocalMcpServer(
     "delete_note",
     {
       description:
-        "Delete a note. By default it is moved into .kb2/trash; set permanent for an irreversible delete. Mutations are audited as mcp_client.",
+        "Delete a note. By default it is moved into .kb1/trash; set permanent for an irreversible delete. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative Markdown file path."),
         permanent: z
@@ -583,7 +585,7 @@ export function createLocalMcpServer(
     "delete_folder",
     {
       description:
-        "Delete a folder. Non-empty folders require recursive=true. By default deletion moves to .kb2/trash; permanent removes directly. Mutations are audited as mcp_client.",
+        "Delete a folder. Non-empty folders require recursive=true. By default deletion moves to .kb1/trash; permanent removes directly. Mutations are audited as mcp_client.",
       inputSchema: {
         path: z.string().describe("Vault-relative folder path."),
         recursive: z

@@ -8,7 +8,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { DocumentSessionManager } from "@kb-2/doc-session";
+import { DocumentSessionManager } from "@kb-1/doc-session";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -26,7 +26,7 @@ describe("vault service failure mapping", () => {
   let sessions: DocumentSessionManager;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "kb2-vault-service-"));
+    root = await mkdtemp(join(tmpdir(), "kb1-vault-service-"));
     sessions = new DocumentSessionManager({ root, defaultContent: "" });
   });
 
@@ -421,7 +421,7 @@ describe("vault service failure mapping", () => {
     };
 
     try {
-      await writeFileWithParents(join(root, ".kb2", "file-history.yml"), "paths: [");
+      await writeFileWithParents(join(root, ".kb1", "file-history.yml"), "paths: [");
 
       await expect(
         service.createNote({
@@ -641,7 +641,7 @@ describe("vault service failure mapping", () => {
       audit: { operation: "delete", path: "renamed-tree" },
     });
 
-    const trashFiles = await readdir(join(root, ".kb2", "trash"));
+    const trashFiles = await readdir(join(root, ".kb1", "trash"));
     expect(trashFiles.length).toBeGreaterThanOrEqual(2);
     const auditRows = await readAuditRows(root);
     expect(auditRows.map((row) => row.operation)).toEqual([
@@ -1052,7 +1052,7 @@ describe("vault service failure mapping", () => {
       readFile(join(root, "notes/readonly.md"), "utf8"),
     ).resolves.toBe("base\n");
     await expect(
-      stat(join(root, ".kb2/audit/changes.jsonl")),
+      stat(join(root, ".kb1/audit/changes.jsonl")),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     await chmod(notesDir, 0o700);
@@ -1170,7 +1170,7 @@ async function readAuditRows(
   root: string,
 ): Promise<Array<{ operation: string }>> {
   const content = await readFile(
-    join(root, ".kb2", "audit", "changes.jsonl"),
+    join(root, ".kb1", "audit", "changes.jsonl"),
     "utf8",
   );
   return content
@@ -1180,7 +1180,7 @@ async function readAuditRows(
 }
 
 async function readRawFileHistory(root: string): Promise<string> {
-  return readFile(join(root, ".kb2", "file-history.yml"), "utf8");
+  return readFile(join(root, ".kb1", "file-history.yml"), "utf8");
 }
 
 function requireBaseline(result: ServiceResult): string {

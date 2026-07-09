@@ -4,6 +4,15 @@
   import VaultFilterPopover from './VaultFilterPopover.svelte';
   import FilesPanelFooter from './FilesPanelFooter.svelte';
   import type { AccentName } from '../primitives/accent';
+  import {
+    LOCAL_TREE_DRAG_MIME,
+    parseLocalTreeDragSource,
+    resolveLocalTreeDrop,
+    serializeLocalTreeDragSource,
+    type LocalTreeDragSource,
+    type LocalTreeDropTarget,
+    type LocalTreeMoveDrop,
+  } from './tree-drag-drop';
   import type {
     LocalTreeAction,
     LocalTreeNode,
@@ -61,6 +70,7 @@
     /** Navigate to the vault root. */
     onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    onTreeMoveDrop?: (move: LocalTreeMoveDrop) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
     /** Create a new vault (footer affordance). The host collects a name. */
@@ -90,11 +100,14 @@
     onOpenFolder,
     onOpenVault,
     onTreeAction,
+    onTreeMoveDrop,
     onToggleVaultHidden,
     onNewVault,
   }: Props = $props();
 
   let filterOpen = $state(false);
+  let dragSource = $state<LocalTreeDragSource | null>(null);
+  let dragOverTarget = $state<LocalTreeDropTarget | null>(null);
 
   // The vault groups the rail renders. When the host supplies an explicit
   // set, use it (the multi-vault rail); otherwise synthesize a single
@@ -136,9 +149,87 @@
   // The rail renders only the groups the user hasn't hidden. Hiding every
   // vault empties the body; the filter stays available to bring them back.
   const visibleGroups = $derived(groups.filter((g) => !hidden.has(g.id)));
+
+  function isSameDropTarget(
+    left: LocalTreeDropTarget | null,
+    right: LocalTreeDropTarget,
+  ): boolean {
+    return left?.kind === right.kind && left.vaultId === right.vaultId && left.path === right.path;
+  }
+
+  function readTreeDragSource(event: DragEvent): LocalTreeDragSource | null {
+    if (dragSource) return dragSource;
+    return parseLocalTreeDragSource(event.dataTransfer?.getData(LOCAL_TREE_DRAG_MIME) ?? null);
+  }
+
+  function clearTreeDragState(): void {
+    dragSource = null;
+    dragOverTarget = null;
+  }
+
+  function handleTreeDragStart(source: LocalTreeDragSource, event: DragEvent): void {
+    dragSource = source;
+    dragOverTarget = null;
+    if (!event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData(LOCAL_TREE_DRAG_MIME, serializeLocalTreeDragSource(source));
+    event.dataTransfer.setData('text/plain', source.path);
+  }
+
+  function handleTreeDropTargetOver(target: LocalTreeDropTarget, event: DragEvent): void {
+    const source = readTreeDragSource(event);
+    if (!source || !event.dataTransfer) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    dragOverTarget = target;
+    event.dataTransfer.dropEffect = resolveLocalTreeDrop(source, target).valid ? 'move' : 'none';
+  }
+
+  function handleTreeDropTargetLeave(target: LocalTreeDropTarget, event: DragEvent): void {
+    event.stopPropagation();
+    const currentTarget = event.currentTarget;
+    const relatedTarget = event.relatedTarget;
+    if (
+      currentTarget instanceof Node &&
+      relatedTarget instanceof Node &&
+      currentTarget.contains(relatedTarget)
+    ) {
+      return;
+    }
+    if (isSameDropTarget(dragOverTarget, target)) dragOverTarget = null;
+  }
+
+  function handleTreeDropTargetDrop(target: LocalTreeDropTarget, event: DragEvent): void {
+    const source = readTreeDragSource(event);
+    event.preventDefault();
+    event.stopPropagation();
+    clearTreeDragState();
+    if (!source) return;
+
+    const resolution = resolveLocalTreeDrop(source, target);
+    if (resolution.valid) onTreeMoveDrop?.(resolution.move);
+  }
+
+  function handlePanelDragOver(event: DragEvent): void {
+    if (!dragSource || !event.dataTransfer) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'none';
+  }
+
+  function handlePanelDrop(event: DragEvent): void {
+    if (!dragSource) return;
+    event.preventDefault();
+    clearTreeDragState();
+  }
 </script>
 
-<aside class="files-panel" aria-label="Vault files">
+<aside
+  class="files-panel"
+  aria-label="Vault files"
+  ondragover={handlePanelDragOver}
+  ondrop={handlePanelDrop}
+>
   <header class="panel-header">
     <div class="title-row">
       <h2>Files &amp; Vaults</h2>
@@ -190,6 +281,13 @@
             {onOpenFolder}
             {onOpenVault}
             {onTreeAction}
+            {dragSource}
+            {dragOverTarget}
+            onTreeDragStart={handleTreeDragStart}
+            onTreeDragEnd={clearTreeDragState}
+            onTreeDropTargetOver={handleTreeDropTargetOver}
+            onTreeDropTargetLeave={handleTreeDropTargetLeave}
+            onTreeDropTargetDrop={handleTreeDropTargetDrop}
           />
         {/each}
       </nav>
@@ -258,7 +356,8 @@
 
   .panel-body {
     min-height: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 6px;
   }
 

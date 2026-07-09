@@ -92,19 +92,19 @@ importers:
       '@hono/node-server':
         specifier: 2.0.4
         version: 2.0.4(hono@4.12.25)
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../../packages/doc-session
-      '@kb-2/local-mcp':
+      '@kb-1/local-mcp':
         specifier: workspace:*
         version: link:../../packages/local-mcp
-      '@kb-2/tunnel-client':
+      '@kb-1/tunnel-client':
         specifier: workspace:*
         version: link:../../packages/tunnel-client
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../../packages/vault-core
-      '@kb-2/vault-service':
+      '@kb-1/vault-service':
         specifier: workspace:*
         version: link:../../packages/vault-service
       github-slugger:
@@ -132,6 +132,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@codemirror/view':
+        specifier: 6.41.1
+        version: 6.41.1
       '@fontsource-variable/geist':
         specifier: ^5.2.8
         version: 5.2.9
@@ -144,21 +147,30 @@ importers:
       '@fontsource/source-serif-4':
         specifier: 5.2.9
         version: 5.2.9
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../../packages/doc-session
-      '@kb-2/editor':
+      '@kb-1/editor':
         specifier: workspace:*
         version: link:../../packages/editor
-      '@kb-2/ui':
+      '@kb-1/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@tanstack/query-async-storage-persister':
+        specifier: ^5.101.2
+        version: 5.101.2
+      '@tanstack/query-persist-client-core':
+        specifier: ^5.101.2
+        version: 5.101.2
       '@tanstack/svelte-query':
         specifier: ^6.1.18
         version: 6.1.36(svelte@5.55.5)
       lib0:
         specifier: 0.2.117
         version: 0.2.117
+      localforage:
+        specifier: ^1.10.0
+        version: 1.10.0
       svelte:
         specifier: 'catalog:'
         version: 5.55.5
@@ -211,7 +223,7 @@ importers:
 
   packages/doc-session:
     dependencies:
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../vault-core
       fast-diff:
@@ -272,7 +284,7 @@ importers:
       '@codemirror/view':
         specifier: 6.41.1
         version: 6.41.1
-      '@kb-2/ui':
+      '@kb-1/ui':
         specifier: workspace:*
         version: link:../ui
       '@lezer/common':
@@ -315,7 +327,7 @@ importers:
 
   packages/local-mcp:
     dependencies:
-      '@kb-2/vault-service':
+      '@kb-1/vault-service':
         specifier: workspace:*
         version: link:../vault-service
       '@modelcontextprotocol/sdk':
@@ -334,7 +346,7 @@ importers:
 
   packages/tunnel-client:
     dependencies:
-      '@kb-2/tunnel-protocol':
+      '@kb-1/tunnel-protocol':
         specifier: workspace:*
         version: link:../tunnel-protocol
       ws:
@@ -433,10 +445,10 @@ importers:
 
   packages/vault-service:
     dependencies:
-      '@kb-2/doc-session':
+      '@kb-1/doc-session':
         specifier: workspace:*
         version: link:../doc-session
-      '@kb-2/vault-core':
+      '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../vault-core
     devDependencies:
@@ -1465,8 +1477,14 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7
 
+  '@tanstack/query-async-storage-persister@5.101.2':
+    resolution: {integrity: sha512-jf7zvVKZ5q2j/xuhbTIBUpw5xt6cw/ioOFQquxK7fRY0AmMQP8A0JVMOgYoeQLA4PKdeT7RxsuLAF0Lft9oJ8Q==}
+
   '@tanstack/query-core@5.101.2':
     resolution: {integrity: sha512-hH5MLoJhF7KaIGd7q3xTXGXvslI+GYlM1Z/35aSHHWaCJWB7XvTSHYuV3eM7tw+aE0mT/xMro4M4Q9rCGHT0lw==}
+
+  '@tanstack/query-persist-client-core@5.101.2':
+    resolution: {integrity: sha512-rgMsbvBVpSPDUsprC9FYxojdG0Q1LH6yq1i3DXz2aps4VEqv2l4Msj3YDqIifU3xkl/DrYe9YWntZAJLrM6xTg==}
 
   '@tanstack/svelte-query@6.1.36':
     resolution: {integrity: sha512-AVyvXPzBh5OQnWFB7rk9gskciPouayAhU9Vm24uMai+Imf+ZfBEbjOAEtdM41oexFK/cdXmpAIySDSVaAzy9zw==}
@@ -2143,6 +2161,9 @@ packages:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
+  immediate@3.0.6:
+    resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
+
   indent-string@4.0.0:
     resolution: {integrity: sha512-EdDDZu4A2OyIK7Lr/2zG+w5jmbuk1DVBnEwREQvBzspBJkCEbRa8GxU1lghYcaGJCnRWibjDXlq779X1/y5xwg==}
     engines: {node: '>=8'}
@@ -2252,6 +2273,9 @@ packages:
     resolution: {integrity: sha512-DeXj9X5xDCjgKLU/7RR+/HQEVzuuEUiwldwOGsHK/sfAfELGWEyTcf0x+uOvCvK3O2zPmZePXWL85vtia6GyZw==}
     engines: {node: '>=16'}
     hasBin: true
+
+  lie@3.1.1:
+    resolution: {integrity: sha512-RiNhHysUjhrDQntfYSfY4MU24coXXdEOgw9WGcKHNeEwffDYbF//u87M1EWaMGzuFoSbqW0C9C6lEEhDOAswfw==}
 
   lightningcss-android-arm64@1.30.2:
     resolution: {integrity: sha512-BH9sEdOCahSgmkVhBLeU7Hc9DWeZ1Eb6wNS6Da8igvUwAe0sqROHddIlvU06q3WyXVEOYDZ6ykBZQnjTbmo4+A==}
@@ -2404,6 +2428,9 @@ packages:
   lines-and-columns@2.0.3:
     resolution: {integrity: sha512-cNOjgCnLB+FnvWWtyRTzmB3POJ+cXxTA81LoW7u8JdmhfXzriropYwpjShnz1QLLWsQwY7nIxoDmcPTwphDK9w==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  localforage@1.10.0:
+    resolution: {integrity: sha512-14/H1aX7hzBBmmh7sGPd+AOMkkIrHM3Z1PAyGgZigA1H1p5O5ANnMyWzvpAETtG68/dC4pC0ncy3+PPGzXZHPg==}
 
   locate-character@3.0.0:
     resolution: {integrity: sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==}
@@ -3978,7 +4005,16 @@ snapshots:
       tailwindcss: 4.1.18
       vite: 7.3.5(@types/node@25.9.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
+  '@tanstack/query-async-storage-persister@5.101.2':
+    dependencies:
+      '@tanstack/query-core': 5.101.2
+      '@tanstack/query-persist-client-core': 5.101.2
+
   '@tanstack/query-core@5.101.2': {}
+
+  '@tanstack/query-persist-client-core@5.101.2':
+    dependencies:
+      '@tanstack/query-core': 5.101.2
 
   '@tanstack/svelte-query@6.1.36(svelte@5.55.5)':
     dependencies:
@@ -4074,7 +4110,7 @@ snapshots:
       obug: 2.1.2
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(happy-dom@20.10.2)(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.8(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@vitest/expect@3.2.4':
     dependencies:
@@ -4695,6 +4731,8 @@ snapshots:
 
   ignore@7.0.5: {}
 
+  immediate@3.0.6: {}
+
   indent-string@4.0.0: {}
 
   inherits@2.0.4: {}
@@ -4769,6 +4807,10 @@ snapshots:
   lib0@0.2.117:
     dependencies:
       isomorphic.js: 0.2.5
+
+  lie@3.1.1:
+    dependencies:
+      immediate: 3.0.6
 
   lightningcss-android-arm64@1.30.2:
     optional: true
@@ -4869,6 +4911,10 @@ snapshots:
       lightningcss-win32-x64-msvc: 1.32.0
 
   lines-and-columns@2.0.3: {}
+
+  localforage@1.10.0:
+    dependencies:
+      lie: 3.1.1
 
   locate-character@3.0.0: {}
 

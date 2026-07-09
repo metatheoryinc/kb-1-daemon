@@ -9,6 +9,11 @@
   import FolderNode from './FolderNode.svelte';
   import { vaultKey } from './expansion';
   import { ROOT_DEFAULT_COLOR, resolveFolderColor } from './folder-presentation';
+  import {
+    resolveLocalTreeDrop,
+    type LocalTreeDragSource,
+    type LocalTreeDropTarget,
+  } from './tree-drag-drop';
   import type { LocalFolderMetadata, LocalTreeAction, LocalTreeNode } from './types';
 
   interface Props {
@@ -59,6 +64,13 @@
         row click. */
     onOpenFolder?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    dragSource?: LocalTreeDragSource | null;
+    dragOverTarget?: LocalTreeDropTarget | null;
+    onTreeDragStart?: (source: LocalTreeDragSource, event: DragEvent) => void;
+    onTreeDragEnd?: () => void;
+    onTreeDropTargetOver?: (target: LocalTreeDropTarget, event: DragEvent) => void;
+    onTreeDropTargetLeave?: (target: LocalTreeDropTarget, event: DragEvent) => void;
+    onTreeDropTargetDrop?: (target: LocalTreeDropTarget, event: DragEvent) => void;
   }
 
   let {
@@ -82,6 +94,13 @@
     onOpenVault,
     onOpenFolder,
     onTreeAction,
+    dragSource = null,
+    dragOverTarget = null,
+    onTreeDragStart,
+    onTreeDragEnd,
+    onTreeDropTargetOver,
+    onTreeDropTargetLeave,
+    onTreeDropTargetDrop,
   }: Props = $props();
 
   const key = $derived(vaultKey(vaultId));
@@ -92,6 +111,22 @@
   const active = $derived(activeVaultId === key);
   const inheritedColor = $derived(resolveFolderColor(metadata, ROOT_DEFAULT_COLOR));
   const customColor = $derived(colorHex ?? (metadata?.color && metadata.color !== 'inherit' ? metadata.color : null));
+  const dropTarget = $derived<LocalTreeDropTarget>({
+    kind: 'vault',
+    vaultId,
+    path: '',
+  });
+  const dropState = $derived.by<'valid' | 'invalid' | null>(() => {
+    if (!dragSource || !dragOverTarget) return null;
+    if (
+      dragOverTarget.kind !== dropTarget.kind ||
+      dragOverTarget.vaultId !== dropTarget.vaultId ||
+      dragOverTarget.path !== dropTarget.path
+    ) {
+      return null;
+    }
+    return resolveLocalTreeDrop(dragSource, dropTarget).valid ? 'valid' : 'invalid';
+  });
 
   // The kebab and right-click open the same menu; the kebab hangs from the
   // button rect (anchor) while right-click pins to the cursor.
@@ -134,8 +169,25 @@
 
 <div class="vault-block">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="vault-header" class:active data-testid="vault-row" oncontextmenu={openMenu}>
-    <button type="button" class="activate" onclick={handleClick} aria-expanded={open}>
+  <div
+    class="vault-header"
+    class:active
+    class:drop-valid={dropState === 'valid'}
+    class:drop-invalid={dropState === 'invalid'}
+    data-testid="vault-row"
+    oncontextmenu={openMenu}
+    ondragover={(event) => onTreeDropTargetOver?.(dropTarget, event)}
+    ondragleave={(event) => onTreeDropTargetLeave?.(dropTarget, event)}
+    ondrop={(event) => onTreeDropTargetDrop?.(dropTarget, event)}
+  >
+    <button
+      type="button"
+      class="activate"
+      onclick={handleClick}
+      aria-expanded={open}
+      aria-current={active ? 'page' : undefined}
+      draggable="false"
+    >
       <span class="chev" class:collapsed={!open} aria-hidden="true">
         <Icon name="chevron-down" size={12} weight="bold" />
       </span>
@@ -152,6 +204,7 @@
       class:always-visible={kebabAlwaysVisible}
       aria-label={`Actions for ${vaultName}`}
       title={`Actions for ${vaultName}`}
+      draggable="false"
       onclick={openKebabMenu}
     >
       <Icon name="dots" size={16} weight="bold" />
@@ -176,6 +229,13 @@
             onOpen={onOpenFile}
             {onOpenFolder}
             onAction={onTreeAction}
+            {dragSource}
+            {dragOverTarget}
+            {onTreeDragStart}
+            {onTreeDragEnd}
+            {onTreeDropTargetOver}
+            {onTreeDropTargetLeave}
+            {onTreeDropTargetDrop}
           />
         {:else}
           <FileNode
@@ -186,6 +246,9 @@
             {kebabAlwaysVisible}
             onOpen={onOpenFile}
             onAction={onTreeAction}
+            {dragSource}
+            {onTreeDragStart}
+            {onTreeDragEnd}
           />
         {/if}
       {/each}
@@ -214,6 +277,7 @@
     align-items: center;
     gap: 8px;
     width: 100%;
+    box-sizing: border-box;
     padding: 5px 6px;
     border-radius: 6px;
     background: transparent;
@@ -230,6 +294,20 @@
   .vault-header.active {
     background: var(--rd-active);
     color: var(--rd-ink-1);
+  }
+
+  .vault-header.drop-valid {
+    background: color-mix(in srgb, var(--rd-active) 78%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rd-ink-3) 34%, transparent);
+  }
+
+  .vault-header.drop-invalid {
+    background: color-mix(in srgb, var(--rd-danger-ink, #a13a3a) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rd-danger-ink, #a13a3a) 42%, transparent);
+  }
+
+  .vault-header.drop-invalid .activate {
+    cursor: not-allowed;
   }
 
   .activate {

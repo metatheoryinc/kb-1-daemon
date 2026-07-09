@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAppState, type FavoriteEntry } from './store';
+import { createAppState, DEFAULT_PERSIST_KEY, type FavoriteEntry } from './store';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { dump: () => string | null } {
   let value: string | null = null;
@@ -57,7 +57,7 @@ describe('favorites slice', () => {
   it('drops malformed persisted entries', () => {
     const storage = memoryStorage();
     storage.setItem(
-      'kb2:app-state',
+      DEFAULT_PERSIST_KEY,
       JSON.stringify({ favorites: [{ kind: 'note', path: 'ok.md', vaultId: VAULT }, { kind: 'bogus' }, 7] }),
     );
     const store = createAppState({ storage });

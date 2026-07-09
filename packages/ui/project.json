@@ -7,25 +7,25 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/ui build"
+        "command": "pnpm --filter @kb-1/ui build"
       }
     },
     "storybook": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/ui storybook"
+        "command": "pnpm --filter @kb-1/ui storybook"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/ui test"
+        "command": "pnpm --filter @kb-1/ui test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/ui typecheck"
+        "command": "pnpm --filter @kb-1/ui typecheck"
       }
     }
   }

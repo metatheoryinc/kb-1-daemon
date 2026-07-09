@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>KB-2 Local</title>
+    <title>KB-1 Local</title>
 
     <script>
       // Pre-hydration color-mode resolution. Reads the persisted
-      // `colorMode` from the same `kb2:app-state` localStorage key the
-      // app-state store writes; defaults to `'system'` when missing or
-      // malformed; resolves `'system'` against `prefers-color-scheme`.
+      // `colorMode` from the same `kb1:app-state` localStorage key the
+      // app-state store writes; defaults to `'system'` when missing or malformed;
+      // resolves `'system'` against `prefers-color-scheme`.
       // Writes `<html class="dark">` so Tailwind's `.dark` variant is
       // active before the first paint, and `<html data-rd-mode>` so the
       // design-token dark block (`[data-rd-mode='dark']`, which fills the
@@ -21,7 +21,7 @@
       (function () {
         try {
           var mode = 'system';
-          var raw = window.localStorage.getItem('kb2:app-state');
+          var raw = window.localStorage.getItem('kb1:app-state');
           if (raw) {
             var blob = JSON.parse(raw);
             var v = blob && blob.colorMode;

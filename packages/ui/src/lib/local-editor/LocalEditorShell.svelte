@@ -6,6 +6,7 @@
   import PrimaryRail, { type RailNavId } from './primary-rail/PrimaryRail.svelte';
   import type { AccentName } from '../primitives/accent';
   import type { BreadcrumbItem } from '../primitives/Breadcrumb.svelte';
+  import type { LocalTreeMoveDrop } from './tree-drag-drop';
   import type {
     LocalTreeAction,
     LocalTreeNode,
@@ -98,6 +99,7 @@
     /** Navigate to the vault root. */
     onOpenVault?: (key: string) => void;
     onTreeAction?: (action: LocalTreeAction) => void;
+    onTreeMoveDrop?: (move: LocalTreeMoveDrop) => void;
     /** Add/remove a vault id from the hide-list. */
     onToggleVaultHidden?: (vaultId: string) => void;
     /** Create a new vault (files-rail footer). The host collects a name. */
@@ -150,6 +152,7 @@
     onOpenFolder,
     onOpenVault,
     onTreeAction,
+    onTreeMoveDrop,
     onToggleVaultHidden,
     onNewVault,
     onResizeRail,
@@ -202,6 +205,7 @@
       {onOpenFolder}
       {onOpenVault}
       {onTreeAction}
+      {onTreeMoveDrop}
       {onToggleVaultHidden}
       {onNewVault}
     />

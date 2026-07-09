@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LocalTreeNode } from "@kb-2/ui";
+import type { LocalTreeNode } from "@kb-1/ui";
 import { buildStarredViewData } from "./favorites-data";
 import type { FavoriteEntry } from "$lib/app-state";
 

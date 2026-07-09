@@ -1,23 +1,34 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-2/doc-session';
-import { createLocalMcpEndpoint } from '@kb-2/local-mcp';
-import { TunnelClient, type TunnelClientLogger } from '@kb-2/tunnel-client';
-import type { VaultChangeEventKind } from '@kb-2/vault-service';
+import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-1/doc-session';
+import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
+import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
+import type { VaultChangeEventKind } from '@kb-1/vault-service';
+import { realpathSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-2/vault-core';
+import { basename, dirname, join } from 'node:path';
+import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-1/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { ACTOR_HEADER, actorFromHeader, createApp, mcpVaultProvider, type RelayLifecycleController } from './app.js';
+import {
+  ACTOR_HEADER,
+  actorFromHeaders,
+  createApp,
+  mcpVaultProvider,
+  type RelayLifecycleController
+} from './app.js';
 import {
   createDaemonConfig,
+  DEFAULT_KB1_HOME_DIRNAME,
   DEFAULT_VAULT_SLUG,
+  LEGACY_KB2_HOME_DIRNAME,
   LEGACY_VAULT_DIRNAME,
-  type DaemonConfig
+  type DaemonConfig,
+  type ResolveConfigOptions
 } from './config.js';
+import { migrateDirectoryCopyVerifyCleanup } from './migrations.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
 import {
   migrateLegacyVaultLayout,
@@ -45,12 +56,20 @@ export interface StartedDaemon {
   close: () => Promise<void>;
 }
 
-export async function startDaemon(): Promise<StartedDaemon> {
-  const config = createDaemonConfig();
+export type StartDaemonOptions = ResolveConfigOptions;
+
+export async function startDaemon(options: StartDaemonOptions = {}): Promise<StartedDaemon> {
+  const config = createDaemonConfig(options);
+
+  for (const warning of config.deprecationWarnings) {
+    console.warn(`[${config.serviceName}] ${warning}`);
+  }
+
+  await migrateLegacyDaemonHome(config.kb1Home);
 
   // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
   await migrateLegacyVaultLayout({
-    legacyVaultDir: join(config.kb2Home, LEGACY_VAULT_DIRNAME),
+    legacyVaultDir: join(config.kb1Home, LEGACY_VAULT_DIRNAME),
     vaultsHome: config.vaultsHome,
     targetSlug: DEFAULT_VAULT_SLUG
   });
@@ -58,7 +77,7 @@ export async function startDaemon(): Promise<StartedDaemon> {
   // Discover every vault into a live registry: listable, addressable by slug,
   // and mutable at runtime (create/rename/soft-delete) with no restart.
   await mkdir(config.vaultsHome, { recursive: true });
-  const trashHome = join(config.kb2Home, VAULT_TRASH_DIRNAME);
+  const trashHome = join(config.kb1Home, VAULT_TRASH_DIRNAME);
   const registry = await VaultRegistry.load(config.vaultsHome, trashHome, {
     historyCoalesceWindowMs: config.historyCoalesceWindowMs
   });
@@ -113,9 +132,9 @@ export async function startDaemon(): Promise<StartedDaemon> {
           settled = true;
 
           console.log(`${config.serviceName} listening on http://${info.address}:${info.port}`);
-          console.log(`KB2_HOME=${config.kb2Home}`);
+          console.log(`KB1_HOME=${config.kb1Home}`);
           if (config.webProxyTarget) {
-            console.log(`KB2_WEB_PROXY_TARGET=${config.webProxyTarget}`);
+            console.log(`KB1_WEB_PROXY_TARGET=${config.webProxyTarget}`);
           }
           console.log(`status=${config.statusFile}`);
           relay?.connect();
@@ -188,6 +207,27 @@ export async function startDaemon(): Promise<StartedDaemon> {
 
     server.once('error', fail);
   });
+}
+
+async function migrateLegacyDaemonHome(kb1Home: string): Promise<void> {
+  const legacyHome = legacyDaemonHomeFor(kb1Home);
+  if (!legacyHome) return;
+
+  await migrateDirectoryCopyVerifyCleanup({
+    source: legacyHome,
+    target: kb1Home
+  });
+}
+
+function legacyDaemonHomeFor(kb1Home: string): string | undefined {
+  const leaf = basename(kb1Home);
+  if (leaf === DEFAULT_KB1_HOME_DIRNAME) {
+    return join(dirname(kb1Home), LEGACY_KB2_HOME_DIRNAME);
+  }
+  if (leaf === 'kb1') {
+    return join(dirname(kb1Home), 'kb2');
+  }
+  return undefined;
 }
 
 function createRelayLifecycleController(
@@ -296,7 +336,9 @@ function resolveWebSocketTarget(
 function documentUpdateAttributionFromRequest(
   request: IncomingMessage
 ): { ok: true; attribution?: DocumentUpdateAttribution } | { ok: false } {
-  const parsed = actorFromHeader(firstHeaderValue(request.headers[ACTOR_HEADER]));
+  const parsed = actorFromHeaders(
+    firstHeaderValue(request.headers[ACTOR_HEADER])
+  );
   if (!parsed.ok) return { ok: false };
   return {
     ok: true,
@@ -378,7 +420,19 @@ function closeServer(server: ReturnType<typeof serve>): Promise<void> {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isDaemonCliEntrypoint(metaUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) {
+    return false;
+  }
+
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
+  } catch {
+    return metaUrl === pathToFileURL(argv1).href;
+  }
+}
+
+if (isDaemonCliEntrypoint(import.meta.url, process.argv[1])) {
   let startedDaemon: StartedDaemon | undefined;
   let shuttingDown = false;
 

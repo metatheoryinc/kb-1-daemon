@@ -8,15 +8,15 @@ const noop = () => undefined;
 const localCopy = {
   externalMerge: {
     title: 'External edit merged',
-    message: 'Merged an edit made outside KB-2.',
+    message: 'Merged an edit made outside KB-1.',
   },
   externalChange: {
-    title: 'File changed outside KB-2',
-    message: 'This file changed outside KB-2 and was reloaded from disk.',
+    title: 'File changed outside KB-1',
+    message: 'This file changed outside KB-1 and was reloaded from disk.',
   },
   persistFailure: {
     title: 'Changes are NOT saving to disk.',
-    message: 'Keep this tab open. KB-2 will keep retrying until saving recovers.',
+    message: 'Keep this tab open. KB-1 will keep retrying until saving recovers.',
   },
   docDeleted: {
     title: 'Document deleted',

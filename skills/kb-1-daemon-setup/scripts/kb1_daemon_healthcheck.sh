@@ -1,15 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${KB2_PORT:-7382}"
-HOST="${KB2_HOST:-127.0.0.1}"
+PORT="${KB1_PORT:-7382}"
+HOST="${KB1_HOST:-127.0.0.1}"
 BASE="http://$HOST:$PORT"
 VAULT_ID="${KB1_VAULT_ID:-}"
 FLUSH_VAULT="${KB1_FLUSH_VAULT:-0}"
-LINUX_SERVICE_NAME="${KB1_SERVICE_NAME:-kb2d.service}"
-MACOS_LABEL="${KB1_LAUNCHD_LABEL:-dev.metatheory.kb1.kb2d}"
 
 say() { printf '\n==> %s\n' "$*"; }
+
+resolve_linux_service_name_default() {
+  if [ -n "${KB1_SERVICE_NAME:-}" ]; then
+    printf '%s\n' "$KB1_SERVICE_NAME"
+    return 0
+  fi
+
+  printf '%s\n' "kb1d.service"
+}
+
+resolve_macos_label_default() {
+  if [ -n "${KB1_LAUNCHD_LABEL:-}" ]; then
+    printf '%s\n' "$KB1_LAUNCHD_LABEL"
+    return 0
+  fi
+
+  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
+    printf '%s\n' "dev.metatheory.kb1.kb1d"
+    return 0
+  fi
+
+  printf '%s\n' "dev.metatheory.kb1.kb1d"
+}
+
+LINUX_SERVICE_NAME="$(resolve_linux_service_name_default)"
+MACOS_LABEL="$(resolve_macos_label_default)"
 
 close_mcp_session() {
   local session_id="$1"
@@ -181,11 +205,6 @@ if ! close_mcp_session "$session_id"; then
 fi
 
 rm -f "$probe_out" "$probe_headers"
-
-if command -v hermes >/dev/null 2>&1; then
-  say "Hermes MCP test"
-  hermes mcp test kb1 || true
-fi
 
 if command -v tailscale >/dev/null 2>&1; then
   say "Tailscale status"

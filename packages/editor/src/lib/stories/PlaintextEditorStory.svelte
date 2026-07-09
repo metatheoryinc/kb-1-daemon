@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PlaintextEditor } from '@kb-2/editor';
+  import { PlaintextEditor } from '@kb-1/editor';
   import * as Y from 'yjs';
 
   const doc = new Y.Doc();
@@ -7,7 +7,7 @@
   text.insert(
     0,
     [
-      '# KB-2 Editor Fixture',
+      '# KB-1 Editor Fixture',
       '',
       'This **Markdown** editor renders _live preview_ decorations while preserving source editing.',
       '',

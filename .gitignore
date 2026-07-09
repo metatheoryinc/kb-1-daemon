@@ -5,14 +5,19 @@ build/
 .svelte-kit/
 coverage/
 .nx/
-.kb2-docker/
-.kb2-dev/
+.kb1-docker/
+.kb1-dev/
+
+# Legacy KB-2 local state directories can still appear during in-place upgrades.
+.kb1-docker/
+.kb1-dev/
 .DS_Store
-.fleet/
-fleet-claude-inbox-*.jsonl
-.claude/
 docs/scratch/
 .fallow/
+
+# Root .env is tracked intentionally as the Nx guard; keep local overrides out.
+.env.local
+.env.*.local
 
 # Storybook debug output
 debug-storybook.log

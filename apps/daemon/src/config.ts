@@ -1,17 +1,19 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-export const SERVICE_NAME = 'kb2d';
+export const SERVICE_NAME = 'kb1d';
 export const DEFAULT_PORT = 7382;
 export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_ACTOR_DEFAULT = 'user';
+const DEFAULT_ACTOR_DEFAULT = 'user';
 export const DEFAULT_HISTORY_COALESCE_WINDOW_MS = 5 * 60 * 1000;
+export const DEFAULT_KB1_HOME_DIRNAME = '.kb1';
+export const LEGACY_KB2_HOME_DIRNAME = '.kb2';
 
 export type ActorDefault = 'user' | 'unknown';
 
 export const DEFAULT_VAULT_SLUG = 'demo-vault';
 export const LEGACY_VAULT_DIRNAME = 'demo-vault';
-export const VAULTS_DIRNAME = 'vaults';
+const VAULTS_DIRNAME = 'vaults';
 
 export interface DaemonConfig {
   serviceName: typeof SERVICE_NAME;
@@ -21,7 +23,7 @@ export interface DaemonConfig {
   relay?: DaemonRelayConfig;
   actorDefault: ActorDefault;
   historyCoalesceWindowMs: number;
-  kb2Home: string;
+  kb1Home: string;
   daemonHome: string;
   /** Directory that holds every vault: `<home>/vaults/<slug>/`. */
   vaultsHome: string;
@@ -34,9 +36,10 @@ export interface DaemonConfig {
   statusFile: string;
   startedAt: string;
   pid: number;
+  deprecationWarnings: string[];
 }
 
-export interface DaemonRelayConfig {
+interface DaemonRelayConfig {
   relayUrl: string;
   token: string;
   daemonVersion?: string;
@@ -50,20 +53,20 @@ export interface ResolveConfigOptions {
   pid?: number;
 }
 
-export function resolveKb2Home(
+export function resolveKb1Home(
   env: NodeJS.ProcessEnv = process.env,
   homeDir = homedir()
 ): string {
-  const configuredHome = env.KB2_HOME?.trim();
-  const rawHome = configuredHome && configuredHome.length > 0
-    ? expandHome(configuredHome, homeDir)
-    : join(homeDir, '.kb2');
+  const configuredHome = resolveEnvValue(env, 'HOME');
+  if (configuredHome) {
+    return resolve(expandHome(configuredHome, homeDir));
+  }
 
-  return resolve(rawHome);
+  return resolve(join(homeDir, DEFAULT_KB1_HOME_DIRNAME));
 }
 
 export function resolvePort(env: NodeJS.ProcessEnv = process.env): number {
-  const configuredPort = env.KB2_PORT?.trim();
+  const configuredPort = resolveEnvValue(env, 'PORT');
 
   if (!configuredPort) {
     return DEFAULT_PORT;
@@ -71,39 +74,42 @@ export function resolvePort(env: NodeJS.ProcessEnv = process.env): number {
 
   const port = Number(configuredPort);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`KB2_PORT must be an integer between 1 and 65535. Received: ${configuredPort}`);
+    throw new Error(`KB1_PORT must be an integer between 1 and 65535. Received: ${configuredPort}`);
   }
 
   return port;
 }
 
 function resolveHost(env: NodeJS.ProcessEnv = process.env): string {
-  const configuredHost = env.KB2_HOST?.trim();
+  const configuredHost = resolveEnvValue(env, 'HOST');
   return configuredHost && configuredHost.length > 0 ? configuredHost : DEFAULT_HOST;
 }
 
 export function resolveWebProxyTarget(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const configuredTarget = env.KB2_WEB_PROXY_TARGET?.trim();
+  const configuredTarget = resolveEnvValue(env, 'WEB_PROXY_TARGET');
   return configuredTarget && configuredTarget.length > 0 ? configuredTarget : undefined;
 }
 
 export function resolveRelayConfig(env: NodeJS.ProcessEnv = process.env): DaemonRelayConfig | undefined {
-  const relayUrl = env.KB2_RELAY_URL?.trim();
-  const token = env.KB2_RELAY_TOKEN?.trim();
+  const relayUrl = resolveEnvValue(env, 'RELAY_URL');
+  const token = resolveEnvValue(env, 'RELAY_TOKEN');
 
   if (!relayUrl && !token) {
     return undefined;
   }
 
   if (!relayUrl || !token) {
-    throw new Error('KB2_RELAY_URL and KB2_RELAY_TOKEN must be supplied together.');
+    throw new Error('KB1_RELAY_URL and KB1_RELAY_TOKEN must be supplied together.');
   }
+
+  const daemonVersion = resolveEnvValue(env, 'DAEMON_VERSION');
+  const daemonBuild = resolveEnvValue(env, 'DAEMON_BUILD');
 
   return {
     relayUrl: new URL(relayUrl).href,
     token,
-    ...(optionalEnv(env.KB2_DAEMON_VERSION) ? { daemonVersion: optionalEnv(env.KB2_DAEMON_VERSION) } : {}),
-    ...(optionalEnv(env.KB2_DAEMON_BUILD) ? { daemonBuild: optionalEnv(env.KB2_DAEMON_BUILD) } : {})
+    ...(daemonVersion ? { daemonVersion } : {}),
+    ...(daemonBuild ? { daemonBuild } : {})
   };
 }
 
@@ -113,7 +119,7 @@ function optionalEnv(value: string | undefined): string | undefined {
 }
 
 export function resolveActorDefault(env: NodeJS.ProcessEnv = process.env): ActorDefault {
-  const configuredDefault = env.KB2_ACTOR_DEFAULT?.trim();
+  const configuredDefault = resolveEnvValue(env, 'ACTOR_DEFAULT');
 
   if (!configuredDefault) {
     return DEFAULT_ACTOR_DEFAULT;
@@ -123,11 +129,11 @@ export function resolveActorDefault(env: NodeJS.ProcessEnv = process.env): Actor
     return configuredDefault;
   }
 
-  throw new Error(`KB2_ACTOR_DEFAULT must be "user" or "unknown". Received: ${configuredDefault}`);
+  throw new Error(`KB1_ACTOR_DEFAULT must be "user" or "unknown". Received: ${configuredDefault}`);
 }
 
 export function resolveHistoryCoalesceWindowMs(env: NodeJS.ProcessEnv = process.env): number {
-  const configuredWindow = env.KB2_HISTORY_COALESCE_WINDOW_MS?.trim();
+  const configuredWindow = resolveEnvValue(env, 'HISTORY_COALESCE_WINDOW_MS');
 
   if (!configuredWindow) {
     return DEFAULT_HISTORY_COALESCE_WINDOW_MS;
@@ -135,18 +141,25 @@ export function resolveHistoryCoalesceWindowMs(env: NodeJS.ProcessEnv = process.
 
   const windowMs = Number(configuredWindow);
   if (!Number.isInteger(windowMs) || windowMs < 0) {
-    throw new Error(`KB2_HISTORY_COALESCE_WINDOW_MS must be a non-negative integer. Received: ${configuredWindow}`);
+    throw new Error(`KB1_HISTORY_COALESCE_WINDOW_MS must be a non-negative integer. Received: ${configuredWindow}`);
   }
 
   return windowMs;
 }
 
+export function collectConfigDeprecationWarnings(
+  _env: NodeJS.ProcessEnv = process.env,
+  _homeDir = homedir()
+): string[] {
+  return [];
+}
+
 export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonConfig {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
-  const kb2Home = resolveKb2Home(env, homeDir);
-  const daemonHome = join(kb2Home, 'daemon');
-  const vaultsHome = join(kb2Home, VAULTS_DIRNAME);
+  const kb1Home = resolveKb1Home(env, homeDir);
+  const daemonHome = join(kb1Home, 'daemon');
+  const vaultsHome = join(kb1Home, VAULTS_DIRNAME);
   const vaultRoot = join(vaultsHome, DEFAULT_VAULT_SLUG);
 
   return {
@@ -157,14 +170,19 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     relay: resolveRelayConfig(env),
     actorDefault: resolveActorDefault(env),
     historyCoalesceWindowMs: resolveHistoryCoalesceWindowMs(env),
-    kb2Home,
+    kb1Home,
     daemonHome,
     vaultsHome,
     vaultRoot,
     statusFile: join(daemonHome, 'status.json'),
     startedAt: (options.now ?? new Date()).toISOString(),
-    pid: options.pid ?? process.pid
+    pid: options.pid ?? process.pid,
+    deprecationWarnings: collectConfigDeprecationWarnings(env, homeDir)
   };
+}
+
+function resolveEnvValue(env: NodeJS.ProcessEnv, suffix: string): string | undefined {
+  return optionalEnv(env[`KB1_${suffix}`]);
 }
 
 function expandHome(input: string, homeDir: string): string {

@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/web",
+  "name": "@kb-1/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,15 +10,19 @@
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "@codemirror/view": "6.41.1",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/inter-tight": "5.2.7",
     "@fontsource/jetbrains-mono": "5.2.8",
     "@fontsource/source-serif-4": "5.2.9",
-    "@kb-2/doc-session": "workspace:*",
-    "@kb-2/editor": "workspace:*",
-    "@kb-2/ui": "workspace:*",
+    "@kb-1/doc-session": "workspace:*",
+    "@kb-1/editor": "workspace:*",
+    "@kb-1/ui": "workspace:*",
+    "@tanstack/query-async-storage-persister": "^5.101.2",
+    "@tanstack/query-persist-client-core": "^5.101.2",
     "@tanstack/svelte-query": "^6.1.18",
     "lib0": "0.2.117",
+    "localforage": "^1.10.0",
     "svelte": "catalog:",
     "y-protocols": "1.0.7",
     "yjs": "13.6.31"

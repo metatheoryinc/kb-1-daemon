@@ -34,7 +34,7 @@ gates. A test suite is a first-class deliverable, not an accompaniment.
 
 ## Good Examples
 
-- `KB2_HOME=$(mktemp -d)` per suite; chmod-based persist-failure repros.
+- `KB1_HOME=$(mktemp -d)` per suite; chmod-based persist-failure repros.
 - The splice property test: randomized docs/edits reproduce expected
   content exactly.
 - Negative-testing a gate (raise threshold → build fails → revert) to prove

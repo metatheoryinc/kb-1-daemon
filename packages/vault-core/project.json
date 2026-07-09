@@ -7,19 +7,19 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/vault-core build"
+        "command": "pnpm --filter @kb-1/vault-core build"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/vault-core test"
+        "command": "pnpm --filter @kb-1/vault-core test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/vault-core typecheck"
+        "command": "pnpm --filter @kb-1/vault-core typecheck"
       }
     }
   }

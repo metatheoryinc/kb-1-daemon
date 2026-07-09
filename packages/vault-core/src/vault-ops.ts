@@ -20,14 +20,12 @@ import {
 import { isNodeError, statOrNull } from "./fs.js";
 import {
   InvalidPathError,
+  isInternalVaultPath,
   relativeDescendantPath,
   resolveVaultPath,
   validateOptionalVaultPath,
   validateVaultPath,
 } from "./path.js";
-
-export { emitVaultAudit, InvalidPathError, validateVaultPath };
-export type { AuditEntry, VaultActor };
 
 export type VaultErrorCode =
   | "invalid_path"
@@ -144,7 +142,7 @@ export type FolderMetadataMap = Record<string, FolderMetadata>;
 
 const DEFAULT_DEPTH = 10;
 const DEFAULT_ENTRY_CAP = 5000;
-const FOLDER_METADATA_RELATIVE_PATH = path.posix.join(".kb2", "folders.yml");
+const FOLDER_METADATA_RELATIVE_PATH = path.posix.join(".kb1", "folders.yml");
 const folderMetadataMutationQueues = new Map<string, Promise<void>>();
 
 function ignoreMutationQueueResult(): void {
@@ -202,15 +200,11 @@ function folderMetadataPath(root: string): string {
 
 function trashRelativePath(originalPath: string): string {
   return path.posix.join(
-    ".kb2",
+    ".kb1",
     "trash",
     new Date().toISOString(),
     originalPath,
   );
-}
-
-function isHiddenMetadataPath(relPath: string): boolean {
-  return relPath === ".kb2" || relPath.startsWith(".kb2/");
 }
 
 const TEXT_ARTIFACT_EXTENSIONS: Record<string, { contentType: string; preview: ArtifactPreview }> = {
@@ -326,7 +320,7 @@ async function walkEntries(
   for (const dirent of dirents) {
     const rel =
       relDir.length === 0 ? dirent.name : path.posix.join(relDir, dirent.name);
-    if (isHiddenMetadataPath(rel)) continue;
+    if (isInternalVaultPath(rel)) continue;
     const abs = vaultPath(root, rel);
     const s = await stat(abs);
     if (dirent.isDirectory()) {

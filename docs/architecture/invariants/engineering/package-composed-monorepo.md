@@ -5,9 +5,9 @@
 Apps are deployment surfaces. Packages own reusable product and runtime
 concerns.
 
-KB-2 should be composed from small, focused workspace packages with meaningful
-test coverage, then assembled by apps such as the daemon, local UI, and future
-cloud workers.
+KB-1 is currently composed from two shipped local apps and eight reusable
+workspace packages with meaningful test coverage. Apps such as the daemon and
+local UI assemble package behavior into runtime surfaces.
 
 ## This Means
 
@@ -22,12 +22,33 @@ cloud workers.
 - `packages/tunnel-protocol`: HTTP tunnel frames, stream IDs, errors,
   cancellation, and versioning.
 - `packages/vault-core`: filesystem-backed vault operations.
-- `packages/vault-api`: HTTP routes over `vault-core`.
+- `packages/vault-service`: service boundary over `vault-core` used by REST and
+  MCP.
 - `packages/local-mcp`: MCP tools over the same vault service boundary.
 - `apps/daemon`: process shell that wires config, HTTP server, local UI, MCP,
   and vault packages together.
-- future `apps/relay-worker`: Cloudflare runtime shell that composes tunnel
-  packages with auth and routing.
+
+## Current Layout
+
+Shipped local apps:
+
+- `apps/daemon`: `kb1d`, HTTP route layer, MCP mounting, local UI serving, and
+  runtime wiring
+- `apps/web`: local web UI
+
+Reusable packages:
+
+- `packages/doc-session`: Yjs document sessions backed by Markdown files
+- `packages/editor`: plaintext editor behavior
+- `packages/local-mcp`: MCP tools over the vault service boundary
+- `packages/tunnel-client`: daemon-side relay/tunnel client
+- `packages/tunnel-protocol`: relay/tunnel frame protocol types
+- `packages/ui`: shared UI components and Storybook
+- `packages/vault-core`: filesystem-backed vault operations and history
+- `packages/vault-service`: service boundary used by daemon routes and MCP
+
+There is no `packages/vault-api`. HTTP routes currently live in `apps/daemon`
+and compose `packages/vault-service`.
 
 ## Violations
 

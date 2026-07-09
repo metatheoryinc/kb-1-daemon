@@ -13,7 +13,7 @@ export const PENDING_UPLOAD_SCHEME = 'pending-upload://';
 export const UPLOAD_FAILED_SCHEME = 'upload-failed://';
 export const PLAINTEXT_IMAGE_SWAP_ORIGIN = 'plaintext-image-swap';
 
-export interface PlaintextImageUploadOptions {
+interface PlaintextImageUploadOptions {
   uploadFile: (file: File) => Promise<{ path: string }>;
   ytext: Y.Text;
   ydoc: Y.Doc;

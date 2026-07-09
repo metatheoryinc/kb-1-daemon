@@ -1,27 +1,27 @@
 {
-  "name": "@kb-2/daemon",
+  "name": "@kb-1/daemon",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "kb2d": "./dist/main.js"
+    "kb1d": "./dist/main.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/bundle-starter-kit.mjs",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/main.js', 0o755)\" && node scripts/bundle-starter-kit.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "2.0.4",
-    "@kb-2/doc-session": "workspace:*",
-    "@kb-2/local-mcp": "workspace:*",
-    "@kb-2/tunnel-client": "workspace:*",
-    "@kb-2/vault-core": "workspace:*",
-    "@kb-2/vault-service": "workspace:*",
+    "@kb-1/doc-session": "workspace:*",
+    "@kb-1/local-mcp": "workspace:*",
+    "@kb-1/tunnel-client": "workspace:*",
+    "@kb-1/vault-core": "workspace:*",
+    "@kb-1/vault-service": "workspace:*",
     "github-slugger": "2.0.0",
     "hono": "4.12.25",
     "ws": "8.21.0"

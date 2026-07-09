@@ -1,5 +1,5 @@
 {
-  "name": "@kb-2/tunnel-client",
+  "name": "@kb-1/tunnel-client",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@kb-2/tunnel-protocol": "workspace:*",
+    "@kb-1/tunnel-protocol": "workspace:*",
     "ws": "8.21.0"
   },
   "devDependencies": {

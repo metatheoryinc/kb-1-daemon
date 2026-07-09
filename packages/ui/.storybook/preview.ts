@@ -14,9 +14,9 @@ const preview: Preview = {
       }
     },
     backgrounds: {
-      default: 'kb2-bg',
+      default: 'kb1-bg',
       values: [
-        { name: 'kb2-bg', value: '#f1f2f4' },
+        { name: 'kb1-bg', value: '#f1f2f4' },
         { name: 'panel', value: '#ffffff' },
         { name: 'dark', value: '#0e1014' }
       ]

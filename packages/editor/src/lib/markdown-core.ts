@@ -1,6 +1,6 @@
 const MENTION_URL_SCHEME = 'mention:' as const;
 
-export interface MentionParts {
+interface MentionParts {
   email: string;
 }
 
@@ -21,6 +21,11 @@ export function parseMentionUrl(href: string): MentionParts | null {
   const domain = decoded.slice(atIdx + 1);
   if (local.length === 0 || domain.length === 0) return null;
   return { email: decoded };
+}
+
+export function formatMentionUrl(email: string): string {
+  const encoded = encodeURIComponent(email).replace(/%40/g, '@');
+  return `${MENTION_URL_SCHEME}${encoded}`;
 }
 
 export interface OrgPerson {

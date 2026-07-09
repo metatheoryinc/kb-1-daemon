@@ -7,19 +7,19 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/local-mcp build"
+        "command": "pnpm --filter @kb-1/local-mcp build"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/local-mcp test"
+        "command": "pnpm --filter @kb-1/local-mcp test"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @kb-2/local-mcp typecheck"
+        "command": "pnpm --filter @kb-1/local-mcp typecheck"
       }
     }
   }

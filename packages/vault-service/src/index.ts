@@ -4,7 +4,7 @@ import {
   type DocumentSessionManager,
   type DocumentUpdateAttribution,
   type SessionSpliceReject
-} from '@kb-2/doc-session';
+} from '@kb-1/doc-session';
 import {
   InvalidPathError,
   appendContent,
@@ -46,7 +46,7 @@ import {
   type VaultErrorCode,
   type VaultResult,
   type WriteRawFileValue
-} from '@kb-2/vault-core';
+} from '@kb-1/vault-core';
 
 export type { AuditEntry, VaultActor };
 export type { ArtifactInfo };
@@ -157,7 +157,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       try {
         handler(event);
       } catch (error) {
-        console.warn('KB-2 vault change event handler failed.', error);
+        console.warn('KB-1 vault change event handler failed.', error);
       }
     }
   };
@@ -196,7 +196,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         ts: new Date().toISOString()
       });
     } catch (error) {
-      console.warn('KB-2 vault tree watch failed.', error);
+      console.warn('KB-1 vault tree watch failed.', error);
     } finally {
       treeWatchInFlight = false;
     }
@@ -241,7 +241,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       !isServiceWriteAttribution(event.attribution)
     ) {
       void recordPersistedSessionHistory(event).catch((error: unknown) => {
-        console.warn('KB-2 failed to record file history for persisted document session.', error);
+        console.warn('KB-1 failed to record file history for persisted document session.', error);
       });
     }
   });
@@ -271,7 +271,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     try {
       await recordHistoryFromAudit(audit, content);
     } catch (error: unknown) {
-      console.warn('KB-2 failed to record file history for service write.', error);
+      console.warn('KB-1 failed to record file history for service write.', error);
     }
   };
   const flushPendingHistory = async (paths?: string[]): Promise<void> => {
@@ -281,7 +281,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         throw new Error(`Failed to flush file history: ${result.message}`);
       }
     } catch (error: unknown) {
-      console.warn('KB-2 failed to flush file history.', error);
+      console.warn('KB-1 failed to flush file history.', error);
     }
   };
   const recordPersistedSessionHistory = async (event: DocumentSessionEvent): Promise<void> => {
@@ -309,7 +309,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
       }
     } catch (error: unknown) {
-      console.warn('KB-2 failed to carry file history after note move.', error);
+      console.warn('KB-1 failed to carry file history after note move.', error);
     }
   };
   const carryHistoryAfterFolderMove = async (moved: {
@@ -327,7 +327,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         throw new Error(`Failed to move folder history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
       }
     } catch (error: unknown) {
-      console.warn('KB-2 failed to carry file history after folder move.', error);
+      console.warn('KB-1 failed to carry file history after folder move.', error);
     }
   };
 

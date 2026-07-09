@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { TUNNEL_FEATURES, encodeTunnelMessage } from '@kb-2/tunnel-protocol';
+import { TUNNEL_FEATURES, encodeTunnelMessage } from '@kb-1/tunnel-protocol';
 
 class MockWebSocket extends EventEmitter {
   static readonly OPEN = 1;
