@@ -277,6 +277,7 @@
     align-items: center;
     gap: 8px;
     width: 100%;
+    box-sizing: border-box;
     padding: 5px 6px;
     border-radius: 6px;
     background: transparent;

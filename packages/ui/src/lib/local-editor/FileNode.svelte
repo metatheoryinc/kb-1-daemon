@@ -152,6 +152,7 @@
     align-items: center;
     gap: 7px;
     width: 100%;
+    box-sizing: border-box;
     min-height: 28px;
     border-radius: 6px;
     background: transparent;
