@@ -31,6 +31,7 @@
     plaintextLinkHover,
   } from './plaintext-link-affordance';
   import { plaintextMentionKeymap } from './plaintext-mention-keymap';
+  import { plaintextMentionAutocomplete } from './plaintext-mention-autocomplete.svelte';
   import { plaintextListKeymap } from './plaintext-list-keymap';
   import { plaintextLinkPaste } from './plaintext-link-paste';
   import { plaintextImageUpload } from './plaintext-image-upload';
@@ -208,6 +209,10 @@
      *  removed), the editor dispatches a `mentionDirectoryChangedEffect`
      *  so the decoration field re-resolves without needing a doc edit. */
     orgPeople?: readonly OrgPerson[];
+    /** Enables cloud people search / insertion for `@` mentions. Off by
+     *  default so daemon contexts can render mention chips from markdown
+     *  without exposing cloud org-directory picker semantics. */
+    enableMentionAutocomplete?: boolean;
     /** Wikilink click handler (Slice 6). Fires with the URL-encoded
      *  target so the host can decode + resolve + navigate. Mirrors
      *  MarkdownEditor's prop of the same name — both editors feed the
@@ -244,6 +249,7 @@
     attachmentSrc,
     livePaths = [],
     orgPeople = [],
+    enableMentionAutocomplete = false,
     onWikilinkClick,
     uploadImage,
     onUploadStart,
@@ -473,6 +479,9 @@
       // handler ran. Caret INSIDE the mention falls through to default
       // delete (typo-fix carve-out for the display name).
       plaintextMentionKeymap(),
+      ...(enableMentionAutocomplete
+        ? [plaintextMentionAutocomplete({ getOrgPeople: stableGetOrgPeople })]
+        : []),
       // Tab / Shift-Tab indent / outdent for list items (Apple lane
       // Feature 3). Gates on lezer `ListItem` ancestry; Tab outside
       // any list falls through (returns false) so browser focus

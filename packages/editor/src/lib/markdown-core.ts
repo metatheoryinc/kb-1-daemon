@@ -23,6 +23,11 @@ export function parseMentionUrl(href: string): MentionParts | null {
   return { email: decoded };
 }
 
+export function formatMentionUrl(email: string): string {
+  const encoded = encodeURIComponent(email).replace(/%40/g, '@');
+  return `${MENTION_URL_SCHEME}${encoded}`;
+}
+
 export interface OrgPerson {
   id: string;
   email: string;
