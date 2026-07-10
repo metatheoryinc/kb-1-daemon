@@ -6,12 +6,41 @@ where the user's filesystem is the durable source of truth.
 See `VISION.md` and `docs/architecture/` for the current product and
 architecture docs.
 
-## Quick Start
+## Prerequisites
+
+- Node.js 24. The CI workflow uses Node 24, and this is the supported
+  development/runtime version for source checkouts.
+- Corepack, included with current Node.js releases.
+- Git.
+
+Enable the repo-declared package manager before installing dependencies:
 
 ```bash
+corepack enable
+corepack install
 pnpm install
-pnpm check   # typecheck + tests + builds
-pnpm dev     # one command: web UI + API behind one daemon port
+```
+
+The workspace uses the pnpm version declared in `package.json`; do not install
+dependencies with npm or Yarn.
+
+Command examples below use a POSIX shell. On Windows PowerShell, set
+environment variables with `$env:NAME="value"` before the command, for example
+`$env:KB1_PORT="17382"; pnpm dev`.
+
+## Quick Start From Source
+
+Run the local daemon and web UI from a checkout:
+
+```bash
+pnpm dev
+```
+
+The default run stores daemon state in `~/.kb1`. For a disposable first run,
+use an isolated home:
+
+```bash
+KB1_HOME=$(mktemp -d) pnpm dev
 ```
 
 | Surface | URL | Notes |
@@ -20,15 +49,72 @@ pnpm dev     # one command: web UI + API behind one daemon port
 | MCP | http://127.0.0.1:7382/mcp | Streamable HTTP MCP endpoint for local agents |
 | Storybook | http://localhost:6006 | `pnpm storybook`; pass `-p <port>` if 6006 is taken |
 
+After startup, verify the daemon is healthy:
+
+```bash
+curl http://127.0.0.1:7382/api/health
+```
+
+Then open http://127.0.0.1:7382 in a browser. A fresh daemon home creates a
+starter `demo-vault` so the UI has content immediately.
+
 Port/env overrides: `KB1_PORT` (daemon), `KB1_HOST` (bind host),
-`KB1_WEB_PROXY_TARGET` (optional dev Vite proxy target), and `KB1_HOME`
-(daemon state directory, defaults to `~/.kb1`). Relay/tunnel runs from
-`KB1_RELAY_URL` plus `KB1_RELAY_TOKEN`; optional daemon identity fields are
-`KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD`. `KB1_ACTOR_DEFAULT` controls
-default local actor attribution (`user` or `unknown`), and
-`KB1_HISTORY_COALESCE_WINDOW_MS` controls note-history commit coalescing.
-Legacy `~/.kb2` homes migrate to `~/.kb1` on first boot; runtime config is
-KB1-only.
+`KB1_WEB_PORT` (Vite dev server, default `5173`), `KB1_WEB_PROXY_TARGET`
+(optional dev Vite proxy target), and `KB1_HOME` (daemon state directory,
+defaults to `~/.kb1`). Relay/tunnel runs from `KB1_RELAY_URL` plus
+`KB1_RELAY_TOKEN`; optional daemon identity fields are `KB1_DAEMON_VERSION` and
+`KB1_DAEMON_BUILD`. `KB1_ACTOR_DEFAULT` controls default local actor
+attribution (`user` or `unknown`), and `KB1_HISTORY_COALESCE_WINDOW_MS`
+controls note-history commit coalescing. Legacy `~/.kb2` homes migrate to
+`~/.kb1` on first boot; runtime config is KB1-only.
+
+## Docker
+
+Docker is available as a secondary local run path:
+
+```bash
+pnpm docker:up
+```
+
+The container serves KB-1 at http://127.0.0.1:17382 and persists data in
+`./.kb1-docker` by default. Stop it with:
+
+```bash
+pnpm docker:down
+```
+
+Docker path overrides:
+
+- `KB1_DOCKER_HOST_HOME` changes the host directory mounted into the container.
+- `KB1_DOCKER_CONTAINER_HOME` changes the in-container `KB1_HOME` path.
+
+Use `node scripts/docker-up.mjs --print-config` to inspect the compose
+configuration before starting it.
+
+## Common Setup Issues
+
+- `pnpm: command not found`: run `corepack enable` and `corepack install` from
+  this repository, then retry `pnpm install`.
+- Unexpected install or build errors: confirm `node --version` reports Node 24.
+- Port `7382` is already in use: run with another daemon port, for example
+  `KB1_PORT=17382 pnpm dev`.
+- Vite port `5173` is already in use: run with another web dev port, for
+  example `KB1_WEB_PORT=5174 pnpm dev`.
+- You want a clean trial state without touching existing data: run
+  `KB1_HOME=$(mktemp -d) pnpm dev`.
+- Docker starts but the browser cannot connect: open
+  http://127.0.0.1:17382, not the container-internal port `7382`.
+
+## Contributor Checks
+
+Before opening a pull request, run the full workspace gate:
+
+```bash
+pnpm check
+```
+
+`pnpm check` runs the workspace typecheck, tests, and builds. It is useful for
+contributors, but it is not required just to try the app locally.
 
 ## Relay / Tunnel
 
