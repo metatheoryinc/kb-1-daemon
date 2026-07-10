@@ -1,10 +1,15 @@
 # KB-1 Local
 
-The open-source local half of KB-1: a local-first, agent-ready knowledge base
-where the user's filesystem is the durable source of truth.
+KB-1 Local is an open-source, local-first knowledge base built for people and
+agents to work in the same vault. Your Markdown files stay on your machine and
+remain the durable source of truth.
 
 See `VISION.md` and `docs/architecture/` for the current product and
 architecture docs.
+
+> [!NOTE]
+> KB-1 Local is under active development. Until a stable release is tagged,
+> commands and interfaces may change between revisions.
 
 ## Product Modes
 
@@ -22,12 +27,54 @@ architecture docs.
 Cloud is additive for local users. A Cloud login is not required to run the
 daemon, use its local web app, or connect an agent to its local MCP endpoint.
 
-## Quick Start
+## Security Model
+
+KB-1 Local is a trusted local service, not a multi-user server. It does not add
+authentication or per-user authorization to its local HTTP, WebSocket, or MCP
+surfaces. Keep it bound to the default loopback address (`127.0.0.1`) unless
+you intentionally place it behind a private, access-controlled network path.
+Do not expose the daemon port directly to the public internet.
+
+Vaults live under `~/.kb1/vaults/` by default. Back up `~/.kb1/` before
+migrations or major upgrades. See [Security](SECURITY.md) for reporting and
+deployment guidance.
+
+## Prerequisites
+
+- Node.js 20.19.x, 22.12+, or 24+. CI uses Node 24.
+- Corepack, included with current Node.js releases.
+- Git.
+
+Enable the repo-declared package manager before installing dependencies:
 
 ```bash
+git clone https://github.com/metatheoryinc/kb-1-daemon.git
+cd kb-1-daemon
+corepack enable
+corepack install
 pnpm install
-pnpm check   # typecheck + tests + builds
-pnpm dev     # one command: web UI + API behind one daemon port
+```
+
+The workspace uses the pnpm version declared in `package.json`; do not install
+dependencies with npm or Yarn.
+
+Command examples below use a POSIX shell. On Windows PowerShell, set
+environment variables with `$env:NAME="value"` before the command, for example
+`$env:KB1_PORT="17382"; pnpm dev`.
+
+## Quick Start From Source
+
+Run the local daemon and web UI from a checkout:
+
+```bash
+pnpm dev
+```
+
+The default run stores daemon state in `~/.kb1`. For a disposable first run,
+use an isolated home:
+
+```bash
+KB1_HOME=$(mktemp -d) pnpm dev
 ```
 
 | Surface | URL | Notes |
@@ -36,19 +83,91 @@ pnpm dev     # one command: web UI + API behind one daemon port
 | MCP | http://127.0.0.1:7382/mcp | Streamable HTTP MCP endpoint for local agents |
 | Storybook | http://localhost:6006 | `pnpm storybook`; pass `-p <port>` if 6006 is taken |
 
+After startup, verify the daemon is healthy:
+
+```bash
+curl http://127.0.0.1:7382/api/health
+```
+
+Then open http://127.0.0.1:7382 in a browser. A fresh daemon home creates a
+starter `demo-vault` so the UI has content immediately.
+
+## Connect an Agent
+
+Give an MCP-compatible agent the local endpoint:
+
+```text
+http://127.0.0.1:7382/mcp
+```
+
+For Claude Code:
+
+```bash
+claude mcp add kb-1 --transport http http://127.0.0.1:7382/mcp
+```
+
+Ask the agent to call `list_vaults` first, then pass one returned `id` as the
+required `vaultId` for its other KB-1 tools.
+
 Port/env overrides: `KB1_PORT` (daemon), `KB1_HOST` (bind host),
-`KB1_WEB_PROXY_TARGET` (optional dev Vite proxy target), and `KB1_HOME`
-(daemon state directory, defaults to `~/.kb1`). Relay/tunnel runs from
-`KB1_RELAY_URL` plus `KB1_RELAY_TOKEN`; optional daemon identity fields are
-`KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD`. `KB1_ACTOR_DEFAULT` controls
-default local actor attribution (`user` or `unknown`), and
-`KB1_HISTORY_COALESCE_WINDOW_MS` controls note-history commit coalescing.
+`KB1_WEB_PORT` (Vite dev server, default `5173`), `KB1_WEB_PROXY_TARGET`
+(optional dev Vite proxy target), and `KB1_HOME` (daemon state directory,
+defaults to `~/.kb1`). Relay/tunnel runs from `KB1_RELAY_URL` plus
+`KB1_RELAY_TOKEN`; optional daemon identity fields are `KB1_DAEMON_VERSION` and
+`KB1_DAEMON_BUILD`. `KB1_ACTOR_DEFAULT` controls default local actor
+attribution (`user` or `unknown`), and `KB1_HISTORY_COALESCE_WINDOW_MS`
+controls note-history commit coalescing.
+
 On first boot, legacy `~/.kb2` homes are copied into `~/.kb1`. Before removing
 the source, the daemon checks that every regular source file exists at the same
 relative path in the target with the same byte length. Symlinks and empty
 directories are not checked, and a pre-existing target may contain additional
 files. Make a separate backup first if you need content-level verification or a
 rollback copy. Runtime config is KB1-only.
+
+## Docker
+
+Docker is a secondary run path. Because KB-1 Local does not provide local
+authentication, publish its container port to loopback only:
+
+```bash
+docker build -f apps/daemon/Dockerfile -t kb-1-daemon .
+docker run --rm \
+  -p 127.0.0.1:7382:7382 \
+  -v kb1-home:/data/kb1 \
+  kb-1-daemon
+```
+
+The app is then available at http://127.0.0.1:7382. Do not replace the
+loopback host with `0.0.0.0` unless you have added an access-controlled private
+network boundary. More container and migration details are in
+[Packaging Paths](docs/packaging/daemon.md).
+
+## Common Setup Issues
+
+- `pnpm: command not found`: run `corepack enable` and `corepack install` from
+  this repository, then retry `pnpm install`.
+- Unexpected install or build errors: confirm `node --version` reports
+  20.19.x, 22.12+, or 24+.
+- Port `7382` is already in use: run with another daemon port, for example
+  `KB1_PORT=17382 pnpm dev`.
+- Vite port `5173` is already in use: run with another web dev port, for
+  example `KB1_WEB_PORT=5174 pnpm dev`.
+- You want a clean trial state without touching existing data: run
+  `KB1_HOME=$(mktemp -d) pnpm dev`.
+- Docker starts but the browser cannot connect: confirm the mapping includes
+  `127.0.0.1:7382:7382`, then open http://127.0.0.1:7382.
+
+## Contributor Checks
+
+Before opening a pull request, run the full workspace gate:
+
+```bash
+pnpm check
+```
+
+`pnpm check` runs the workspace typecheck, tests, and builds. It is useful for
+contributors, but it is not required just to try the app locally.
 
 ## Relay / Tunnel
 
@@ -171,7 +290,7 @@ lifecycle CRUD and note history.
 
 ```bash
 pnpm smoke:yjs     # two-client Yjs editing smoke against a running daemon
-pnpm docker:up     # daemon in Docker (host port 17382); pnpm docker:down to stop
+pnpm storybook     # component development on port 6006
 ```
 
 ## Layout
@@ -188,3 +307,12 @@ pnpm docker:up     # daemon in Docker (host port 17382); pnpm docker:down to sto
 - `packages/vault-service` — service boundary composed by the daemon routes and MCP
 - `docs/architecture/` — architecture notes and invariants for the local
   product
+
+## Project Policies
+
+- [Contributing](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
+- [Security](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Release process](docs/releasing.md)
+- [Apache 2.0 license](LICENSE)

@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   resolve: {
+    dedupe: ['svelte'],
     alias: [
       {
         find: /^svelte$/,
-        replacement: fileURLToPath(new URL('../../node_modules/.pnpm/svelte@5.55.5/node_modules/svelte/src/index-client.js', import.meta.url))
+        replacement: fileURLToPath(new URL('./node_modules/svelte/src/index-client.js', import.meta.url))
       },
       {
         find: /^@kb-1\/doc-session\/protocol$/,

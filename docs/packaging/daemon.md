@@ -101,7 +101,22 @@ non-API route is served from the built SvelteKit shell with an SPA fallback.
 The initial Docker path supports both direct image runs and a Compose-backed
 development container.
 
-For the standard development container:
+The daemon has no local application authentication. Every published container
+port must bind to `127.0.0.1` unless the operator has deliberately added an
+access-controlled private network boundary. Never publish the daemon directly
+to the public internet.
+
+Before using the Compose-backed development container, inspect its resolved
+configuration:
+
+```bash
+node scripts/docker-up.mjs --print-config
+```
+
+Confirm the published port is explicitly bound to `127.0.0.1`. A mapping shown
+as only `17382:7382`, `0.0.0.0:17382:7382`, or `:::17382:7382` is exposed beyond
+loopback and must not be used on an untrusted network. Once the mapping is
+loopback-only, start the container with:
 
 ```bash
 pnpm docker:up
@@ -142,6 +157,7 @@ dev/build tools do not need to ship in the runtime image.
 For an outside-the-container smoke:
 
 ```bash
+node scripts/docker-up.mjs --print-config  # verify a 127.0.0.1 host binding
 pnpm docker:up
 curl http://127.0.0.1:17382/api/health
 open http://127.0.0.1:17382/
@@ -153,7 +169,10 @@ The direct image path is also available:
 
 ```bash
 docker build -f apps/daemon/Dockerfile -t kb-1-daemon .
-docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 kb-1-daemon
+docker run --rm \
+  -p 127.0.0.1:7382:7382 \
+  -v kb1-home:/data/kb1 \
+  kb-1-daemon
 ```
 
 The container defaults `KB1_HOME` to `/data/kb1` and writes daemon status to
@@ -163,7 +182,11 @@ Legacy direct-image deployments that mounted data at `/data/kb2` can mount both
 paths for one upgrade boot:
 
 ```bash
-docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 -v kb2-home:/data/kb2 kb-1-daemon
+docker run --rm \
+  -p 127.0.0.1:7382:7382 \
+  -v kb1-home:/data/kb1 \
+  -v kb2-home:/data/kb2 \
+  kb-1-daemon
 ```
 
 ## npm CLI
