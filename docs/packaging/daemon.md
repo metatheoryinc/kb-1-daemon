@@ -98,25 +98,22 @@ non-API route is served from the built SvelteKit shell with an SPA fallback.
 
 ## Docker
 
-The initial Docker path supports both direct image runs and a Compose-backed
-development container.
+The Docker path supports direct image runs and includes a Compose-backed
+development helper for repository maintainers.
 
 The daemon has no local application authentication. Every published container
 port must bind to `127.0.0.1` unless the operator has deliberately added an
 access-controlled private network boundary. Never publish the daemon directly
 to the public internet.
 
-Before using the Compose-backed development container, inspect its resolved
-configuration:
+The committed Compose development helper currently publishes `17382:7382`
+without a loopback host, so it does not meet this security requirement. Do not
+use `pnpm docker:up` for a public, shared-network, or ordinary local install
+until `compose.yaml` binds the host side to `127.0.0.1`. Use the direct image
+path below instead.
 
-```bash
-node scripts/docker-up.mjs --print-config
-```
-
-Confirm the published port is explicitly bound to `127.0.0.1`. A mapping shown
-as only `17382:7382`, `0.0.0.0:17382:7382`, or `:::17382:7382` is exposed beyond
-loopback and must not be used on an untrusted network. Once the mapping is
-loopback-only, start the container with:
+Repository maintainers working on an isolated, trusted development machine can
+start the existing Compose helper with:
 
 ```bash
 pnpm docker:up
@@ -154,10 +151,10 @@ runtime image copies only that prepared runtime tree. Platform-specific npm
 packages are therefore selected for the container platform, not macOS, and
 dev/build tools do not need to ship in the runtime image.
 
-For an outside-the-container smoke:
+For a maintainer-only outside-the-container Compose smoke on that isolated
+machine:
 
 ```bash
-node scripts/docker-up.mjs --print-config  # verify a 127.0.0.1 host binding
 pnpm docker:up
 curl http://127.0.0.1:17382/api/health
 open http://127.0.0.1:17382/
