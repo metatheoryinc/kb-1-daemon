@@ -165,7 +165,7 @@ export function createLocalMcpServer(
     "list_vaults",
     {
       description:
-        "List every vault this daemon serves, each as { id, displayName }. Use a vault id as the required vaultId parameter on any other tool to target that vault. Read-only; writes no audit row.",
+        "List every vault this daemon serves, each as { id, displayName, metadata? }. Use a vault id as the required vaultId parameter on any other tool to target that vault. Read-only; writes no audit row.",
       inputSchema: {},
     },
     async () => ({ ok: true, vaults: provider.list() }),

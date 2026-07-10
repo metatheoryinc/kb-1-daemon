@@ -53,7 +53,12 @@ Internally the tunnel client appends `/__kb1_tunnel/control` and
 `/__kb1_tunnel/dialback` to the configured relay URL. These are relay endpoint
 paths, not routes served by the daemon.
 
-For in-place upgrades, legacy `~/.kb2` homes migrate to `~/.kb1` on first boot.
+For in-place upgrades, first boot copies legacy `~/.kb2` homes into `~/.kb1`.
+Before removing the source, the daemon checks that every regular source file
+exists at the same relative path in the target with the same byte length.
+Symlinks and empty directories are not checked, and a pre-existing target may
+contain additional files. Operators should make a separate backup first when
+they need content-level verification or a rollback copy.
 The daemon does not honor `KB2_*` environment variables; runtime configuration is
 KB1-only.
 
@@ -93,10 +98,22 @@ non-API route is served from the built SvelteKit shell with an SPA fallback.
 
 ## Docker
 
-The initial Docker path supports both direct image runs and a Compose-backed
-development container.
+The Docker path supports direct image runs and includes a Compose-backed
+development helper for repository maintainers.
 
-For the standard development container:
+The daemon has no local application authentication. Every published container
+port must bind to `127.0.0.1` unless the operator has deliberately added an
+access-controlled private network boundary. Never publish the daemon directly
+to the public internet.
+
+The committed Compose development helper currently publishes `17382:7382`
+without a loopback host, so it does not meet this security requirement. Do not
+use `pnpm docker:up` for a public, shared-network, or ordinary local install
+until `compose.yaml` binds the host side to `127.0.0.1`. Use the direct image
+path below instead.
+
+Repository maintainers working on an isolated, trusted development machine can
+start the existing Compose helper with:
 
 ```bash
 pnpm docker:up
@@ -134,7 +151,8 @@ runtime image copies only that prepared runtime tree. Platform-specific npm
 packages are therefore selected for the container platform, not macOS, and
 dev/build tools do not need to ship in the runtime image.
 
-For an outside-the-container smoke:
+For a maintainer-only outside-the-container Compose smoke on that isolated
+machine:
 
 ```bash
 pnpm docker:up
@@ -148,7 +166,10 @@ The direct image path is also available:
 
 ```bash
 docker build -f apps/daemon/Dockerfile -t kb-1-daemon .
-docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 kb-1-daemon
+docker run --rm \
+  -p 127.0.0.1:7382:7382 \
+  -v kb1-home:/data/kb1 \
+  kb-1-daemon
 ```
 
 The container defaults `KB1_HOME` to `/data/kb1` and writes daemon status to
@@ -158,7 +179,11 @@ Legacy direct-image deployments that mounted data at `/data/kb2` can mount both
 paths for one upgrade boot:
 
 ```bash
-docker run --rm -p 7382:7382 -v kb1-home:/data/kb1 -v kb2-home:/data/kb2 kb-1-daemon
+docker run --rm \
+  -p 127.0.0.1:7382:7382 \
+  -v kb1-home:/data/kb1 \
+  -v kb2-home:/data/kb2 \
+  kb-1-daemon
 ```
 
 ## npm CLI

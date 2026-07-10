@@ -63,6 +63,7 @@ CONFIRM_TAILSCALE_EXPOSURE="${KB1_CONFIRM_TAILSCALE_EXPOSURE:-0}"
 TAILSCALE_HTTPS_PORT="${KB1_TAILSCALE_HTTPS_PORT:-443}"
 LINUX_SERVICE_NAME="$(resolve_linux_service_name_default)"
 MACOS_LABEL="$(resolve_macos_label_default)"
+MACOS_LOG_STEM="${MACOS_LABEL//[!a-zA-Z0-9._-]/_}"
 
 if [ "${KB1_INSTALLER_PRINT_CONFIG:-0}" = "1" ]; then
   printf 'KB1_HOME=%s\n' "$KB1_HOME"
@@ -109,6 +110,73 @@ detect_platform() {
       exit 1
       ;;
   esac
+}
+
+service_is_running() {
+  case "$PLATFORM" in
+    linux)
+      systemctl --user is-active --quiet "$LINUX_SERVICE_NAME"
+      ;;
+    macos)
+      launchctl print "gui/$(id -u)/$MACOS_LABEL" 2>/dev/null \
+        | awk '/state = running/ { running = 1 } END { exit !running }'
+      ;;
+  esac
+}
+
+installed_service_pid() {
+  case "$PLATFORM" in
+    linux)
+      systemctl --user show "$LINUX_SERVICE_NAME" --property MainPID --value
+      ;;
+    macos)
+      launchctl print "gui/$(id -u)/$MACOS_LABEL" 2>/dev/null \
+        | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }'
+      ;;
+  esac
+}
+
+health_matches_installed_service() {
+  local expected_pid
+  expected_pid="$(installed_service_pid)"
+  if [[ ! "$expected_pid" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+
+  if ! curl -fsS "$HEALTH_URL" >"$health_tmp" 2>"$health_err"; then
+    return 1
+  fi
+
+  node - "$health_tmp" "$KB1_HOME" "$expected_pid" "$HOME" 2>>"$health_err" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+
+const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const configuredHome = process.argv[3];
+const expectedPid = Number(process.argv[4]);
+const userHome = process.argv[5];
+const expandedHome = configuredHome === '~'
+  ? userHome
+  : configuredHome.startsWith('~/')
+    ? path.join(userHome, configuredHome.slice(2))
+    : configuredHome;
+const expectedHome = path.resolve(expandedHome);
+const expectedStatusFile = path.join(expectedHome, 'daemon', 'status.json');
+const status = body && typeof body === 'object' ? body.status : undefined;
+const matches = body?.ok === true
+  && body.service === 'kb1d'
+  && status?.serviceName === 'kb1d'
+  && typeof status.kb1Home === 'string'
+  && path.resolve(status.kb1Home) === expectedHome
+  && typeof status.statusFile === 'string'
+  && path.resolve(status.statusFile) === expectedStatusFile
+  && status.pid === expectedPid;
+
+if (!matches) {
+  console.error(`Health endpoint does not match installed kb1d service (expected pid ${expectedPid}).`);
+  process.exit(1);
+}
+NODE
 }
 
 print_tailscale_install_steps() {
@@ -329,8 +397,8 @@ write_macos_launch_agent() {
   host_xml="$(xml_escape "$KB1_HOST")"
   port_xml="$(xml_escape "$KB1_PORT")"
   path_xml="$(xml_escape "$path_value")"
-  stdout_xml="$(xml_escape "$log_dir/kb1-daemon.out.log")"
-  stderr_xml="$(xml_escape "$log_dir/kb1-daemon.err.log")"
+  stdout_xml="$(xml_escape "$log_dir/$MACOS_LOG_STEM.out.log")"
+  stderr_xml="$(xml_escape "$log_dir/$MACOS_LOG_STEM.err.log")"
 
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -391,7 +459,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
     corepack enable || true
     corepack prepare pnpm@11.5.3 --activate
   else
-    echo "pnpm is missing and corepack is unavailable. Install Node 22+ with Corepack or install pnpm@11.5.3." >&2
+    echo "pnpm is missing and corepack is unavailable. Install a supported Node release (20.19.x, 22.12+, or 24+) with Corepack or install pnpm@11.5.3." >&2
     exit 1
   fi
 fi
@@ -457,18 +525,18 @@ VAULTS_URL="http://$KB1_HOST:$KB1_PORT/api/vaults"
 health_tmp="$(mktemp)"
 health_err="$(mktemp)"
 for i in $(seq 1 30); do
-  if curl -fsS "$HEALTH_URL" >"$health_tmp" 2>"$health_err"; then
+  if service_is_running && health_matches_installed_service; then
     cat "$health_tmp"
     printf '\n'
     break
   fi
   if [ "$i" = "30" ]; then
-    echo "Daemon did not become healthy at $HEALTH_URL" >&2
+    echo "The installed service did not become healthy at $HEALTH_URL" >&2
     cat "$health_err" >&2 || true
     if [ "$PLATFORM" = "linux" ]; then
       journalctl --user -u "$LINUX_SERVICE_NAME" -n 80 --no-pager >&2 || true
     else
-      cat "$HOME/Library/Logs/kb1-daemon.err.log" >&2 || true
+      cat "$HOME/Library/Logs/$MACOS_LOG_STEM.err.log" >&2 || true
     fi
     rm -f "$health_tmp" "$health_err"
     exit 1
@@ -491,5 +559,5 @@ if [ "$PLATFORM" = "linux" ]; then
   echo "Logs:          journalctl --user -u $LINUX_SERVICE_NAME -f"
 else
   echo "Service:       $MACOS_LABEL"
-  echo "Logs:          tail -f $HOME/Library/Logs/kb1-daemon.err.log"
+  echo "Logs:          tail -f $HOME/Library/Logs/$MACOS_LOG_STEM.err.log"
 fi

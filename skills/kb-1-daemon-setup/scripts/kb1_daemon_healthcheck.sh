@@ -24,16 +24,12 @@ resolve_macos_label_default() {
     return 0
   fi
 
-  if [ -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.metatheory.kb1.kb1d.plist" ]; then
-    printf '%s\n' "dev.metatheory.kb1.kb1d"
-    return 0
-  fi
-
   printf '%s\n' "dev.metatheory.kb1.kb1d"
 }
 
 LINUX_SERVICE_NAME="$(resolve_linux_service_name_default)"
 MACOS_LABEL="$(resolve_macos_label_default)"
+MACOS_LOG_STEM="${MACOS_LABEL//[!a-zA-Z0-9._-]/_}"
 
 close_mcp_session() {
   local session_id="$1"
@@ -90,8 +86,14 @@ case "$(uname -s)" in
     journalctl --user -u "$LINUX_SERVICE_NAME" -n 40 --no-pager || true
     ;;
   Darwin)
-    tail -n 40 "$HOME/Library/Logs/kb1-daemon.err.log" 2>/dev/null || true
-    tail -n 20 "$HOME/Library/Logs/kb1-daemon.out.log" 2>/dev/null || true
+    macos_err_log="$HOME/Library/Logs/$MACOS_LOG_STEM.err.log"
+    macos_out_log="$HOME/Library/Logs/$MACOS_LOG_STEM.out.log"
+    if [ ! -e "$macos_err_log" ] && [ ! -e "$macos_out_log" ]; then
+      macos_err_log="$HOME/Library/Logs/kb1-daemon.err.log"
+      macos_out_log="$HOME/Library/Logs/kb1-daemon.out.log"
+    fi
+    tail -n 40 "$macos_err_log" 2>/dev/null || true
+    tail -n 20 "$macos_out_log" 2>/dev/null || true
     ;;
 esac
 

@@ -3,8 +3,8 @@
 KB-1 separates durable customer data from optional remote coordination.
 
 The local server owns content operations, filesystem materialization, local
-agent access, and the first local web UI. A remote layer can later own
-authentication, relay routing, collaboration policy, and ephemeral presence.
+agent access, and the local web UI. The Cloud layer owns authentication, relay
+routing, collaboration policy, and ephemeral presence for Cloud-connected use.
 Remote web and API surfaces can look similar to KB-1 from a user and agent
 perspective, but content requests are proxied to the user's active local server
 instead of resolved from remote D1/R2 storage.
@@ -20,7 +20,7 @@ Vault API, Yjs runtime, search, audit, file watcher, materializer
 Local filesystem
 Markdown, images, attachments, .kb1 metadata
 
-Later remote-connected mode:
+Cloud-connected mode:
 
 Remote Web UI / Remote MCP / Remote API
         |
@@ -85,7 +85,7 @@ For a local read or edit:
 5. The local server returns the response and emits any relevant local file-change
    events.
 
-For a later remote read or edit:
+For a Cloud-connected remote read or edit:
 
 1. A web client, remote MCP client, or remote API client calls the relay.
 2. The relay authenticates the caller.
@@ -107,9 +107,9 @@ avoid storing content bodies in relay databases or logs.
 ## Relationship To KB-1
 
 KB-1 used remote D1/R2/Durable Object state as the knowledge substrate. KB-1
-uses the filesystem and local server as the substrate. Remote services can
-coordinate multi-user access, but they no longer act as the durable content
-store. The local open-source product should be useful before relay exists.
+now uses the filesystem and daemon as the substrate. Cloud services coordinate
+multi-user access without making the relay the durable content store. The local
+open-source product remains useful without Cloud or relay.
 
 ## Open Questions
 
@@ -121,4 +121,5 @@ store. The local open-source product should be useful before relay exists.
   a vault to another machine?
 - What offline or degraded web states should exist when a vault's local server
   is disconnected?
-- Which local UI capabilities should ship before remote relay work begins?
+- Which local UI capabilities should keep improving after the Local and Cloud
+  paths ship together?

@@ -4,10 +4,15 @@ export type { LocalMcpVaultService, ServiceFailure, ServiceResult, VaultActor };
 
 export type LocalMcpActor = VaultActor;
 
-/** A vault the MCP layer can address: its stable slug as `id` plus a display name. */
+export interface LocalMcpVaultMetadata {
+  color?: string;
+}
+
+/** A vault the MCP layer can address: stable slug, display name, and optional root metadata. */
 export interface LocalMcpVaultSummary {
   id: string;
   displayName: string;
+  metadata?: LocalMcpVaultMetadata;
 }
 
 /**
@@ -24,6 +29,6 @@ export interface LocalMcpVaultSummary {
 export interface LocalMcpVaultProvider {
   /** Resolve a vault's service by slug, or `undefined` when unknown. */
   resolve(id: string): LocalMcpVaultService | undefined;
-  /** Every addressable vault as `{ id, displayName }`; may be empty. */
+  /** Every addressable vault as `{ id, displayName, metadata? }`; may be empty. */
   list(): LocalMcpVaultSummary[];
 }

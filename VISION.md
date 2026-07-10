@@ -1,8 +1,8 @@
 # KB-1 Vision
 
-KB-1 is a local-first, agent-ready knowledge base where users own the durable
-data. The open-source local runtime should be useful on its own, with optional
-remote coordination layered around it later.
+KB-1 is a local-first, agent-ready knowledge base where the durable vault home
+is explicit. The open-source local runtime is useful on its own, with Cloud
+identity, relay, collaboration, and hosting available as additive layers.
 
 It keeps the best parts of KB-1: a rich web experience, MCP/API access for
 agents, service-mediated writes, conflict-free collaborative editing, visible
@@ -19,11 +19,12 @@ structured reads and edits, search, moves and renames, local agent tools, a
 minimal local web UI, remote access, presence, collaboration policy, and
 auditability.
 
-Remote services should not be the place where customer knowledge lives at rest.
-They should provide authentication, relay, session coordination, presence, and
-collaboration policy when users opt into remote or multi-user features. Content
-reads and writes should route to an authoritative local KB-1 server owned by the
-user or organization.
+In the self-hosted relay path, remote services are not the place where customer
+knowledge lives at rest. They provide authentication, relay, session
+coordination, presence, and collaboration policy, while content reads and writes
+route to an authoritative KB-1 server owned by the user or organization. In the
+Hosted path, the same service contract runs in a KB-1 operated environment that
+is intentionally the durable vault home.
 
 ## Core Shift
 
@@ -31,11 +32,11 @@ The original KB-1 architecture was cloud Obsidian for humans and agents: a
 remote Markdown vault backed by Cloudflare Workers, Durable Objects, D1, R2, and
 Yjs.
 
-KB-1 daemon is a user-owned vault node that can stand alone locally and later
-gain cloud reachability: Markdown, images, and attachments live on the user's
-filesystem; an open-source local server exposes a structured vault API, local
-MCP/API access, and a minimal local web UI; a relay service can later route
-authenticated web, API, and MCP requests to that server.
+KB-1 daemon is a user-owned vault node that can stand alone locally or connect
+to Cloud: Markdown, images, and attachments live on the user's filesystem; an
+open-source local server exposes a structured vault API, local MCP/API access,
+and a local web UI; Cloud relay can route authenticated web, API, and MCP
+requests to that server.
 
 ## Principles
 
@@ -48,8 +49,9 @@ authenticated web, API, and MCP requests to that server.
   the durable source of truth.
 - Rebuildable indexes, caches, parsed metadata, and hot document sessions can be
   regenerated from the filesystem and local metadata.
-- Remote services relay and coordinate when enabled; they do not store customer
-  knowledge content at rest.
+- In self-hosted mode, remote services relay and coordinate without becoming the
+  durable vault store. In Hosted mode, the managed environment is the selected
+  vault home.
 - Permission checks happen at every edge.
 - One vault has one active authoritative local server connection.
 - One local server may host many vaults.
@@ -64,14 +66,14 @@ authenticated web, API, and MCP requests to that server.
 
 ## Product Shape
 
-The first useful KB-1 product should be local and open source: a user runs the
-daemon/server, opens a local web UI, browses a file tree, reads and edits
-Markdown, and lets local agents use local MCP/API tools against the same
-filesystem-backed service.
+The local open-source product lets a user run the daemon/server, open a local
+web UI, browse a file tree, read and edit Markdown, manage vaults and
+attachments, inspect best-effort Git-backed note history, and let local agents
+use MCP/API tools against the same filesystem-backed service.
 
-Remote relay should become an optional path, not the first path to value. KB-1
-should not require remote services before it becomes a useful local knowledge
-base. Multi-user capabilities can layer on later: other users reading or writing
+Remote relay is an optional path, not the first path to value. KB-1 does not
+require remote services before it becomes a useful local knowledge base.
+Multi-user capabilities live in the Cloud layer: other users reading or writing
 a vault, collaboration policy, organization permissions, and shared presence.
 
 ## What KB-1 Owns
@@ -90,17 +92,15 @@ KB-1 owns the coordination surface:
 - permission checks
 - direct-file-change detection and client warnings
 
-KB-1 does not try to own the user's backups or durable storage medium. Git,
-filesystem backups, and cloud drives can all be user-controlled strategies
-around the plain vault files.
+For local and self-hosted vaults, KB-1 does not try to own the user's backup
+medium. Git, filesystem backups, and cloud drives can all be user-controlled
+strategies around the plain vault files. Hosted vaults instead use the managed
+storage and durability contract of KB-1 Cloud.
 
-## Open Questions
+## Remaining Questions
 
 - Which packaging targets matter first: CLI, Docker image, desktop app, or all
   three?
-- Should Git support be built in from the beginning or introduced after the core
-  local server, local UI, and local MCP work?
 - How much of the web UI can operate when the local server is offline?
-- What is the smallest local UI that makes KB-1 useful before cloud relay?
 - Should vaults begin path-keyed only, or should a hidden stable ID layer be
   reserved for future migrations?

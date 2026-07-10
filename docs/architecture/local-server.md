@@ -4,9 +4,9 @@ The local KB-1 server is the authoritative runtime for one or more vaults. It is
 open source and runs on a user's device, a home server, or a user-controlled
 cloud instance such as a Docker container on a provider they choose.
 
-The server is also the host for the first local KB-1 product experience. It
-should serve a minimal local web UI that uses the same service APIs as local MCP,
-local API clients, and later cloud relay requests.
+The server also hosts the local KB-1 product experience. It serves a local web
+UI that uses the same service APIs as local MCP, local API clients, and Cloud
+relay requests.
 
 ## Responsibilities
 
@@ -34,7 +34,7 @@ multi-user access policy. Those are enforced by the cloud layer before requests
 are relayed.
 
 It also does not own local multi-user presence. In the local-first product, the
-server should model files, edits, file-change events, and audit history. Users,
+server models files, edits, file-change events, and audit history. Users,
 cursors, selections, follow mode, and presence remain cloud collaboration
 concepts unless a future local collaboration mode explicitly adds them.
 
@@ -254,9 +254,9 @@ It should not include:
 - remote sharing policy
 - cursors, selections, follow mode, or presence
 
-The purpose of the local UI is to make KB-1 useful before the cloud relay exists
-and to exercise the same filesystem-backed APIs that local MCP tools and later
-cloud relay requests will use.
+The purpose of the local UI is to make KB-1 useful without Cloud relay and to
+exercise the same filesystem-backed APIs that local MCP tools and Cloud relay
+requests use.
 
 ## Open Questions
 

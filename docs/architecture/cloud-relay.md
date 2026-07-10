@@ -9,6 +9,14 @@ This document describes the public daemon contract. The server behind the relay
 endpoint may be a private cloud service, but its hosting, product policy, and
 commercial model are outside this repository.
 
+In the KB-1 product, KB-1 Cloud supplies the identity, organization, routing,
+and collaboration layer around this contract. The local daemon itself has no
+Cloud user or organization model and is not a multi-user team product on its
+own. Local-only use needs no Cloud login; connecting to KB-1 Cloud relay enables
+approved users and agents to reach a self-hosted daemon from beyond its machine
+or private network. Hosted mode uses the same Cloud layer with a KB-1-operated
+daemon.
+
 ## Daemon Configuration
 
 Relay is enabled by supplying `KB1_RELAY_URL` and `KB1_RELAY_TOKEN` together.
