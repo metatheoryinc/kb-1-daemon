@@ -13,7 +13,7 @@ RUN pnpm --filter @kb-1/daemon... build
 RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules \
   && pnpm install --prod --frozen-lockfile --filter @kb-1/daemon...
 RUN mkdir -p /runtime/apps/daemon /runtime/apps/web /runtime/packages \
-  && cp package.json pnpm-lock.yaml pnpm-workspace.yaml /runtime/ \
+  && cp package.json pnpm-lock.yaml pnpm-workspace.yaml LICENSE THIRD_PARTY_NOTICES.md /runtime/ \
   && cp -a node_modules /runtime/node_modules \
   && cp apps/daemon/package.json /runtime/apps/daemon/package.json \
   && cp -a apps/daemon/node_modules /runtime/apps/daemon/node_modules \

@@ -20,22 +20,45 @@ repository. The npm workspace packages are private and are not published.
    pnpm check
    ```
 
-5. Build the Docker image and smoke-test it with a loopback-only port mapping:
+5. Build the production Docker image and run the automated release smoke:
 
    ```bash
-   docker build -f apps/daemon/Dockerfile -t kb-1-daemon:release-candidate .
-   docker run --rm \
-     -p 127.0.0.1:17382:7382 \
-     -v kb1-release-smoke:/data/kb1 \
-     kb-1-daemon:release-candidate
+   pnpm smoke:release
    ```
 
-   In another shell, verify `/api/health`, the local app, and the MCP endpoint.
+   The smoke uses a loopback-only random port and an isolated Docker volume. It
+   verifies the packaged license/notices, `/api/health`, the bundled local app
+   plus every bundled JavaScript/CSS asset (including lazy route chunks), the
+   complete MCP tool list,
+   two-client Yjs editing and explicit disk flush,
+   then restarts the container and proves the edit persisted. The temporary
+   container, volume, and default per-run image tag are removed even when a
+   check fails. Set
+   `KB1_RELEASE_SMOKE_IMAGE` to override the image tag or
+   `KB1_RELEASE_SMOKE_PORT` when a fixed host port is needed.
 
 6. Run a dedicated secret scanner across the full Git history and review
    dependency alerts.
-7. Review production dependency licenses with `pnpm licenses list --prod` and
-   include required third-party notices with any distributed artifact.
+7. Regenerate and review the production dependency inventory. The committed
+   notice file covers the daemon runtime plus the web runtime and build-tool
+   dependency graphs used to produce the static application. The conservative
+   build-tool coverage prevents framework or bundler runtime code from being
+   omitted merely because its package is declared as a development dependency.
+   Platform-specific optional native build bindings are excluded so the committed
+   inventory is identical on macOS and Linux; those bindings are not copied into
+   the runtime image, while their platform-neutral parent packages remain listed.
+   The Docker image includes both the notice file and `LICENSE`:
+
+   ```bash
+   pnpm licenses:generate
+   git diff -- THIRD_PARTY_NOTICES.md
+   pnpm licenses:check
+   ```
+
+   Review every dependency, declared license, missing notice-file warning, and
+   dependency alert before approving a release. `pnpm check` also runs the
+   deterministic inventory check so dependency changes cannot silently leave
+   the committed notices stale.
 8. Create a version tag and GitHub Release. Release notes must identify the
    project stage, supported platforms, breaking changes, migrations, known
    issues, and security-relevant changes.

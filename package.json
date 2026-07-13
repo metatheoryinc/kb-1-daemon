@@ -12,12 +12,16 @@
     "dev": "node scripts/dev.mjs",
     "dev:daemon": "pnpm --filter @kb-1/daemon dev",
     "dev:web": "pnpm --filter @kb-1/web dev",
+    "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs",
+    "smoke:release": "node scripts/release-smoke.mjs",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
     "storybook": "pnpm --filter @kb-1/ui storybook",
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@types/ws": "8.18.1",
     "@types/node": "25.9.2",
     "lib0": "0.2.117",
