@@ -4,6 +4,9 @@ KB-1 Local is an open-source, local-first knowledge base built for people and
 agents to work in the same vault. Your Markdown files stay on your machine and
 remain the durable source of truth.
 
+Visit [kb-1.ai](https://kb-1.ai) to explore KB-1 and check the current
+availability of paid Cloud services.
+
 See `VISION.md` and `docs/architecture/` for the current product and
 architecture docs.
 
@@ -11,7 +14,30 @@ architecture docs.
 > KB-1 Local is under active development. Until a stable release is tagged,
 > commands and interfaces may change between revisions.
 
-## Product Modes
+## Free Local and Paid Cloud
+
+The open-source daemon includes the local vault engine, web app, API, and MCP
+endpoint. You can run it for personal or developer workflows without a KB-1
+account or subscription.
+
+Paid KB-1 Cloud services add the coordination and operations layer needed when
+one local machine is no longer enough:
+
+- **Cloud identity and organization access:** give approved people and agents
+  authenticated access tied to Cloud identity and organization membership,
+  plus team presence instead of treating everyone as a trusted local caller.
+- **Authenticated remote reach:** connect to a self-hosted vault through an
+  outbound Cloud relay without exposing the daemon port directly to the public
+  internet. Your machine remains the durable content authority.
+- **Managed hosting:** choose KB-1 Hosted when you do not want to operate an
+  always-on daemon. KB-1 runs an isolated vault environment and manages its
+  lifecycle and durability.
+
+In short, the paid service buys shared identity, team access, remote reach, and
+optionally managed operations. It does not paywall local access to your own
+files. Learn more at [kb-1.ai](https://kb-1.ai).
+
+The available deployment modes are:
 
 - **Local-only:** run the open-source daemon and connect local agents without a
   KB-1 Cloud login. The daemon does not provide Cloud users, organizations,
