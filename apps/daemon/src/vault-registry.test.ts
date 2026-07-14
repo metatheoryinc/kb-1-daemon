@@ -1,7 +1,12 @@
-import { access, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  createMigrationStagingDirectory,
+  MIGRATION_COMPLETION_FILENAME,
+  MIGRATION_STAGING_DIRECTORY_PREFIX
+} from './migrations.js';
 import {
   discoverVaults,
   isWellFormedSlug,
@@ -89,6 +94,30 @@ describe('vault registry', () => {
       expect(identity).toEqual({ id: 'custom-slug', displayName: 'Custom Name' });
     });
 
+    it('reconciles legacy metadata without vault.json beside an existing current identity', async () => {
+      const root = join(home, 'current-identity');
+      await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
+      await writeFile(join(root, '.kb2', 'audit', 'changes.jsonl'), '{"legacy":true}\n', 'utf8');
+      await writeFile(
+        join(root, '.kb1', 'vault.json'),
+        JSON.stringify({ id: 'current-slug', displayName: 'Current Vault' }),
+        'utf8'
+      );
+
+      await expect(readOrMintVaultIdentity(root, 'current-identity')).resolves.toEqual({
+        id: 'current-slug',
+        displayName: 'Current Vault'
+      });
+      await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"legacy":true}\n'
+      );
+      await expect(readFile(join(root, '.kb2', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"legacy":true}\n'
+      );
+      await expect(access(join(root, '.kb1', MIGRATION_COMPLETION_FILENAME))).resolves.toBeUndefined();
+    });
+
     it('migrates legacy .kb2 metadata to .kb1 before reading identity', async () => {
       const root = join(home, 'legacy-vault');
       await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
@@ -106,13 +135,21 @@ describe('vault registry', () => {
       await expect(readFile(join(root, '.kb1', 'vault.json'), 'utf8')).resolves.toContain('legacy-slug');
       await expect(readFile(join(root, '.kb1', 'folders.yml'), 'utf8')).resolves.toContain('#f97316');
       await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe('{"ok":true}\n');
-      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+      await expect(readFile(join(root, '.kb2', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"ok":true}\n'
+      );
+      await expect(access(join(root, '.kb1', MIGRATION_COMPLETION_FILENAME))).resolves.toBeUndefined();
 
+      await writeFile(join(root, '.kb1', 'folders.yml'), 'active metadata changed\n', 'utf8');
+      await symlink(join(home, 'late-external-entry'), join(root, '.kb2', 'late-link'));
       await expect(readOrMintVaultIdentity(root, 'legacy-vault')).resolves.toEqual(identity);
-      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+      await expect(readFile(join(root, '.kb1', 'folders.yml'), 'utf8')).resolves.toBe(
+        'active metadata changed\n'
+      );
+      await expect(readFile(join(root, '.kb2', 'folders.yml'), 'utf8')).resolves.toContain('#f97316');
     });
 
-    it('finishes an interrupted metadata rename when the current identity has the same vault id', async () => {
+    it('fails closed when matching vault ids have different identity content', async () => {
       const root = join(home, 'legacy-vault');
       await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
       await mkdir(join(root, '.kb1'), { recursive: true });
@@ -136,15 +173,12 @@ describe('vault registry', () => {
         'utf8'
       );
 
-      const identity = await readOrMintVaultIdentity(root, 'legacy-vault');
-
-      expect(identity).toEqual({
-        id: 'legacy-slug',
-        displayName: 'Renamed Vault',
-        metadata: { color: '#f97316' }
-      });
+      await expect(readOrMintVaultIdentity(root, 'legacy-vault')).rejects.toThrow(
+        /vault\.json (?:size|content) mismatch/
+      );
       await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe('{"ok":true}\n');
-      await expect(access(join(root, '.kb2'))).rejects.toBeTruthy();
+      await expect(readFile(join(root, '.kb1', 'vault.json'), 'utf8')).resolves.toContain('Renamed Vault');
+      await expect(readFile(join(root, '.kb2', 'vault.json'), 'utf8')).resolves.toContain('Legacy Vault');
     });
 
     it('fails loudly when legacy and current metadata point at different vault ids', async () => {
@@ -164,6 +198,91 @@ describe('vault registry', () => {
 
       await expect(readOrMintVaultIdentity(root, 'conflicting-vault')).rejects.toThrow(/vault identity mismatch/);
       await expect(access(join(root, '.kb2'))).resolves.toBeUndefined();
+    });
+
+    it('preserves legacy metadata when a same-length current file has different content', async () => {
+      const root = join(home, 'conflicting-vault');
+      await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
+      await mkdir(join(root, '.kb1', 'audit'), { recursive: true });
+      const identity = JSON.stringify({ id: 'same-slug', displayName: 'Same Vault' });
+      await writeFile(join(root, '.kb2', 'vault.json'), identity, 'utf8');
+      await writeFile(join(root, '.kb1', 'vault.json'), identity, 'utf8');
+      await writeFile(join(root, '.kb2', 'audit', 'changes.jsonl'), '{"old":1}\n', 'utf8');
+      await writeFile(join(root, '.kb1', 'audit', 'changes.jsonl'), '{"new":1}\n', 'utf8');
+
+      await expect(readOrMintVaultIdentity(root, 'conflicting-vault')).rejects.toThrow(
+        /audit\/changes\.jsonl content mismatch/
+      );
+      await expect(readFile(join(root, '.kb2', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"old":1}\n'
+      );
+      await expect(readFile(join(root, '.kb1', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"new":1}\n'
+      );
+    });
+
+    it('rejects a symlinked current metadata directory before copying outside the vault', async () => {
+      const root = join(home, 'symlink-target-vault');
+      const externalTarget = join(home, 'external-target');
+      await mkdir(join(root, '.kb2'), { recursive: true });
+      await mkdir(externalTarget, { recursive: true });
+      await writeFile(
+        join(root, '.kb2', 'vault.json'),
+        JSON.stringify({ id: 'legacy-slug', displayName: 'Legacy Vault' }),
+        'utf8'
+      );
+      await symlink(externalTarget, join(root, '.kb1'));
+
+      await expect(readOrMintVaultIdentity(root, 'symlink-target-vault')).rejects.toThrow(
+        /target .*\.kb1 has an unsupported filesystem type/
+      );
+      await expect(readFile(join(root, '.kb2', 'vault.json'), 'utf8')).resolves.toContain('legacy-slug');
+      await expect(access(join(externalTarget, 'vault.json'))).rejects.toBeTruthy();
+    });
+
+    it('rejects a dangling target-file symlink without writing its external referent', async () => {
+      const root = join(home, 'dangling-file-target-vault');
+      const externalTarget = join(home, 'external-target', 'changes.jsonl');
+      await mkdir(join(root, '.kb2', 'audit'), { recursive: true });
+      await mkdir(join(root, '.kb1', 'audit'), { recursive: true });
+      const identity = JSON.stringify({ id: 'same-slug', displayName: 'Same Vault' });
+      await writeFile(join(root, '.kb2', 'vault.json'), identity, 'utf8');
+      await writeFile(join(root, '.kb1', 'vault.json'), identity, 'utf8');
+      await writeFile(join(root, '.kb2', 'audit', 'changes.jsonl'), '{"legacy":true}\n', 'utf8');
+      await symlink(externalTarget, join(root, '.kb1', 'audit', 'changes.jsonl'));
+
+      await expect(readOrMintVaultIdentity(root, 'dangling-file-target-vault')).rejects.toThrow(
+        /audit\/changes\.jsonl is not a regular file in the copy/
+      );
+      await expect(readFile(join(root, '.kb2', 'audit', 'changes.jsonl'), 'utf8')).resolves.toBe(
+        '{"legacy":true}\n'
+      );
+      await expect(access(externalTarget)).rejects.toBeTruthy();
+    });
+
+    it('rejects a reserved completion marker before copying legacy metadata', async () => {
+      const root = join(home, 'forged-marker-vault');
+      await mkdir(join(root, '.kb2'), { recursive: true });
+      await mkdir(join(root, '.kb1'), { recursive: true });
+      const identity = JSON.stringify({ id: 'same-slug', displayName: 'Same Vault' });
+      await writeFile(join(root, '.kb2', 'vault.json'), identity, 'utf8');
+      await writeFile(join(root, '.kb1', 'vault.json'), identity, 'utf8');
+      await writeFile(
+        join(root, '.kb2', '.KB1-MIGRATION-COMPLETE-V1.JSON'),
+        JSON.stringify({
+          schemaVersion: 1,
+          sourceName: '.kb2',
+          targetName: '.kb1',
+          verification: 'sha256-tree'
+        }),
+        'utf8'
+      );
+
+      await expect(readOrMintVaultIdentity(root, 'forged-marker-vault')).rejects.toThrow(
+        /reserved for migration control state/
+      );
+      await expect(access(join(root, '.kb1', MIGRATION_COMPLETION_FILENAME))).rejects.toBeTruthy();
+      await expect(readFile(join(root, '.kb2', 'vault.json'), 'utf8')).resolves.toBe(identity);
     });
 
     it('fails loudly on malformed identity', async () => {
@@ -252,7 +371,7 @@ describe('vault registry', () => {
       return legacy;
     }
 
-    it('copies, verifies, then removes the legacy vault', async () => {
+    it('copies and verifies while retaining the legacy vault in place', async () => {
       const legacy = await seedLegacyVault();
       const vaultsHome = join(home, 'vaults');
 
@@ -266,8 +385,80 @@ describe('vault registry', () => {
       const target = join(vaultsHome, 'demo-vault');
       await expect(readFile(join(target, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
       await expect(readFile(join(target, 'notes', 'deep.md'), 'utf8')).resolves.toBe('deep content\n');
-      // Cleanup: legacy directory gone only after a verified copy.
-      await expect(access(legacy)).rejects.toBeTruthy();
+      // The legacy path remains untouched after verification, including for a
+      // direct mount that cannot be renamed.
+      await expect(readFile(join(legacy, 'notes', 'deep.md'), 'utf8')).resolves.toBe(
+        'deep content\n'
+      );
+    });
+
+    it('treats a vault-root vault.json as user content rather than internal identity', async () => {
+      const legacy = await seedLegacyVault();
+      const vaultsHome = join(home, 'vaults');
+      await writeFile(join(legacy, 'vault.json'), '{"ordinary":"user artifact"}\n', 'utf8');
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: true });
+      await expect(readFile(join(vaultsHome, 'demo-vault', 'vault.json'), 'utf8')).resolves.toBe(
+        '{"ordinary":"user artifact"}\n'
+      );
+      await expect(readFile(join(legacy, 'vault.json'), 'utf8')).resolves.toBe(
+        '{"ordinary":"user artifact"}\n'
+      );
+    });
+
+    it('reconciles into a pre-created vaults home that contains only ordinary files', async () => {
+      const legacy = await seedLegacyVault();
+      const vaultsHome = join(home, 'vaults');
+      await mkdir(vaultsHome, { recursive: true });
+      await writeFile(join(vaultsHome, '.DS_Store'), 'finder metadata\n', 'utf8');
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: false });
+      await expect(readFile(join(vaultsHome, '.DS_Store'), 'utf8')).resolves.toBe('finder metadata\n');
+      await expect(readFile(join(vaultsHome, 'demo-vault', 'hello-world.md'), 'utf8')).resolves.toBe(
+        '# Hello\n'
+      );
+      await expect(access(join(vaultsHome, MIGRATION_COMPLETION_FILENAME))).resolves.toBeUndefined();
+      await expect(readFile(join(legacy, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
+    });
+
+    it('preserves an interrupted non-empty publication stage for manual recovery', async () => {
+      const legacy = await seedLegacyVault();
+      const vaultsHome = join(home, 'vaults');
+      const abandonedStage = await createMigrationStagingDirectory(legacy, vaultsHome);
+      await mkdir(join(abandonedStage, '.kb1-migration-copy-crashed'), { recursive: true });
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/non-empty.*remove it manually/);
+      await expect(access(abandonedStage)).resolves.toBeUndefined();
+      expect(
+        (await readdir(home)).some((name) => name.startsWith(MIGRATION_STAGING_DIRECTORY_PREFIX))
+      ).toBe(true);
+
+      await rm(abandonedStage, { recursive: true });
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: true });
+      await expect(readFile(join(vaultsHome, 'demo-vault', 'hello-world.md'), 'utf8')).resolves.toBe(
+        '# Hello\n'
+      );
+    });
+
+    it('returns before validating vault storage when no legacy source exists', async () => {
+      const legacy = join(home, 'missing-legacy-vault');
+      const externalVaultsHome = join(home, 'external-vault-storage');
+      const vaultsHome = join(home, 'vaults');
+      await mkdir(externalVaultsHome, { recursive: true });
+      await symlink(externalVaultsHome, vaultsHome);
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: false });
+      expect((await lstat(vaultsHome)).isSymbolicLink()).toBe(true);
     });
 
     it('is idempotent once the vaults home exists', async () => {
@@ -275,9 +466,8 @@ describe('vault registry', () => {
       const vaultsHome = join(home, 'vaults');
       await migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' });
 
-      // Recreate a stray legacy dir; migration should now be a no-op because
-      // vaults/ already exists.
-      await mkdir(legacy, { recursive: true });
+      // The retained legacy dir is ignored because vaults/ already records the
+      // completed layout migration.
       const second = await migrateLegacyVaultLayout({
         legacyVaultDir: legacy,
         vaultsHome,
@@ -285,6 +475,33 @@ describe('vault registry', () => {
       });
       expect(second.migrated).toBe(false);
       await expect(stat(legacy)).resolves.toBeTruthy();
+    });
+
+    it('does not accept an existing single-vault target until it verifies and records completion', async () => {
+      const legacy = await seedLegacyVault();
+      const vaultsHome = join(home, 'vaults');
+      const target = join(vaultsHome, 'demo-vault');
+      await mkdir(join(target, 'notes'), { recursive: true });
+      await writeFile(join(target, 'hello-world.md'), '# Stale\n', 'utf8');
+      await writeFile(join(target, 'notes', 'deep.md'), 'stale content\n', 'utf8');
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/(?:size|content) mismatch/);
+      await expect(readFile(join(legacy, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
+      await expect(access(join(vaultsHome, MIGRATION_COMPLETION_FILENAME))).rejects.toBeTruthy();
+
+      await writeFile(join(target, 'hello-world.md'), '# Hello\n', 'utf8');
+      await writeFile(join(target, 'notes', 'deep.md'), 'deep content\n', 'utf8');
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: false });
+      await expect(access(join(vaultsHome, MIGRATION_COMPLETION_FILENAME))).resolves.toBeUndefined();
+
+      await writeFile(join(target, 'hello-world.md'), '# Active target changed\n', 'utf8');
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).resolves.toEqual({ migrated: false });
     });
 
     it('leaves the original intact when the copy step fails (copy-not-move)', async () => {
@@ -302,6 +519,52 @@ describe('vault registry', () => {
       // The legacy original must still be fully intact (copy-not-move).
       await expect(readFile(join(legacy, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
       await expect(readFile(join(legacy, 'notes', 'deep.md'), 'utf8')).resolves.toBe('deep content\n');
+      await expect(access(vaultsHome)).rejects.toBeTruthy();
+    });
+
+    it('never publishes an unverified partial vault after a failed migration', async () => {
+      const legacy = await seedLegacyVault();
+      const externalFile = join(home, 'external.md');
+      await symlink(externalFile, join(legacy, 'linked.md'));
+      const vaultsHome = join(home, 'vaults');
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/unsupported filesystem type/);
+      await expect(access(legacy)).resolves.toBeUndefined();
+      await expect(access(vaultsHome)).rejects.toBeTruthy();
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/unsupported filesystem type/);
+      await expect(access(legacy)).resolves.toBeUndefined();
+      await expect(access(vaultsHome)).rejects.toBeTruthy();
+    });
+
+    it('rejects a dangling vaults-home symlink without replacing it', async () => {
+      const legacy = await seedLegacyVault();
+      const vaultsHome = join(home, 'vaults');
+      const unavailableTarget = join(home, 'unavailable-storage', 'vaults');
+      await symlink(unavailableTarget, vaultsHome);
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/vaults target .*unsupported filesystem type/);
+      await expect(readFile(join(legacy, 'hello-world.md'), 'utf8')).resolves.toBe('# Hello\n');
+      expect((await lstat(vaultsHome)).isSymbolicLink()).toBe(true);
+      await expect(access(vaultsHome)).rejects.toBeTruthy();
+    });
+
+    it('rejects a dangling legacy-vault symlink instead of seeding a fresh vault', async () => {
+      const legacy = join(home, 'demo-vault');
+      const vaultsHome = join(home, 'vaults');
+      await symlink(join(home, 'unavailable-legacy-storage'), legacy);
+
+      await expect(
+        migrateLegacyVaultLayout({ legacyVaultDir: legacy, vaultsHome, targetSlug: 'demo-vault' })
+      ).rejects.toThrow(/legacy vault .*unsupported filesystem type/);
+      expect((await lstat(legacy)).isSymbolicLink()).toBe(true);
+      await expect(access(vaultsHome)).rejects.toBeTruthy();
     });
   });
 

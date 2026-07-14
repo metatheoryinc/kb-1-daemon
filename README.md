@@ -118,12 +118,58 @@ defaults to `~/.kb1`). Relay/tunnel runs from `KB1_RELAY_URL` plus
 attribution (`user` or `unknown`), and `KB1_HISTORY_COALESCE_WINDOW_MS`
 controls note-history commit coalescing.
 
-On first boot, legacy `~/.kb2` homes are copied into `~/.kb1`. Before removing
-the source, the daemon checks that every regular source file exists at the same
-relative path in the target with the same byte length. Symlinks and empty
-directories are not checked, and a pre-existing target may contain additional
-files. Make a separate backup first if you need content-level verification or a
-rollback copy. Runtime config is KB1-only.
+On first boot, legacy `~/.kb2` homes are copied into `~/.kb1`. Before activating
+the copy, the daemon verifies the directory structure and compares a SHA-256
+digest for every regular source file. A missing path, content mismatch, symlink,
+hard link, unsupported filesystem entry, or verification error aborts the
+migration and preserves the source path. After a successful migration, the
+complete legacy tree remains untouched at `~/.kb2` for rollback; the daemon
+never renames or deletes it. Stable full-tree manifests prove that both source
+and target remain unchanged through completion-marker publication. An atomic
+`.kb1-migration-complete-v1.json` marker in the verified
+target binds completion to the canonical source/target path pair and stable
+vault id when present. It records the migration-time source digest as evidence,
+but later boots do not require retained source content to stay frozen; both the
+retained source and active `.kb1` tree may evolve independently. If a complete
+home is restored at a new path, the supported daemon-home endpoint names and a
+matching portable migration-time source digest allow the marker alone to rebind
+atomically; the active target is never reconciled or overwritten. Missing proof
+fails closed with manual-recovery guidance. A pre-existing target, including an
+empty Docker volume mount, is reconciled by
+copying only missing entries through migration-owned staging; existing entries
+are never overwritten, must match byte-for-byte, and cannot grant broader POSIX
+permissions than the source; newly copied entries preserve restrictive modes.
+Privileged setuid, setgid, and sticky bits are stripped from daemon-owned copies.
+It may contain additional regular files and directories. Migration marker,
+temporary-marker, copy, lock, and staging names are reserved throughout the
+source tree and rejected before any target entry is published. A canonical
+source/target-pair lock serializes each migration. Locks are never auto-stolen
+after a crash: an existing lock, unverified temporary control entry, or non-empty
+interrupted stage is preserved and fails closed with manual-recovery guidance,
+while only an empty pre-manifest stage is removed.
+Portable aliases are checked across source and target before any missing entry
+is published. POSIX files use hard-link no-replace publication when available;
+filesystems without hard-link support fall back to exclusive creation, streamed
+copy, `fsync`, and byte verification without overwriting an existing path. On
+Windows, an ephemeral HMAC authenticates each staged move
+before files, directories, and the marker are published with write-through
+semantics; authentication or write-through failure aborts with the legacy
+source intact.
+On macOS, Node.js provides the standard `fsync` barrier but not Apple's
+`F_FULLFSYNC`; sudden whole-device power loss can therefore reorder drive-cache
+writes. The daemon keeps the complete `.kb2` source as the recovery authority
+and never deletes it, so verify that retained source (and your backup) before
+removing it manually.
+Migration requires exclusive filesystem control: stop legacy and target-side
+writers, sync tools, and backup restore jobs until the completion marker exists.
+Directory-inode checks reject detected path changes, and POSIX completion
+markers must have the effective user's ownership with no group/other write
+access. Windows relies on the user's private filesystem ACL and the same
+exclusive-writer boundary. Processes running as the same OS identity remain
+inside the user's trusted filesystem boundary. After completion, retained
+source and active target may evolve as described above.
+Keep the legacy writer stopped during this handoff; the daemon compares complete
+source manifests before and after final verification. Runtime config is KB1-only.
 
 ## Docker
 

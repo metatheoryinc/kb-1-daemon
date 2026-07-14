@@ -10,6 +10,6 @@ services:
       KB1_HOST: 0.0.0.0
       KB1_PORT: 7382
     ports:
-      - "17382:7382"
+      - "127.0.0.1:17382:7382"
     volumes:
       - ${KB1_DOCKER_HOST_HOME:-./.kb1-docker}:${KB1_DOCKER_CONTAINER_HOME:-/data/kb1}

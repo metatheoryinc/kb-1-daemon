@@ -8,7 +8,15 @@ const INTERNAL_VAULT_PATH_SEGMENTS = new Set([
   '.gitignore',
   '.gitmodules',
   '.kb1',
+  '.kb2',
+  '.kb1-migration-complete-v1.json',
 ]);
+const INTERNAL_VAULT_PATH_PREFIXES = [
+  '.kb1-migration-complete-v1.json.tmp-',
+  '.kb1-migration-copy-',
+  '.kb1-migration-lock-',
+  '.kb1-migration-staging-',
+];
 
 type VaultPathKind = 'file' | 'folder' | 'artifact';
 
@@ -50,7 +58,7 @@ export function validateVaultPath(input: string, kind: VaultPathKind): string {
     if (segment.length > MAX_SEGMENT_LENGTH) {
       throw new InvalidPathError(input, `segment exceeds ${MAX_SEGMENT_LENGTH} chars`);
     }
-    if (INTERNAL_VAULT_PATH_SEGMENTS.has(segment)) {
+    if (isInternalVaultPathSegment(segment)) {
       throw new InvalidPathError(input, `${segment} is reserved for vault metadata`);
     }
   }
@@ -73,7 +81,13 @@ export function validateOptionalVaultPath(input: string | undefined, kind: Vault
 
 export function isInternalVaultPath(input: string): boolean {
   if (input.length === 0) return false;
-  return input.split('/').some((segment) => INTERNAL_VAULT_PATH_SEGMENTS.has(segment));
+  return input.split('/').some(isInternalVaultPathSegment);
+}
+
+function isInternalVaultPathSegment(segment: string): boolean {
+  const canonical = segment.normalize('NFC').replace(/[ .]+$/u, '').toLowerCase();
+  return INTERNAL_VAULT_PATH_SEGMENTS.has(canonical)
+    || INTERNAL_VAULT_PATH_PREFIXES.some((prefix) => canonical.startsWith(prefix));
 }
 
 export function relativeDescendantPath(parent: string, child: string): string | null {

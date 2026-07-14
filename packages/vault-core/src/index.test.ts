@@ -70,6 +70,7 @@ describe("vault path validation", () => {
         segment !== "." &&
         segment !== ".." &&
         segment !== ".kb1" &&
+        segment !== ".kb2" &&
         !segment.includes("/") &&
         !segment.includes("\\"),
     );
@@ -101,6 +102,16 @@ describe("vault path validation", () => {
     ["folder/trailing.", "file"],
     [".kb1/audit.md", "file"],
     [".kb1/audit.bin", "artifact"],
+    [".kb2/vault.json", "file"],
+    ["notes/.kb2/audit.bin", "artifact"],
+    [".KB2/vault.json", "file"],
+    [".kb2./vault.json", "file"],
+    [".KB1 /audit.bin", "artifact"],
+    [".KB1-MIGRATION-COMPLETE-V1.JSON", "artifact"],
+    ["notes/.KB1-MIGRATION-COMPLETE-V1.JSON.TMP-backup", "artifact"],
+    [".KB1-MIGRATION-COPY-dead/copy/vault.json", "file"],
+    [".KB1-MIGRATION-LOCK-dead.json", "artifact"],
+    [".KB1-MIGRATION-STAGING-dead/copy/vault.json", "file"],
     [".git", "folder"],
     [".gitignore", "artifact"],
     [".gitattributes", "artifact"],
@@ -135,6 +146,13 @@ describe("vault path validation", () => {
     expect(isInternalVaultPath("notes/.git/COMMIT_EDITMSG")).toBe(true);
     expect(isInternalVaultPath(".gitignore")).toBe(true);
     expect(isInternalVaultPath("notes/.gitattributes")).toBe(true);
+    expect(isInternalVaultPath(".kb2/audit/changes.jsonl")).toBe(true);
+    expect(isInternalVaultPath(".KB2./audit/changes.jsonl")).toBe(true);
+    expect(isInternalVaultPath(".KB1-MIGRATION-COMPLETE-V1.JSON")).toBe(true);
+    expect(isInternalVaultPath("notes/.KB1-MIGRATION-COMPLETE-V1.JSON.TMP-backup")).toBe(true);
+    expect(isInternalVaultPath(".KB1-MIGRATION-COPY-dead/copy/vault.json")).toBe(true);
+    expect(isInternalVaultPath(".KB1-MIGRATION-LOCK-dead.json")).toBe(true);
+    expect(isInternalVaultPath(".KB1-MIGRATION-STAGING-dead/copy/vault.json")).toBe(true);
     expect(isInternalVaultPath("notes/.obsidian/config.json")).toBe(false);
   });
 
@@ -384,6 +402,8 @@ describe("vault-core filesystem operations", () => {
       "utf8",
     );
     await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
+    await mkdir(path.join(root, ".kb2"), { recursive: true });
+    await writeFile(path.join(root, ".kb2", "vault.json"), "{}\n", "utf8");
     await expect(
       readVaultRawFile(ctx, ".git/COMMIT_EDITMSG"),
     ).resolves.toMatchObject({
@@ -391,6 +411,14 @@ describe("vault-core filesystem operations", () => {
       error: "invalid_path",
     });
     await expect(readVaultRawFile(ctx, ".gitignore")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(readVaultRawFile(ctx, ".kb2/vault.json")).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(readVaultRawFile(ctx, ".KB2/vault.json")).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
     });
@@ -1023,6 +1051,41 @@ describe("vault-core filesystem operations", () => {
     await writeFile(path.join(root, ".gitignore"), "*\n", "utf8");
     await writeFile(path.join(root, ".gitattributes"), "* text=auto\n", "utf8");
     await writeFile(path.join(root, ".gitmodules"), "[submodule]\n", "utf8");
+    await mkdir(path.join(root, ".kb2", "audit"), { recursive: true });
+    await writeFile(
+      path.join(root, ".kb2", "audit", "changes.jsonl"),
+      "legacy internal metadata\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, ".kb1-migration-staging-dead", "copy"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(root, ".kb1-migration-staging-dead", "copy", "vault.json"),
+      "staged internal metadata\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-complete-v1.json"),
+      "completion control state\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-complete-v1.json.tmp-backup"),
+      "temporary control state\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, ".kb1-migration-copy-dead"), { recursive: true });
+    await writeFile(
+      path.join(root, ".kb1-migration-copy-dead", "copy.md"),
+      "copy control state\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-lock-dead.json"),
+      "migration lock control state\n",
+      "utf8",
+    );
 
     const tree = await listVaultTree(ctx);
     expect(tree.ok).toBe(true);
@@ -1032,7 +1095,16 @@ describe("vault-core filesystem operations", () => {
     expect(paths).toEqual(["normal.md", "notes"]);
     expect(paths.some((entryPath) => entryPath.startsWith(".git"))).toBe(false);
     expect(paths.some((entryPath) => entryPath.startsWith(".gitattributes"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".kb2"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".kb1-migration-complete-"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".kb1-migration-copy-"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".kb1-migration-lock-"))).toBe(false);
+    expect(paths.some((entryPath) => entryPath.startsWith(".kb1-migration-staging-"))).toBe(false);
     await expect(listVaultTree(ctx, { under: ".git" })).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_path",
+    });
+    await expect(listVaultTree(ctx, { under: ".kb2" })).resolves.toMatchObject({
       ok: false,
       error: "invalid_path",
     });
@@ -2023,6 +2095,41 @@ describe("scan search", () => {
       "target attributes\n",
       "utf8",
     );
+    await mkdir(path.join(root, ".kb2", "audit"), { recursive: true });
+    await writeFile(
+      path.join(root, ".kb2", "audit", "changes.jsonl"),
+      "target legacy metadata\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, ".kb1-migration-staging-dead", "copy"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(root, ".kb1-migration-staging-dead", "copy", "vault.json"),
+      "target staged metadata\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-complete-v1.json"),
+      "target completion control state\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-complete-v1.json.tmp-backup"),
+      "target temporary control state\n",
+      "utf8",
+    );
+    await mkdir(path.join(root, ".kb1-migration-copy-dead"), { recursive: true });
+    await writeFile(
+      path.join(root, ".kb1-migration-copy-dead", "copy.md"),
+      "target copy control state\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, ".kb1-migration-lock-dead.json"),
+      "target migration lock control state\n",
+      "utf8",
+    );
 
     const result = await searchVaultFiles(root, {
       q: "target",
@@ -2038,6 +2145,21 @@ describe("scan search", () => {
     expect(result.results.some((hit) => hit.path.startsWith(".git"))).toBe(
       false,
     );
+    expect(result.results.some((hit) => hit.path.startsWith(".kb2"))).toBe(
+      false,
+    );
+    expect(
+      result.results.some((hit) => hit.path.startsWith(".kb1-migration-complete-")),
+    ).toBe(false);
+    expect(
+      result.results.some((hit) => hit.path.startsWith(".kb1-migration-copy-")),
+    ).toBe(false);
+    expect(
+      result.results.some((hit) => hit.path.startsWith(".kb1-migration-lock-")),
+    ).toBe(false);
+    expect(
+      result.results.some((hit) => hit.path.startsWith(".kb1-migration-staging-")),
+    ).toBe(false);
     expect(
       result.results.every(
         (hit) =>
