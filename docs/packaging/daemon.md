@@ -54,59 +54,11 @@ Internally the tunnel client appends `/__kb1_tunnel/control` and
 paths, not routes served by the daemon.
 
 For in-place upgrades, first boot copies legacy `~/.kb2` homes into `~/.kb1`.
-Before activating the copy, the daemon verifies the directory structure and
-compares a SHA-256 digest for every regular source file. A missing path, content
-mismatch, symlink, hard link, unsupported filesystem entry, or verification
-error aborts the migration and preserves the source path. After a successful
-migration, the complete legacy tree remains untouched at `~/.kb2` for rollback;
-the daemon never renames or deletes it. Stable full-tree manifests prove that
-both source and target remain unchanged through completion-marker publication.
-An atomic `.kb1-migration-complete-v1.json` marker inside the verified target
-binds the handoff to the canonical source/target path pair and stable vault id
-when present. It retains the migration-time source digest as evidence, but later
-boots neither require retained source content to remain frozen nor compare the
-active `.kb1` tree against that snapshot. A complete-home restore to a new path
-can atomically rebind only the marker when the supported daemon-home endpoint
-names and the portable migration-time source digest match; it never reconciles
-or overwrites the active target, and missing proof fails closed with
-manual-recovery guidance. A pre-existing target is reconciled by filling only
-missing entries through migration-owned staging;
-existing entries are never overwritten and must match byte-for-byte. This also
-handles an empty `/data/kb1` directory pre-created by a Docker bind mount or
-named volume. Restrictive POSIX modes are preserved for missing entries, and an
-existing copy with broader permissions fails closed. Setuid, setgid, and sticky
-bits are stripped from daemon-owned copies. Additional regular files
-and directories are allowed. The daemon
-flushes the verified target tree and its directory entries before making the
-marker durable. On Windows it publishes each new file, directory, and marker via
-`MoveFileExW` with write-through after authenticating every manifest operation
-with an ephemeral HMAC; authentication failure or an unavailable write-through
-operation aborts with the source intact. Marker, temporary-marker,
-copy, lock, and staging namespaces are reserved at every source depth and
-validated before publication. A canonical source/target-pair lock serializes
-migration and is never auto-stolen. An existing lock, unverified temporary
-control entry, or non-empty interrupted stage is preserved and fails closed with
-manual-recovery guidance; only an empty pre-manifest pair-owned stage is removed
-automatically. Keep
-the legacy writer stopped (or mount the
-source read-only) during the handoff: complete source manifests are compared
-before and after final verification, and portable filename collisions within or
-across source and target fail closed before publication.
-On POSIX, hard-link no-replace publication is used when available. Storage
-without hard-link support uses an exclusive-create, streamed-copy, `fsync`, and
-byte-verification fallback that never overwrites an existing path.
-On macOS, Node.js exposes standard `fsync`, not Apple's `F_FULLFSYNC`, so sudden
-whole-device power loss may reorder drive-cache writes despite those barriers.
-The daemon never deletes the complete `.kb2` source; treat it as the recovery
-authority and verify it (and your backup) before removing it manually.
-Give migration exclusive filesystem control: stop legacy and target writers,
-sync tools, and restore jobs until the completion marker exists.
-Directory-inode checks reject detected path changes. On POSIX, completion
-markers must also have the effective user's ownership and no group/other write
-access; Windows instead relies on the user's private filesystem ACL and the same
-exclusive-writer boundary. Same-OS-identity processes share the user's trusted
-filesystem boundary. Later source and target evolution is allowed after
-completion.
+Before removing the source, the daemon checks that every regular source file
+exists at the same relative path in the target with the same byte length.
+Symlinks and empty directories are not checked, and a pre-existing target may
+contain additional files. Operators should make a separate backup first when
+they need content-level verification or a rollback copy.
 The daemon does not honor `KB2_*` environment variables; runtime configuration is
 KB1-only.
 
@@ -172,10 +124,7 @@ inside the container. The daemon status file is therefore visible at:
 
 For in-place upgrades from the old Docker data path, keep the legacy data mounted
 at `/data/kb2` for the first boot and keep `KB1_HOME=/data/kb1`. The daemon
-copies and verifies the legacy input before running from `/data/kb1`, writes the
-completion marker in `/data/kb1`, and leaves `/data/kb2` untouched. A legacy
-named volume can therefore remain mounted directly at `/data/kb2` (and may be
-mounted read-only); no sibling rename is required.
+copies, verifies, and removes the legacy input before running from `/data/kb1`.
 
 Compose builds the daemon image and runs the compiled `dist/main.js` inside the
 container. Source is copied into the image during `docker compose up --build`;

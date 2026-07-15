@@ -1,5 +1,5 @@
-import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 
 import { DocumentSessionManager } from '@kb-1/doc-session';
 import { createVaultService, type VaultChangeEvent, type VaultService } from '@kb-1/vault-service';
@@ -7,18 +7,7 @@ import { normalizeFolderMetadataColor, type VaultActor } from '@kb-1/vault-core'
 import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
-import {
-  acquireMigrationLock,
-  cleanupMigrationStagingDirectories,
-  createPublishedDirectory,
-  createMigrationStagingDirectory,
-  isMigrationCompletionRecorded,
-  migrateDirectoryCopyVerifyPreserve,
-  reconcileDirectoryCopy,
-  recordMigrationCompletion,
-  validateMigrationSourceTree,
-  verifyCopy
-} from './migrations.js';
+import { migrateDirectoryCopyVerifyCleanup, verifyCopy } from './migrations.js';
 
 const VAULT_IDENTITY_DIR = '.kb1';
 const LEGACY_VAULT_IDENTITY_DIR = '.kb2';
@@ -140,51 +129,44 @@ export async function readOrMintVaultIdentity(vaultRoot: string, folderName: str
 async function migrateLegacyVaultMetadata(vaultRoot: string): Promise<{ migrated: boolean }> {
   const source = legacyIdentityDir(vaultRoot);
   const target = identityDir(vaultRoot);
-  const sourceInfo = await lstatIfExists(source);
 
-  if (!sourceInfo) {
+  if (!(await isDirectory(source))) {
     return { migrated: false };
   }
-  if (!sourceInfo.isDirectory()) {
-    throw new Error(
-      `Migration verification failed: legacy metadata ${source} has an unsupported filesystem type; source preserved.`
-    );
+
+  if (!(await pathExists(target))) {
+    return migrateDirectoryCopyVerifyCleanup({ source, target });
   }
 
-  return migrateDirectoryCopyVerifyPreserve({
-    source,
-    target,
-    sourceIdentityScope: 'metadata-directory',
-    validateExistingTarget: validateExistingVaultMetadataMigration
-  });
+  await reconcileExistingVaultMetadataMigration(source, target);
+  await rm(source, { recursive: true, force: true });
+  return { migrated: false };
 }
 
-async function validateExistingVaultMetadataMigration(source: string, target: string): Promise<void> {
-  await validateMigrationSourceTree(source);
-  const sourceIdentity = join(source, VAULT_IDENTITY_FILE);
-  const targetIdentity = join(target, VAULT_IDENTITY_FILE);
-  const [sourceIdentityInfo, targetIdentityInfo] = await Promise.all([
-    lstatIfExists(sourceIdentity),
-    lstatIfExists(targetIdentity)
-  ]);
-  if (targetIdentityInfo) {
-    if (!targetIdentityInfo.isFile()) {
-      throw new Error(
-        `Migration verification failed: ${VAULT_IDENTITY_FILE} is not a regular file in the copy; source preserved.`
-      );
-    }
-  }
-  if (sourceIdentityInfo) {
-    if (!sourceIdentityInfo.isFile()) {
-      throw new Error(
-        `Migration verification failed: legacy ${VAULT_IDENTITY_FILE} is not a regular file; source preserved.`
-      );
-    }
-    if (targetIdentityInfo) {
-      await assertSameVaultIdentity(sourceIdentity, targetIdentity);
-    }
-  }
+async function reconcileExistingVaultMetadataMigration(source: string, target: string): Promise<void> {
+  const files = await listRelativeFiles(source);
+  for (const relPath of files) {
+    const sourceFile = join(source, relPath);
+    const targetFile = join(target, relPath);
 
+    if (!(await pathExists(targetFile))) {
+      await mkdir(dirname(targetFile), { recursive: true });
+      await copyFile(sourceFile, targetFile);
+      continue;
+    }
+
+    if (relPath === VAULT_IDENTITY_FILE) {
+      await assertSameVaultIdentity(sourceFile, targetFile);
+      continue;
+    }
+
+    const [sourceInfo, targetInfo] = await Promise.all([stat(sourceFile), stat(targetFile)]);
+    if (sourceInfo.size !== targetInfo.size) {
+      throw new Error(
+        `Migration verification failed: ${relPath} size mismatch (source ${sourceInfo.size}, copy ${targetInfo.size}).`
+      );
+    }
+  }
 }
 
 async function assertSameVaultIdentity(sourceFile: string, targetFile: string): Promise<void> {
@@ -198,15 +180,23 @@ async function assertSameVaultIdentity(sourceFile: string, targetFile: string): 
   }
 }
 
-async function lstatIfExists(path: string): Promise<import('node:fs').Stats | undefined> {
-  try {
-    return await lstat(path);
-  } catch (error) {
-    if (isNodeErrorCode(error, 'ENOENT')) {
-      return undefined;
+async function listRelativeFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(abs);
+      } else if (entry.isFile()) {
+        files.push(relative(root, abs));
+      }
     }
-    throw error;
   }
+
+  await walk(root);
+  return files;
 }
 
 /** Persist a vault's identity to `<vault>/.kb1/vault.json`, creating `.kb1` if needed. */
@@ -272,11 +262,8 @@ function parseVaultMetadata(value: unknown, file: string): VaultMetadata | undef
 /**
  * Migrate the legacy single-vault layout (`<home>/<legacyDirname>/`) into the
  * registry layout (`<home>/vaults/<legacyDirname>/`) using copy -> verify ->
- * preserve so an interrupted run never loses the original. The verified target
- * paths are reserved without replacement, then filled from per-entry staging.
- * An interrupted partial target is verified and safely resumed on retry.
- * Idempotent: a no-op once completion is recorded or the legacy directory is
- * gone.
+ * cleanup so an interrupted run never loses the original. Idempotent: a no-op
+ * once `<home>/vaults/` exists or the legacy directory is gone.
  */
 export async function migrateLegacyVaultLayout(options: {
   legacyVaultDir: string;
@@ -284,102 +271,28 @@ export async function migrateLegacyVaultLayout(options: {
   targetSlug: string;
 }): Promise<{ migrated: boolean }> {
   const { legacyVaultDir, vaultsHome, targetSlug } = options;
-  const initialLegacyVaultInfo = await lstatIfExists(legacyVaultDir);
-  if (!initialLegacyVaultInfo) {
-    return { migrated: false };
-  }
-  if (!initialLegacyVaultInfo.isDirectory()) {
-    throw new Error(
-      `Migration verification failed: legacy vault ${legacyVaultDir} has an unsupported filesystem type; source preserved.`
-    );
-  }
 
-  const migrationLock = await acquireMigrationLock(legacyVaultDir, vaultsHome);
-  try {
-    return await migrateLegacyVaultLayoutLocked({ legacyVaultDir, vaultsHome, targetSlug });
-  } finally {
-    await migrationLock.release();
-  }
-}
-
-async function migrateLegacyVaultLayoutLocked(options: {
-  legacyVaultDir: string;
-  vaultsHome: string;
-  targetSlug: string;
-}): Promise<{ migrated: boolean }> {
-  const { legacyVaultDir, vaultsHome, targetSlug } = options;
-  await cleanupMigrationStagingDirectories(legacyVaultDir, vaultsHome);
-  const vaultsHomeInfo = await lstatIfExists(vaultsHome);
-
-  if (vaultsHomeInfo) {
-    if (!vaultsHomeInfo.isDirectory()) {
-      throw new Error(
-        `Migration verification failed: vaults target ${vaultsHome} has an unsupported filesystem type; source preserved.`
-      );
-    }
-  }
-
-  const legacyVaultInfo = await lstatIfExists(legacyVaultDir);
-  if (!legacyVaultInfo?.isDirectory()) {
-    throw new Error(
-      `Migration verification failed: legacy vault ${legacyVaultDir} disappeared or changed filesystem type while acquiring its exclusive lock; recover manually.`
-    );
-  }
-
-  if (vaultsHomeInfo) {
-    if (await isMigrationCompletionRecorded(legacyVaultDir, vaultsHome, 'vault-root')) {
-      return { migrated: false };
-    }
-
-    const target = join(vaultsHome, targetSlug);
-    const targetInfo = await lstatIfExists(target);
-    if (!targetInfo) {
-      // An empty pre-created vaults directory is the single-vault equivalent of
-      // a mounted empty daemon home. Refuse to choose a destination implicitly
-      // when other registry entries already exist.
-      const registryEntries = await readdir(vaultsHome, { withFileTypes: true });
-      if (registryEntries.some((entry) => entry.isDirectory())) {
-        await validateMigrationSourceTree(legacyVaultDir);
-        await verifyCopy(legacyVaultDir, target);
-        return { migrated: false };
-      }
-      await validateMigrationSourceTree(legacyVaultDir);
-      const stagingRoot = await createMigrationStagingDirectory(legacyVaultDir, vaultsHome);
-      try {
-        await createPublishedDirectory(target, stagingRoot, legacyVaultInfo.mode);
-      } finally {
-        await rm(stagingRoot, { recursive: true, force: true });
-      }
-    }
-
-    await reconcileDirectoryCopy(legacyVaultDir, target);
-    await recordMigrationCompletion(legacyVaultDir, vaultsHome, target, 'vault-root');
+  if (await pathExists(vaultsHome)) {
     return { migrated: false };
   }
 
-  // Validate every source path, including the reserved migration-control
-  // namespace, before publishing any part of the new registry layout.
-  await validateMigrationSourceTree(legacyVaultDir);
-
-  const publicationStagingRoot = process.platform === 'win32'
-    ? await createMigrationStagingDirectory(legacyVaultDir, vaultsHome)
-    : undefined;
-  try {
-    // Reserve each destination with no-replace mkdir/MoveFileExW, then fill
-    // only missing entries. An interruption may leave a visible partial target,
-    // but the retained source plus byte verification make the next retry safe.
-    await createPublishedDirectory(vaultsHome, publicationStagingRoot);
-    const target = join(vaultsHome, targetSlug);
-    await createPublishedDirectory(target, publicationStagingRoot, legacyVaultInfo.mode);
-    await reconcileDirectoryCopy(legacyVaultDir, target);
-    await verifyCopy(legacyVaultDir, target);
-    await recordMigrationCompletion(legacyVaultDir, vaultsHome, target, 'vault-root');
-    return { migrated: true };
-  } finally {
-    if (publicationStagingRoot) {
-      await rm(publicationStagingRoot, { recursive: true, force: true });
-    }
+  if (!(await isDirectory(legacyVaultDir))) {
+    return { migrated: false };
   }
+
+  const target = join(vaultsHome, targetSlug);
+  await mkdir(vaultsHome, { recursive: true });
+
+  // COPY: copy-not-move so the original survives an interrupted run.
+  await cp(legacyVaultDir, target, { recursive: true });
+
+  // VERIFY: file set + sizes must match before we delete anything.
+  await verifyCopy(legacyVaultDir, target);
+
+  // CLEANUP: only after a verified copy.
+  await rm(legacyVaultDir, { recursive: true, force: true });
+
+  return { migrated: true };
 }
 
 /**
@@ -790,6 +703,17 @@ async function pathExists(target: string): Promise<boolean> {
   try {
     await stat(target);
     return true;
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
   } catch (error) {
     if (isNodeErrorCode(error, 'ENOENT')) {
       return false;

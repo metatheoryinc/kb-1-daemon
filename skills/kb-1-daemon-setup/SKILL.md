@@ -68,49 +68,13 @@ Defaults:
 - MCP endpoint: `http://127.0.0.1:7382/mcp`
 
 For a default-path in-place upgrade, first boot copies existing `$HOME/.kb2`
-daemon data into `$HOME/.kb1`, then verifies the copied directory structure and
-compares a SHA-256 digest for every regular source file before activating the
-copy. A missing path, content mismatch, symlink, hard link, unsupported
-filesystem entry, or verification error aborts the migration and preserves the
-source path. After a successful migration, the complete legacy tree remains
-untouched at `$HOME/.kb2` for rollback; the daemon never renames or deletes it.
-Stable full-tree manifests prove that source and target remain unchanged through
-completion-marker publication. An atomic
-`.kb1-migration-complete-v1.json` marker in the verified target binds completion
-to the canonical source/target path pair and stable vault id when present. It
-records the migration-time source digest as evidence, while later boots allow
-both retained source content and the active target to evolve. A full-home
-restore at a new path may atomically rebind only the marker when the supported
-daemon-home endpoint names and the portable migration-time digest match; active
-target content is never reconciled or overwritten, and missing proof fails
-closed with manual recovery guidance. A pre-existing target may contain
-additional regular files and directories. Missing entries are copied through
-migration-owned staging without overwriting existing data, including
-when a Docker mount pre-creates an empty target. Existing entries must match
-byte-for-byte and cannot have broader POSIX permissions than the source; missing
-entries preserve restrictive modes while setuid, setgid, and sticky bits are
-stripped from daemon-owned copies. Marker, temporary-marker, copy, lock, and
-staging names are reserved at every source depth before publication. A canonical
-source/target-pair lock is never auto-stolen. An existing lock, unverified
-temporary control entry, or non-empty interrupted stage is preserved and fails
-closed with manual-recovery guidance; only an empty pre-manifest pair-owned
-stage is removed automatically. Cross-tree
-portable aliases fail before publication. Windows authenticates each staged move
-with an ephemeral HMAC before publishing files, directories, and the completion
-marker with write-through; failure aborts migration with `$HOME/.kb2` intact.
-POSIX filesystems without hard-link support use exclusive creation, streamed
-copy, `fsync`, and byte verification without overwriting existing paths.
-On macOS, Node.js provides standard `fsync` but not Apple's `F_FULLFSYNC`, so a
-sudden whole-device power loss can reorder drive-cache writes. The daemon keeps
-the complete `$HOME/.kb2` source and never deletes it; verify that source and a
-backup before removing it manually.
-Stop legacy and target writers, sync tools, and restore jobs during migration.
-Directory-inode checks fail closed on detected replacement. On POSIX,
-completion markers must also have the effective user's ownership and no
-group/other write access; Windows instead relies on the user's private
-filesystem ACL and the same exclusive-writer boundary. Same-OS-identity
-processes share the user's trusted filesystem boundary. After completion,
-retained source and active target may evolve independently.
+daemon data into `$HOME/.kb1`, then checks that every regular source file exists
+there at the same relative path with the same byte length before removing the
+legacy source. Symlinks and empty directories are not checked, and this is not a
+content hash comparison. If `$HOME/.kb1` already exists, a missing source path
+or size mismatch aborts the migration and preserves the source. Back up
+`$HOME/.kb2` separately before first boot if you want content-level verification
+or a rollback copy.
 
 The installer writes the current `kb1d.service` or
 `dev.metatheory.kb1.kb1d` definition. If discovery found an old `kb2d` service

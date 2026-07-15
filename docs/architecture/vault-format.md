@@ -165,56 +165,7 @@ migrated vaults are not re-seeded.
 Legacy `.kb2` home directories and the old single-vault layout are migration
 inputs only. On boot, the daemon migrates them into the KB-1 home and
 `KB1_HOME/vaults/<slug>/` layout, then serves from `.kb1` paths. Runtime
-configuration is `KB1_*`; `KB2_*` env vars are ignored. Migration is copy-first:
-the daemon validates the copied directory structure and the SHA-256 digest of
-every regular source file before activating the target. Any mismatch, hard link,
-unsupported filesystem entry, or verification error fails closed and preserves
-the source path. A successful migration leaves the complete legacy tree at its
-original path and atomically records completion in the verified target. Stable
-full-tree manifests prove that source and target stay unchanged through marker
-publication. The marker binds to the canonical source/target path pair and
-stable vault id when present, while its migration-time source digest is evidence
-rather than an ongoing immutability requirement. A relocated full-home restore
-may atomically rebind only that marker when the supported daemon-home endpoint
-names and the portable digest match; it never reconciles active target content,
-and missing proof fails closed. This supports directly mounted legacy homes and
-lets the active target evolve without
-re-running the legacy comparison on every boot. Retained per-vault `.kb2`
-metadata plus marker, temporary-marker, copy, lock, and staging namespaces are
-reserved, including case-insensitive filesystem aliases, from listing, search,
-raw-file access, and mutation APIs. The complete source namespace is validated
-before any target entry is published. A pre-existing empty target (for example,
-a mounted Docker volume) and an interrupted verified subset are reconciled by
-adding only missing entries; existing content is never overwritten. The copied
-entries preserve restrictive POSIX permission modes, and existing entries with
-broader permissions fail closed. Daemon-owned copies strip setuid, setgid, and
-sticky bits. The copied tree and directory entries are
-flushed before the completion marker is committed; Windows publishes every new
-entry with write-through after authenticating its move with an ephemeral HMAC,
-and a canonical source/target-pair lock serializes migration. Existing locks
-are never auto-stolen; a stale lock, unverified temporary control entry, or
-non-empty interrupted stage is preserved and fails closed with manual-recovery
-guidance. Only an empty pair-owned stage that never received a manifest is
-removed automatically. The source must
-remain quiescent through the handoff: full before/after manifests detect
-concurrent changes, and within-tree or cross-tree names that collide under
-case-folding, Unicode normalization, or Windows trailing-dot/space rules are
-rejected before publication.
-On POSIX, missing files use hard-link no-replace publication when supported and
-an exclusive-create, streamed-copy, `fsync`, and byte-verification fallback on
-filesystems without hard links; neither path overwrites an existing entry.
-On macOS these barriers use Node.js standard `fsync`; Node does not expose
-Apple's `F_FULLFSYNC`, so sudden whole-device power loss can still reorder
-drive-cache writes. The complete retained `.kb2` source remains the recovery
-authority and is never deleted by the daemon.
-The handoff requires exclusive filesystem control: legacy and target-side
-writers, sync agents, and restore jobs must be stopped until completion is
-recorded. Directory-inode checks fail closed on detected path replacement. On
-POSIX, completion markers must also have the effective user's ownership and no
-group/other write access; Windows instead relies on the user's private
-filesystem ACL and the same exclusive-writer boundary. Same-OS-identity
-processes share the user's trusted filesystem boundary; later source/target
-evolution remains allowed after a valid marker exists.
+configuration is `KB1_*`; `KB2_*` env vars are ignored.
 
 ## Open Questions
 

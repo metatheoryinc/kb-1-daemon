@@ -10,7 +10,6 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
 import { isDaemonCliEntrypoint, startDaemon } from './main.js';
-import { MIGRATION_COMPLETION_FILENAME } from './migrations.js';
 
 describe('daemon startup', () => {
   let kb1Home: string;
@@ -262,11 +261,6 @@ describe('daemon boot migration', () => {
     const legacyVaultRoot = join(legacyHome, 'vaults', 'demo-vault');
     await mkdir(join(legacyHome, 'daemon'), { recursive: true });
     await writeFile(join(legacyHome, 'daemon', 'legacy-marker.txt'), 'legacy daemon data\n', 'utf8');
-    await writeFile(
-      join(legacyHome, 'vault.json'),
-      '{"ordinary":"whole-home user artifact without a vault id"}\n',
-      'utf8'
-    );
     await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
     await writeFile(join(legacyVaultRoot, 'notes', 'from-old-home.md'), 'from old home\n', 'utf8');
 
@@ -279,24 +273,14 @@ describe('daemon boot migration', () => {
 
     const firstBoot = await startDaemon({ homeDir });
     expect(firstBoot.config.kb1Home).toBe(migratedHome);
-    await expect(readFile(join(legacyHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
-      'legacy daemon data\n'
-    );
+    await expect(access(legacyHome)).rejects.toBeTruthy();
     await expect(readFile(join(migratedHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
       'legacy daemon data\n'
     );
-    await expect(readFile(join(migratedHome, 'vault.json'), 'utf8')).resolves.toBe(
-      '{"ordinary":"whole-home user artifact without a vault id"}\n'
-    );
-    await expect(access(join(migratedHome, MIGRATION_COMPLETION_FILENAME))).resolves.toBeUndefined();
     await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
       'from old home\n'
     );
     await firstBoot.close();
-
-    // The active target can evolve independently after the verified handoff;
-    // the durable marker prevents a later boot from treating that as corruption.
-    await writeFile(join(migratedHome, 'daemon', 'legacy-marker.txt'), 'active daemon data\n', 'utf8');
 
     const secondPort = await reservePort();
     process.env = {
@@ -306,60 +290,11 @@ describe('daemon boot migration', () => {
     };
     const secondBoot = await startDaemon({ homeDir });
     expect(secondBoot.config.kb1Home).toBe(migratedHome);
-    await expect(readFile(join(legacyHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
-      'legacy daemon data\n'
-    );
-    await expect(readFile(join(migratedHome, 'daemon', 'legacy-marker.txt'), 'utf8')).resolves.toBe(
-      'active daemon data\n'
-    );
+    await expect(access(legacyHome)).rejects.toBeTruthy();
     await expect(readFile(join(migratedHome, 'vaults', 'demo-vault', 'notes', 'from-old-home.md'), 'utf8')).resolves.toBe(
       'from old home\n'
     );
     await secondBoot.close();
-  });
-
-  it('fails closed and preserves .kb2 when an existing .kb1 file has different same-length content', async () => {
-    const homeDir = join(kb1Home, 'user-home');
-    const legacyHome = join(homeDir, '.kb2');
-    const migratedHome = join(homeDir, '.kb1');
-    await mkdir(join(legacyHome, 'daemon'), { recursive: true });
-    await mkdir(join(migratedHome, 'daemon'), { recursive: true });
-    await writeFile(join(legacyHome, 'daemon', 'state.txt'), 'old-data\n', 'utf8');
-    await writeFile(join(migratedHome, 'daemon', 'state.txt'), 'new-data\n', 'utf8');
-
-    const port = await reservePort();
-    process.env = {
-      ...originalEnv,
-      KB1_HOST: '127.0.0.1',
-      KB1_PORT: String(port)
-    };
-
-    await expect(startDaemon({ homeDir })).rejects.toThrow(/state\.txt content mismatch/);
-    await expect(readFile(join(legacyHome, 'daemon', 'state.txt'), 'utf8')).resolves.toBe('old-data\n');
-    await expect(readFile(join(migratedHome, 'daemon', 'state.txt'), 'utf8')).resolves.toBe('new-data\n');
-  });
-
-  it('fails closed instead of seeding a fresh vault when the legacy .kb2 home is a symlink', async () => {
-    const homeDir = join(kb1Home, 'user-home');
-    const legacyStorage = join(kb1Home, 'legacy-storage');
-    const legacyHome = join(homeDir, '.kb2');
-    const migratedHome = join(homeDir, '.kb1');
-    await mkdir(join(legacyStorage, 'daemon'), { recursive: true });
-    await mkdir(homeDir, { recursive: true });
-    await writeFile(join(legacyStorage, 'daemon', 'state.txt'), 'legacy\n', 'utf8');
-    await symlink(legacyStorage, legacyHome);
-
-    const port = await reservePort();
-    process.env = {
-      ...originalEnv,
-      KB1_HOST: '127.0.0.1',
-      KB1_PORT: String(port)
-    };
-
-    await expect(startDaemon({ homeDir })).rejects.toThrow(/legacy source .*unsupported filesystem type/);
-    await expect(readFile(join(legacyStorage, 'daemon', 'state.txt'), 'utf8')).resolves.toBe('legacy\n');
-    await expect(access(legacyHome)).resolves.toBeUndefined();
-    await expect(access(migratedHome)).rejects.toBeTruthy();
   });
 
   it('migrates a Docker-style sibling kb2 home to an explicit kb1 home and is idempotent', async () => {
@@ -371,9 +306,6 @@ describe('daemon boot migration', () => {
     await writeFile(join(legacyHome, 'daemon', 'docker-marker.txt'), 'legacy docker data\n', 'utf8');
     await mkdir(join(legacyVaultRoot, 'notes'), { recursive: true });
     await writeFile(join(legacyVaultRoot, 'notes', 'from-docker-home.md'), 'from docker home\n', 'utf8');
-    // A bind mount or named volume materializes /data/kb1 before the process
-    // starts, even on the first migration boot.
-    await mkdir(targetHome, { recursive: true });
 
     const firstPort = await reservePort();
     const firstBoot = await startDaemon({
@@ -387,9 +319,7 @@ describe('daemon boot migration', () => {
     });
 
     expect(firstBoot.config.kb1Home).toBe(targetHome);
-    await expect(readFile(join(legacyHome, 'daemon', 'docker-marker.txt'), 'utf8')).resolves.toBe(
-      'legacy docker data\n'
-    );
+    await expect(access(legacyHome)).rejects.toBeTruthy();
     await expect(readFile(join(targetHome, 'daemon', 'docker-marker.txt'), 'utf8')).resolves.toBe(
       'legacy docker data\n'
     );
@@ -410,9 +340,7 @@ describe('daemon boot migration', () => {
     });
 
     expect(secondBoot.config.kb1Home).toBe(targetHome);
-    await expect(readFile(join(legacyHome, 'daemon', 'docker-marker.txt'), 'utf8')).resolves.toBe(
-      'legacy docker data\n'
-    );
+    await expect(access(legacyHome)).rejects.toBeTruthy();
     await expect(readFile(join(targetHome, 'vaults', 'demo-vault', 'notes', 'from-docker-home.md'), 'utf8')).resolves.toBe(
       'from docker home\n'
     );
@@ -433,12 +361,9 @@ describe('daemon boot migration', () => {
     const started = await startDaemon();
     const vaultRoot = started.config.vaultRoot;
 
-    // The migrated vault lives under <home>/vaults/<slug>/ and the legacy root
-    // remains untouched as rollback input.
+    // The migrated vault lives under <home>/vaults/<slug>/ and the legacy root is gone.
     expect(vaultRoot).toBe(join(kb1Home, 'vaults', 'demo-vault'));
-    await expect(readFile(join(kb1Home, 'demo-vault', SEEDED_NOTES[0].path), 'utf8')).resolves.toBe(
-      SEEDED_NOTES[0].content
-    );
+    await expect(access(join(kb1Home, 'demo-vault'))).rejects.toBeTruthy();
 
     // Data-safety: every seeded note, including the nested one, survives byte-for-byte.
     for (const note of SEEDED_NOTES) {
@@ -487,11 +412,9 @@ describe('daemon boot migration', () => {
     const secondBoot = await startDaemon();
     expect(secondBoot.config.vaultRoot).toBe(vaultRoot);
 
-    // The retained legacy root and active identity are byte-for-byte unchanged
+    // The legacy root is not recreated, and the identity is byte-for-byte identical
     // (the slug is read back, never recomputed).
-    await expect(readFile(join(kb1Home, 'demo-vault', SEEDED_NOTES[0].path), 'utf8')).resolves.toBe(
-      SEEDED_NOTES[0].content
-    );
+    await expect(access(join(kb1Home, 'demo-vault'))).rejects.toBeTruthy();
     await expect(readFile(identityFile, 'utf8')).resolves.toBe(identityAfterFirstBoot);
 
     // Every note is still present with its original content unchanged.

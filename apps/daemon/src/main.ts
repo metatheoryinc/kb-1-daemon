@@ -28,7 +28,7 @@ import {
   type DaemonConfig,
   type ResolveConfigOptions
 } from './config.js';
-import { migrateDirectoryCopyVerifyPreserve } from './migrations.js';
+import { migrateDirectoryCopyVerifyCleanup } from './migrations.js';
 import { writeDaemonStatus, type DaemonStatus } from './status.js';
 import {
   migrateLegacyVaultLayout,
@@ -67,7 +67,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
 
   await migrateLegacyDaemonHome(config.kb1Home);
 
-  // Boot migration: copy -> verify -> preserve the legacy single-vault layout.
+  // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
   await migrateLegacyVaultLayout({
     legacyVaultDir: join(config.kb1Home, LEGACY_VAULT_DIRNAME),
     vaultsHome: config.vaultsHome,
@@ -213,10 +213,9 @@ async function migrateLegacyDaemonHome(kb1Home: string): Promise<void> {
   const legacyHome = legacyDaemonHomeFor(kb1Home);
   if (!legacyHome) return;
 
-  await migrateDirectoryCopyVerifyPreserve({
+  await migrateDirectoryCopyVerifyCleanup({
     source: legacyHome,
-    target: kb1Home,
-    sourceIdentityScope: 'none'
+    target: kb1Home
   });
 }
 
