@@ -7,7 +7,7 @@ const env = {
   ...(skipNxCache ? { NX_SKIP_NX_CACHE: 'true' } : {})
 };
 
-for (const script of ['typecheck', 'test', 'build']) {
+for (const script of ['typecheck', 'test', 'build', 'licenses:check']) {
   const code = await run('pnpm', [script], env);
   if (code !== 0) {
     process.exitCode = code;

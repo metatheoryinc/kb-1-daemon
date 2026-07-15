@@ -106,22 +106,17 @@ port must bind to `127.0.0.1` unless the operator has deliberately added an
 access-controlled private network boundary. Never publish the daemon directly
 to the public internet.
 
-The committed Compose development helper currently publishes `17382:7382`
-without a loopback host, so it does not meet this security requirement. Do not
-use `pnpm docker:up` for a public, shared-network, or ordinary local install
-until `compose.yaml` binds the host side to `127.0.0.1`. Use the direct image
-path below instead.
-
-Repository maintainers working on an isolated, trusted development machine can
-start the existing Compose helper with:
+The committed Compose development helper publishes
+`127.0.0.1:17382:7382`, so its daemon is reachable only from the host by
+default. Repository maintainers can start it with:
 
 ```bash
 pnpm docker:up
 ```
 
-This starts `kb-1-daemon-dev`, maps host port `17382` to container port `7382`,
-and mounts the repo-local `.kb1-docker/` directory to `/data/kb1` inside the
-container. The daemon status file is therefore visible at:
+This starts `kb-1-daemon-dev`, maps loopback-only host port `17382` to container
+port `7382`, and mounts the repo-local `.kb1-docker/` directory to `/data/kb1`
+inside the container. The daemon status file is therefore visible at:
 
 ```text
 .kb1-docker/daemon/status.json
