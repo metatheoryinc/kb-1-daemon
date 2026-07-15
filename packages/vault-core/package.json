@@ -22,7 +22,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "4.1.8",
     "fast-check": "4.8.0",
-    "vitest": "4.1.8"
+    "vitest": "4.1.10"
   },
   "dependencies": {
     "yaml": "2.9.0"
