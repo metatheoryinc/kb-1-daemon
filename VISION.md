@@ -1,8 +1,9 @@
 # KB-1 Vision
 
 KB-1 is a local-first, agent-ready knowledge base where the durable vault home
-is explicit. The open-source local runtime is useful on its own, with Cloud
-identity, relay, collaboration, and hosting available as additive layers.
+is explicit. The open-source local runtime is useful on its own. Cloud identity,
+relay, collaboration, and hosting are planned as additive paid layers and are
+not yet open to the public.
 
 It keeps the best parts of KB-1: a rich web experience, MCP/API access for
 agents, service-mediated writes, conflict-free collaborative editing, visible

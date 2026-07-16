@@ -32,14 +32,14 @@ authorization.
 - Keep the daemon on its default `127.0.0.1` bind address.
 - Do not publish the daemon port directly to the public internet.
 - Bind Docker port mappings to `127.0.0.1`, not every host interface.
-- Use an access-controlled private network or KB-1 Cloud relay for intentional
-  remote access.
+- Use an access-controlled private network or, when it becomes publicly
+  available, KB-1 Cloud relay for intentional remote access.
 - Treat every connected agent as having the ability to read and modify the
   vaults you make available to it.
 - Keep `KB1_RELAY_TOKEN`, vault contents, and diagnostic logs out of issues and
   source control.
 - Back up `KB1_HOME` before migrations, upgrades, or bulk agent operations.
 
-Security reports involving KB-1 Cloud, its relay, or hosted vaults may still be
-submitted through this process; identify the affected product mode in the
-report.
+Security reports involving a KB-1 Cloud preview, its relay, or hosted vaults may
+still be submitted through this process; identify the affected product mode in
+the report.

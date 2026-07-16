@@ -3,6 +3,6 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/metatheoryinc/kb-1-daemon/security/policy
     about: Review the private reporting process before disclosing a vulnerability.
-  - name: KB-1 Cloud support
+  - name: KB-1 Cloud information
     url: https://kb-1.ai
-    about: Get help with Cloud accounts, billing, relay, or hosted vaults.
+    about: Learn about upcoming Cloud services or get help with an existing preview account.
