@@ -4,14 +4,8 @@ KB-1 Local is an open-source, local-first knowledge base built for people and
 agents to work in the same vault. Your Markdown files stay on your machine and
 remain the durable source of truth.
 
-Visit [kb-1.ai](https://kb-1.ai) to learn more about KB-1. The open-source
-Local product is available now; paid KB-1 Cloud services are coming soon and
-are not yet open to the public.
-
-> [!IMPORTANT]
-> The current public release is KB-1 Local. KB-1 Cloud identity, organization
-> access, remote relay, and Hosted services are not yet available for public
-> sign-up.
+Visit [kb-1.ai](https://kb-1.ai) to explore KB-1 and check the current
+availability of paid Cloud services.
 
 See `VISION.md` and `docs/architecture/` for the current product and
 architecture docs.
@@ -20,15 +14,14 @@ architecture docs.
 > KB-1 Local is under active development. Until a stable release is tagged,
 > commands and interfaces may change between revisions.
 
-## Free Local Now and Paid Cloud Coming Soon
+## Free Local and Paid Cloud
 
 The open-source daemon includes the local vault engine, web app, API, and MCP
 endpoint. You can run it for personal or developer workflows without a KB-1
 account or subscription.
 
-KB-1 Cloud is not yet publicly available. When it opens, paid Cloud services
-will add the coordination and operations layer needed when one local machine
-is no longer enough:
+Paid KB-1 Cloud services add the coordination and operations layer needed when
+one local machine is no longer enough:
 
 - **Cloud identity and organization access:** give approved people and agents
   authenticated access tied to Cloud identity and organization membership,
@@ -36,26 +29,26 @@ is no longer enough:
 - **Authenticated remote reach:** connect to a self-hosted vault through an
   outbound Cloud relay without exposing the daemon port directly to the public
   internet. Your machine remains the durable content authority.
-- **Managed hosting (planned):** choose KB-1 Hosted when it becomes available
-  if you do not want to operate an always-on daemon. KB-1 will run an isolated
-  vault environment and manage its lifecycle and durability.
+- **Managed hosting:** choose KB-1 Hosted when you do not want to operate an
+  always-on daemon. KB-1 runs an isolated vault environment and manages its
+  lifecycle and durability.
 
-In short, the paid service will provide shared identity, team access, remote
-reach, and optionally managed operations. It will not paywall local access to
-your own files. Learn more at [kb-1.ai](https://kb-1.ai).
+In short, the paid service buys shared identity, team access, remote reach, and
+optionally managed operations. It does not paywall local access to your own
+files. Learn more at [kb-1.ai](https://kb-1.ai).
 
-The current and planned deployment modes are:
+The available deployment modes are:
 
 - **Local-only:** run the open-source daemon and connect local agents without a
   KB-1 Cloud login. The daemon does not provide Cloud users, organizations,
   team presence, or per-user permissions; access is limited to the daemon host
   and any private network path the operator deliberately provides.
-- **Cloud-connected self-hosted (coming soon):** keep the daemon and durable
-  vault files on a machine you control, then add KB-1 Cloud identity,
-  organization membership, relay routing, and access for approved users and
-  agents that are not colocated with the daemon.
-- **Hosted (planned):** use KB-1 Cloud while KB-1 operates the daemon that
-  stores the hosted vault. Hosted availability will be announced separately.
+- **Cloud-connected self-hosted:** keep the daemon and durable vault files on a
+  machine you control, then add KB-1 Cloud identity, organization membership,
+  relay routing, and access for approved users and agents that are not
+  colocated with the daemon.
+- **Hosted:** use KB-1 Cloud while KB-1 operates the daemon that stores the
+  hosted vault.
 
 Cloud is additive for local users. A Cloud login is not required to run the
 daemon, use its local web app, or connect an agent to its local MCP endpoint.
@@ -204,11 +197,7 @@ contributors, but it is not required just to try the app locally.
 
 ## Relay / Tunnel
 
-> [!NOTE]
-> The daemon-side relay client and protocol are included for development and
-> integration work. KB-1 Cloud relay access is not yet publicly available.
-
-Relay support is an optional daemon-side feature. To point a daemon at a relay
+Relay is an optional daemon-side public feature. To point a daemon at a relay
 endpoint, set both `KB1_RELAY_URL` and `KB1_RELAY_TOKEN`; supplying only one is
 a startup configuration error. `KB1_DAEMON_VERSION` and `KB1_DAEMON_BUILD` are
 optional identity metadata sent during relay registration.

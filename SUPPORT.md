@@ -21,8 +21,8 @@ method, revision, expected behavior, actual behavior, and minimal reproduction.
 ## Security and Account Help
 
 - Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
-- For questions about upcoming KB-1 Cloud services or an existing preview
-  account, email `support@metatheory.dev` rather than opening a daemon issue.
+- For KB-1 Cloud account, billing, or hosted-service questions, email
+  `support@metatheory.dev` rather than opening a daemon issue.
 
 ## Project Stage
 
