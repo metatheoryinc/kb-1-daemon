@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import type { VaultActor, AuditOperation } from "./audit.js";
-import { validateVaultPath } from "./path.js";
+import { relativeDescendantPath, validateVaultPath } from "./path.js";
 import type { VaultResult } from "./vault-ops.js";
 
 export type FileHistoryOperation = "create" | "update" | "move" | "rename";
@@ -91,6 +91,19 @@ interface GitResult {
   stdout: string;
   stderr: string;
 }
+
+interface CommitValues {
+  get(key: string): string | undefined;
+  getAll(key: string): string[];
+}
+
+type HistoryCommitScope =
+  | { matches: false }
+  | {
+    matches: true;
+    previousPath?: string;
+    stopsTraversal?: boolean;
+  };
 
 type PendingHistoryMap = Map<string, PendingHistoryEntry>;
 
@@ -373,16 +386,26 @@ function commitMessage(
 ): { subject: string; body: string } {
   const bucketEnd = now?.toISOString() ?? entry.updatedAt;
   const contributorLines = entry.contributors.map((actor) => `- ${actorLabel(actor)}`);
+  const displayPath = commitPathDisplay(entry.path);
+  const displayFromPath = entry.fromPath === undefined
+    ? undefined
+    : commitPathDisplay(entry.fromPath);
   const body = [
-    `Path: ${entry.path}`,
-    ...(entry.fromPath ? [`From: ${entry.fromPath}`] : []),
+    `Path: ${displayPath}`,
+    ...(displayFromPath ? [`From: ${displayFromPath}`] : []),
     `Bucket: ${entry.bucketStart} - ${bucketEnd}`,
     "",
     "Contributors:",
     ...contributorLines,
     "",
-    `KB1-Path: ${entry.path}`,
-    ...(entry.fromPath ? [`KB1-From-Path: ${entry.fromPath}`] : []),
+    `KB1-Path-JSON: ${JSON.stringify(entry.path)}`,
+    ...(!hasLineBreak(entry.path) ? [`KB1-Path: ${entry.path}`] : []),
+    ...(entry.fromPath === undefined
+      ? []
+      : [
+        `KB1-From-Path-JSON: ${JSON.stringify(entry.fromPath)}`,
+        ...(!hasLineBreak(entry.fromPath) ? [`KB1-From-Path: ${entry.fromPath}`] : []),
+      ]),
     `KB1-Operation: ${entry.operation}`,
     `KB1-Bucket-Start: ${entry.bucketStart}`,
     `KB1-Bucket-End: ${bucketEnd}`,
@@ -392,7 +415,7 @@ function commitMessage(
   ].join("\n");
 
   return {
-    subject: `KB-1 history: ${entry.operation} ${entry.path}`,
+    subject: `KB-1 history: ${entry.operation} ${displayPath}`,
     body,
   };
 }
@@ -400,42 +423,76 @@ function commitMessage(
 async function readCommittedHistory(root: string, rel: string): Promise<FileHistoryEntry[]> {
   if (!await hasGitRepository(root)) return [];
 
-  let result: GitResult;
-  try {
-    result = await runGit(root, [
-      "log",
-      "--follow",
-      "--format=%H%x00%cI%x00%B%x1e",
-      "--",
-      rel,
-    ]);
-  } catch {
-    /* v8 ignore next -- Git log failures are treated as empty history; normal no-history repos are covered without throwing. */
-    return [];
-  }
-
   const entries: FileHistoryEntry[] = [];
-  for (const raw of result.stdout.split(COMMIT_SEPARATOR)) {
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) continue;
-    const [commitId, committedAt, ...bodyParts] = trimmed.split(FIELD_SEPARATOR);
-    /* v8 ignore next -- Git log format is controlled by this module. */
-    if (!commitId || !committedAt) continue;
-    const body = bodyParts.join(FIELD_SEPARATOR);
-    const parsed = entryFromCommitBody(rel, commitId, committedAt, body);
-    /* v8 ignore next -- Invalid external KB1 history commits are ignored; emitted commits parse successfully. */
-    if (parsed) entries.push(parsed);
+  const seenCommitIds = new Set<string>();
+  let currentPath = rel;
+  let revision: string | undefined;
+
+  while (true) {
+    let result: GitResult;
+    try {
+      result = await runGit(root, [
+        "log",
+        "--no-follow",
+        ...(revision ? [revision] : []),
+        "--format=%H%x00%cI%x00%B%x1e",
+        "--",
+        currentPath,
+      ]);
+    } catch {
+      /* v8 ignore next -- Git log failures are treated as the end of best-effort history traversal. */
+      return entries;
+    }
+
+    let previousSegment: { path: string; revision: string } | undefined;
+    for (const raw of result.stdout.split(COMMIT_SEPARATOR)) {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) continue;
+      const [commitId, committedAt, ...bodyParts] = trimmed.split(FIELD_SEPARATOR);
+      /* v8 ignore next -- Git log format is controlled by this module. */
+      if (!commitId || !committedAt) continue;
+      const values = commitValues(bodyParts.join(FIELD_SEPARATOR));
+      const parsed = entryFromCommitValues(rel, commitId, committedAt, values);
+      /* v8 ignore next -- Invalid external KB1 history commits are ignored; emitted commits parse successfully. */
+      if (!parsed) continue;
+
+      const scope = historyCommitScope(
+        currentPath,
+        parsed.operation,
+        commitPathValue(values, "KB1-Path"),
+        commitPathValue(values, "KB1-From-Path"),
+      );
+      if (!scope.matches) continue;
+
+      if (!seenCommitIds.has(commitId)) {
+        entries.push(parsed);
+        seenCommitIds.add(commitId);
+      }
+
+      if (parsed.operation === "create" || scope.stopsTraversal) {
+        return entries;
+      }
+      if (scope.previousPath) {
+        previousSegment = {
+          path: scope.previousPath,
+          revision: `${commitId}^`,
+        };
+        break;
+      }
+    }
+
+    if (!previousSegment) return entries;
+    currentPath = previousSegment.path;
+    revision = previousSegment.revision;
   }
-  return entries;
 }
 
-function entryFromCommitBody(
+function entryFromCommitValues(
   requestedPath: string,
   commitId: string,
   committedAt: string,
-  body: string,
+  values: CommitValues,
 ): FileHistoryEntry | undefined {
-  const values = commitValues(body);
   const operation = fileHistoryOperation(values.get("KB1-Operation") ?? "update");
   /* v8 ignore next -- Invalid external operation trailers are ignored; emitted commits use known operations. */
   if (!operation) return undefined;
@@ -465,12 +522,84 @@ function entryFromCommitBody(
   };
 }
 
-function commitValues(body: string): { get(key: string): string | undefined; getAll(key: string): string[] } {
+function historyCommitScope(
+  currentPath: string,
+  operation: FileHistoryOperation,
+  recordedPath: string | null | undefined,
+  fromPath: string | null | undefined,
+): HistoryCommitScope {
+  if (recordedPath === undefined) return { matches: true };
+  if (recordedPath === null) return { matches: false };
+
+  const suffix = recordedPath === currentPath
+    ? ""
+    : operation === "move"
+      ? relativeDescendantPath(recordedPath, currentPath)
+      : null;
+  if (suffix === null) return { matches: false };
+  if (operation !== "move" && operation !== "rename") {
+    return { matches: true };
+  }
+  if (fromPath === undefined || fromPath === null) {
+    return { matches: true, stopsTraversal: true };
+  }
+
+  const previousPath = suffix.length === 0
+    ? fromPath
+    : `${fromPath}/${suffix}`;
+  try {
+    return {
+      matches: true,
+      previousPath: validateVaultPath(previousPath, "file"),
+    };
+  } catch {
+    return { matches: true, stopsTraversal: true };
+  }
+}
+
+function commitPathValue(
+  values: CommitValues,
+  legacyKey: "KB1-Path" | "KB1-From-Path",
+): string | null | undefined {
+  const encoded = values.get(`${legacyKey}-JSON`);
+  if (encoded === undefined) return values.get(legacyKey);
+
+  try {
+    const parsed: unknown = JSON.parse(encoded);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function commitPathDisplay(value: string): string {
+  return hasLineBreak(value) ? JSON.stringify(value) : value;
+}
+
+function hasLineBreak(value: string): boolean {
+  return /[\r\n]/u.test(value);
+}
+
+function commitValues(body: string): CommitValues {
   const values = new Map<string, string[]>();
-  for (const line of body.split(/\r?\n/)) {
+  const lines = body
+    .split("\n")
+    .map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
     const match = /^(KB1-[A-Za-z0-9-]+):\s*(.*)$/.exec(line);
     if (!match) continue;
-    const [, key, value] = match;
+    const [, key, firstLine] = match;
+    let value = firstLine;
+    if (key === "KB1-Path" || key === "KB1-From-Path") {
+      while (
+        index + 1 < lines.length
+        && !/^(KB1-[A-Za-z0-9-]+):\s*/.test(lines[index + 1] ?? "")
+      ) {
+        index += 1;
+        value += `\n${lines[index] ?? ""}`;
+      }
+    }
     const existing = values.get(key) ?? [];
     existing.push(value);
     values.set(key, existing);

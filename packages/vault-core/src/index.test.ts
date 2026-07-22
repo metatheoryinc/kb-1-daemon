@@ -633,6 +633,417 @@ describe("vault-core filesystem operations", () => {
     await expect(flushFileHistory(root)).resolves.toEqual({ ok: true, value: { flushed: 0 } });
   });
 
+  it("keeps independently created copies out of each other's history", async () => {
+    const actor = {
+      kind: "integration" as const,
+      id: "daily-brief-import",
+      client: "migration",
+    };
+    const content = [
+      "# Morning brief",
+      "",
+      "## Today",
+      "",
+      "- Review the launch checklist.",
+      "- Confirm the daemon health check.",
+      "",
+    ].join("\n");
+
+    await writeFileWithParents(
+      path.join(root, "briefs/2026-07-16.md"),
+      content,
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "briefs/2026-07-16.md",
+      operation: "create",
+      actor,
+      content,
+      now: new Date("2026-07-16T13:00:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: ["briefs/2026-07-16.md"],
+      now: new Date("2026-07-16T13:00:30.000Z"),
+    });
+
+    await writeFileWithParents(
+      path.join(root, "briefs/2026-07-17.md"),
+      content,
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "briefs/2026-07-17.md",
+      operation: "create",
+      actor,
+      content,
+      now: new Date("2026-07-17T13:00:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: ["briefs/2026-07-17.md"],
+      now: new Date("2026-07-17T13:00:30.000Z"),
+    });
+    await git(root, ["config", "log.follow", "true"]);
+
+    await expect(
+      listFileHistory(root, { path: "briefs/2026-07-17.md" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        hasMore: false,
+        entries: [
+          {
+            path: "briefs/2026-07-17.md",
+            operation: "create",
+            actor,
+          },
+        ],
+      },
+    });
+    const secondHistory = await listFileHistory(root, {
+      path: "briefs/2026-07-17.md",
+    });
+    if (!secondHistory.ok) throw new Error("expected second brief history");
+    expect(secondHistory.value.entries).toHaveLength(1);
+  });
+
+  it("preserves file identity when history paths contain line breaks", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "line-break-owner",
+      client: "browser",
+    };
+    const unrelatedActor = {
+      kind: "integration" as const,
+      id: "unrelated-file",
+      client: "migration",
+    };
+    const unrelatedPath = "notes/source.md";
+    const sourcePath = "notes/source.md\ncontinued.md";
+    const targetPath = "archive/moved.md";
+
+    await writeFileWithParents(path.join(root, unrelatedPath), "unrelated\n", "utf8");
+    await recordFileHistory(root, {
+      path: unrelatedPath,
+      operation: "create",
+      actor: unrelatedActor,
+      content: "unrelated\n",
+      now: new Date("2026-07-17T13:30:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: [unrelatedPath],
+      now: new Date("2026-07-17T13:30:30.000Z"),
+    });
+
+    await writeFileWithParents(path.join(root, sourcePath), "line break identity\n", "utf8");
+    await recordFileHistory(root, {
+      path: sourcePath,
+      operation: "create",
+      actor,
+      content: "line break identity\n",
+      now: new Date("2026-07-17T13:31:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: [sourcePath],
+      now: new Date("2026-07-17T13:31:30.000Z"),
+    });
+
+    const sourceHistory = await listFileHistory(root, { path: sourcePath });
+    if (!sourceHistory.ok) throw new Error("expected line-break source history");
+    expect(sourceHistory.value.entries).toHaveLength(1);
+    expect(sourceHistory.value.entries).toMatchObject([
+      { path: sourcePath, operation: "create", actor },
+    ]);
+
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, sourcePath), path.join(root, targetPath));
+    await moveFileHistory(root, {
+      fromPath: sourcePath,
+      toPath: targetPath,
+      actor,
+      content: "line break identity\n",
+      now: new Date("2026-07-17T13:32:00.000Z"),
+    });
+
+    const movedHistory = await listFileHistory(root, { path: targetPath });
+    if (!movedHistory.ok) throw new Error("expected moved line-break history");
+    expect(movedHistory.value.entries).toHaveLength(2);
+    expect(movedHistory.value.entries).toMatchObject([
+      { path: targetPath, operation: "move", actor },
+      { path: targetPath, operation: "create", actor },
+    ]);
+
+    const gitBody = await git(root, ["log", "-1", "--format=%B"]);
+    expect(gitBody.stdout).toContain(
+      `KB1-From-Path-JSON: ${JSON.stringify(sourcePath)}`,
+    );
+    expect(gitBody.stdout).not.toContain(`KB1-From-Path: ${sourcePath}`);
+  });
+
+  it("preserves legacy CRLF history whose raw path trailers contain line breaks", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "legacy-line-break-owner",
+      client: "browser",
+    };
+    const sourcePath = "legacy/source.md\ncontinued.md";
+    const targetPath = "archive/legacy-moved.md";
+
+    await writeFileWithParents(path.join(root, "seed.md"), "seed\n", "utf8");
+    await recordFileHistory(root, {
+      path: "seed.md",
+      operation: "create",
+      content: "seed\n",
+      now: new Date("2026-07-17T13:40:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: ["seed.md"],
+      now: new Date("2026-07-17T13:40:30.000Z"),
+    });
+
+    await writeFileWithParents(path.join(root, sourcePath), "legacy identity\n", "utf8");
+    await git(root, ["add", "--", sourcePath]);
+    await git(root, [
+      "commit",
+      "-m",
+      "legacy multiline history entry",
+      "-m",
+      [
+        `KB1-Path: ${sourcePath}`,
+        "KB1-Operation: create",
+        "KB1-Bucket-Start: 2026-07-17T13:40:30.000Z",
+        "KB1-Bucket-End: 2026-07-17T13:40:30.000Z",
+        `KB1-Contributor: ${JSON.stringify(actor)}`,
+      ].join("\r\n"),
+    ]);
+
+    const sourceHistory = await listFileHistory(root, { path: sourcePath });
+    if (!sourceHistory.ok) throw new Error("expected legacy multiline source history");
+    expect(sourceHistory.value.entries).toHaveLength(1);
+    expect(sourceHistory.value.entries).toMatchObject([
+      { path: sourcePath, operation: "create", actor },
+    ]);
+
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, sourcePath), path.join(root, targetPath));
+    await moveFileHistory(root, {
+      fromPath: sourcePath,
+      toPath: targetPath,
+      actor,
+      content: "legacy identity\n",
+      now: new Date("2026-07-17T13:41:00.000Z"),
+    });
+
+    const movedHistory = await listFileHistory(root, { path: targetPath });
+    if (!movedHistory.ok) throw new Error("expected moved legacy multiline history");
+    expect(movedHistory.value.entries).toHaveLength(2);
+    expect(movedHistory.value.entries).toMatchObject([
+      { path: targetPath, operation: "move", actor },
+      { path: targetPath, operation: "create", actor },
+    ]);
+  });
+
+  it("follows explicit move chains without crossing recreated source paths", async () => {
+    const actor = {
+      kind: "user" as const,
+      id: "history-owner",
+      client: "browser",
+    };
+    const originalPath = "notes/original.md";
+    const renamedPath = "notes/renamed.md";
+    const finalPath = "archive/final.md";
+
+    await writeFileWithParents(
+      path.join(root, originalPath),
+      "original identity\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: originalPath,
+      operation: "create",
+      actor,
+      content: "original identity\n",
+      now: new Date("2026-07-17T14:00:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: [originalPath],
+      now: new Date("2026-07-17T14:00:30.000Z"),
+    });
+
+    await rename(path.join(root, originalPath), path.join(root, renamedPath));
+    await moveFileHistory(root, {
+      fromPath: originalPath,
+      toPath: renamedPath,
+      actor,
+      content: "original identity\n",
+      now: new Date("2026-07-17T14:01:00.000Z"),
+    });
+
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, renamedPath), path.join(root, finalPath));
+    await moveFileHistory(root, {
+      fromPath: renamedPath,
+      toPath: finalPath,
+      actor,
+      content: "original identity\n",
+      now: new Date("2026-07-17T14:02:00.000Z"),
+    });
+
+    await writeFileWithParents(
+      path.join(root, originalPath),
+      "replacement identity\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: originalPath,
+      operation: "create",
+      actor,
+      content: "replacement identity\n",
+      now: new Date("2026-07-17T14:03:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: [originalPath],
+      now: new Date("2026-07-17T14:03:30.000Z"),
+    });
+
+    const replacementHistory = await listFileHistory(root, {
+      path: originalPath,
+    });
+    if (!replacementHistory.ok) throw new Error("expected replacement history");
+    expect(replacementHistory.value.entries).toHaveLength(1);
+    expect(replacementHistory.value.entries).toMatchObject([
+      { path: originalPath, operation: "create", actor },
+    ]);
+
+    const movedHistory = await listFileHistory(root, { path: finalPath });
+    if (!movedHistory.ok) throw new Error("expected moved history");
+    expect(movedHistory.value.entries).toHaveLength(3);
+    expect(movedHistory.value.entries).toMatchObject([
+      { path: finalPath, operation: "move", actor },
+      { path: finalPath, operation: "rename", actor },
+      { path: finalPath, operation: "create", actor },
+    ]);
+  });
+
+  it("stops at explicit moves with missing or invalid source metadata", async () => {
+    await writeFileWithParents(
+      path.join(root, "notes/seed.md"),
+      "seed\n",
+      "utf8",
+    );
+    await recordFileHistory(root, {
+      path: "notes/seed.md",
+      operation: "create",
+      content: "seed\n",
+      now: new Date("2026-07-17T15:00:00.000Z"),
+    });
+    await flushFileHistory(root, {
+      paths: ["notes/seed.md"],
+      now: new Date("2026-07-17T15:00:30.000Z"),
+    });
+
+    const missingSourcePath = "notes/missing-source.md";
+    await writeFile(path.join(root, missingSourcePath), "missing source\n", "utf8");
+    await git(root, ["add", "--", missingSourcePath]);
+    await git(root, [
+      "commit",
+      "-m",
+      "external move without source",
+      "-m",
+      [
+        `KB1-Path: ${missingSourcePath}`,
+        "KB1-Operation: move",
+      ].join("\n"),
+    ]);
+
+    const invalidSourcePath = "notes/invalid-source.md";
+    await writeFile(path.join(root, invalidSourcePath), "invalid source\n", "utf8");
+    await git(root, ["add", "--", invalidSourcePath]);
+    await git(root, [
+      "commit",
+      "-m",
+      "external move with invalid source",
+      "-m",
+      [
+        `KB1-Path: ${invalidSourcePath}`,
+        "KB1-From-Path: ../outside.md",
+        "KB1-Operation: move",
+      ].join("\n"),
+    ]);
+
+    const malformedSourcePath = "notes/malformed-source.md";
+    await writeFile(path.join(root, malformedSourcePath), "malformed source\n", "utf8");
+    await git(root, ["add", "--", malformedSourcePath]);
+    await git(root, [
+      "commit",
+      "-m",
+      "external move with malformed encoded source",
+      "-m",
+      [
+        `KB1-Path-JSON: ${JSON.stringify(malformedSourcePath)}`,
+        "KB1-From-Path-JSON: {",
+        "KB1-Operation: move",
+      ].join("\n"),
+    ]);
+
+    const nonStringRecordedPath = "notes/non-string-recorded-path.md";
+    await writeFile(path.join(root, nonStringRecordedPath), "non-string path\n", "utf8");
+    await git(root, ["add", "--", nonStringRecordedPath]);
+    await git(root, [
+      "commit",
+      "-m",
+      "external move with non-string encoded path",
+      "-m",
+      [
+        "KB1-Path-JSON: null",
+        "KB1-Operation: move",
+      ].join("\n"),
+    ]);
+
+    const missingSourceHistory = await listFileHistory(root, {
+      path: missingSourcePath,
+    });
+    if (!missingSourceHistory.ok) {
+      throw new Error("expected missing-source history");
+    }
+    expect(missingSourceHistory.value.entries).toHaveLength(1);
+    expect(missingSourceHistory.value.entries[0]).toMatchObject({
+      path: missingSourcePath,
+      operation: "move",
+    });
+
+    const invalidSourceHistory = await listFileHistory(root, {
+      path: invalidSourcePath,
+    });
+    if (!invalidSourceHistory.ok) {
+      throw new Error("expected invalid-source history");
+    }
+    expect(invalidSourceHistory.value.entries).toHaveLength(1);
+    expect(invalidSourceHistory.value.entries[0]).toMatchObject({
+      path: invalidSourcePath,
+      operation: "move",
+    });
+
+    const malformedSourceHistory = await listFileHistory(root, {
+      path: malformedSourcePath,
+    });
+    if (!malformedSourceHistory.ok) {
+      throw new Error("expected malformed-source history");
+    }
+    expect(malformedSourceHistory.value.entries).toHaveLength(1);
+    expect(malformedSourceHistory.value.entries[0]).toMatchObject({
+      path: malformedSourcePath,
+      operation: "move",
+    });
+
+    const nonStringRecordedPathHistory = await listFileHistory(root, {
+      path: nonStringRecordedPath,
+    });
+    if (!nonStringRecordedPathHistory.ok) {
+      throw new Error("expected non-string-recorded-path history");
+    }
+    expect(nonStringRecordedPathHistory.value.entries).toHaveLength(0);
+  });
+
   it("uses structural move commits as history barriers and follows renamed files", async () => {
     const actor = {
       kind: "user" as const,
