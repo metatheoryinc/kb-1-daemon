@@ -5,10 +5,6 @@ relay endpoint. Durable vault content remains on the user's local server. The
 open-source daemon, local web UI, REST API, and MCP endpoint remain useful over
 localhost or a private network without any relay configured.
 
-KB-1 Cloud relay and Hosted are not yet publicly available. The protocol and
-configuration below document how the daemon integrates with those services
-when they are enabled.
-
 This document describes the public daemon contract. The server behind the relay
 endpoint may be a private cloud service, but its hosting, product policy, and
 commercial model are outside this repository.

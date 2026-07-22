@@ -121,5 +121,5 @@ open-source product remains useful without Cloud or relay.
   a vault to another machine?
 - What offline or degraded web states should exist when a vault's local server
   is disconnected?
-- Which local UI capabilities should keep improving after Local ships and the
-  Cloud paths open?
+- Which local UI capabilities should keep improving after the Local and Cloud
+  paths ship together?
