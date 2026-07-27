@@ -3,6 +3,10 @@
 import { spawn } from 'node:child_process';
 
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+// Node >=20.12 (CVE-2024-27980) refuses to spawn a .cmd/.bat without a shell,
+// so the Windows launcher needs one. Every argument below is a hardcoded
+// literal, so the DEP0190 arg-escaping hazard does not apply here.
+const useShell = process.platform === 'win32';
 const daemonHost = process.env.KB1_HOST || '127.0.0.1';
 const daemonPort = process.env.KB1_PORT || '7382';
 const webPort = process.env.KB1_WEB_PORT || '5173';
@@ -65,6 +69,7 @@ function spawnProcess(name, args, env) {
       ...process.env,
       ...env
     },
+    shell: useShell,
     stdio: ['inherit', 'pipe', 'pipe']
   });
 
