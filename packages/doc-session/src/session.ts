@@ -847,6 +847,14 @@ async function atomicWriteFile(filePath: string, content: string): Promise<void>
 }
 
 async function fsyncDirectory(directory: string): Promise<void> {
+  // Windows opens the directory handle fine but rejects fsync on it with
+  // EPERM, so this durability step cannot be honoured there. MoveFileEx (the
+  // rename in atomicWriteFile) is already atomic on NTFS; skip the directory
+  // fsync on win32, matching the graceful-fs/rimraf convention.
+  if (process.platform === 'win32') {
+    return;
+  }
+
   const handle = await open(directory, 'r');
   try {
     await handle.sync();
