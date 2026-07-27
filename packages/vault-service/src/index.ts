@@ -101,7 +101,7 @@ export interface VaultChangeEvent {
 
 export type VaultChangeEventHandler = (event: VaultChangeEvent) => void;
 
-const TREE_WATCH_INTERVAL_MS = 1_000;
+const TREE_WATCH_INTERVAL_MS = 2_000;
 
 export interface EditNoteInput {
   path: string;
@@ -149,7 +149,17 @@ export interface VaultServiceOptions {
 export function createVaultService(options: VaultServiceOptions): VaultService {
   const ctx = (actor?: VaultActor) => ({ root: options.vaultRoot, ...(actor ? { actor } : {}) });
   const eventHandlers = new Set<VaultChangeEventHandler>();
+  let treeReadGeneration = 0;
+  const invalidateTreeReads = () => {
+    treeReadGeneration += 1;
+    treeReadInFlight.clear();
+  };
+  const finishTreeMutation = <T>(result: T): T => {
+    invalidateTreeReads();
+    return result;
+  };
   const emitChange = (event: VaultChangeEvent) => {
+    invalidateTreeReads();
     if (event.kind !== 'external_change_detected') {
       treeWatchSnapshot = undefined;
     }
@@ -165,6 +175,30 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   let treeWatchTimer: ReturnType<typeof setInterval> | undefined;
   let treeWatchSnapshot: string | undefined;
   let treeWatchInFlight = false;
+  type TreeReadResult = Awaited<ReturnType<typeof listVaultTree>>;
+  const treeReadInFlight = new Map<
+    string,
+    { generation: number; promise: Promise<TreeReadResult> }
+  >();
+  const coalescedTreeRead = (
+    input: { under?: string; depth?: number },
+  ): Promise<TreeReadResult> => {
+    const key = JSON.stringify({
+      under: input.under ?? '',
+      depth: input.depth ?? null,
+    });
+    const active = treeReadInFlight.get(key);
+    if (active?.generation === treeReadGeneration) return active.promise;
+    const generation = treeReadGeneration;
+    const read = listVaultTree(ctx(), input)
+      .finally(() => {
+        if (treeReadInFlight.get(key)?.promise === read) {
+          treeReadInFlight.delete(key);
+        }
+      });
+    treeReadInFlight.set(key, { generation, promise: read });
+    return read;
+  };
   const ensureAuditSubscription = () => {
     if (unsubscribeAudit) return;
     unsubscribeAudit = onVaultAudit((audit, input) => {
@@ -177,7 +211,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
 
     treeWatchInFlight = true;
     try {
-      const result = await listVaultTree(ctx(), { depth: Number.MAX_SAFE_INTEGER });
+      const result = await listVaultTree(ctx(), {
+        depth: Number.MAX_SAFE_INTEGER,
+      });
       if (!result.ok) return;
 
       const nextSnapshot = treeSnapshot(result.value.entries);
@@ -217,6 +253,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     treeWatchTimer = undefined;
     treeWatchSnapshot = undefined;
     treeWatchInFlight = false;
+    invalidateTreeReads();
   };
   const ensureEventSources = () => {
     ensureAuditSubscription();
@@ -342,6 +379,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async flushDirtySessions() {
+      invalidateTreeReads();
       const result = await mapWriteFailure(() => options.documentSessions.flushDirtySessions());
       if (!result.ok) return result;
       await flushPendingHistory();
@@ -357,7 +395,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async listFiles(input) {
-      return serviceResult(await listVaultTree(ctx(), input));
+      return serviceResult(await coalescedTreeRead(input));
     },
 
     async listFolderMetadata() {
@@ -369,8 +407,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async setFolderMetadata(input) {
+      invalidateTreeReads();
       const result = serviceResult(await setVaultFolderMetadata(ctx(input.actor), input.path, input.metadata));
-      return result;
+      return finishTreeMutation(result);
     },
 
     async readNote(input) {
@@ -395,11 +434,13 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async writeRawFile(input) {
-      return serviceResult(await writeVaultRawFile(ctx(input.actor), {
+      invalidateTreeReads();
+      const result = serviceResult(await writeVaultRawFile(ctx(input.actor), {
         path: input.path,
         bytes: input.bytes,
         overwrite: input.overwrite
       }));
+      return finishTreeMutation(result);
     },
 
     async listNoteHistory(input) {
@@ -411,6 +452,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async createNote(input) {
+      invalidateTreeReads();
       const validPath = validateServiceFilePath(input.path);
       if (!validPath.ok) return validPath;
       const liveSession = options.documentSessions.getOpenSession(input.path);
@@ -433,13 +475,13 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
           changeEvent: { skipContentPersisted: true }
         });
         await recordServiceHistoryFromAudit(audit, applied.value);
-        return {
+        return finishTreeMutation({
           ok: true,
           path: input.path,
           content: applied.value,
           live: true,
           audit
-        };
+        });
       }
 
       const result = serviceResult(await writeVaultFile(ctx(input.actor), {
@@ -450,10 +492,11 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       if (result.ok) {
         await recordServiceHistoryFromAudit(result.audit, input.content);
       }
-      return result;
+      return finishTreeMutation(result);
     },
 
     async editNote(input) {
+      invalidateTreeReads();
       const diskRead = await readVaultFile(ctx(), input.path);
       if (!diskRead.ok) return serviceResult(diskRead);
       const request: AnchoredSpliceRequest = {
@@ -493,6 +536,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async appendNote(input) {
+      invalidateTreeReads();
       const validPath = validateServiceFilePath(input.path);
       if (!validPath.ok) return validPath;
       const result = await mapWriteFailure(() => options.documentSessions.withSession(
@@ -524,6 +568,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async prependNote(input) {
+      invalidateTreeReads();
       const diskRead = await readVaultFile(ctx(), input.path);
       if (!diskRead.ok) return serviceResult(diskRead);
       const result = await mapWriteFailure(() => options.documentSessions.withSession(input.path, (session) =>
@@ -553,6 +598,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     },
 
     async deleteNote(input) {
+      invalidateTreeReads();
       let deleted: Awaited<ReturnType<typeof deleteVaultFile>> extends VaultResult<infer T> ? T : never;
       const deleteOnDisk = async () => {
         deleted = await expectOkValue(deleteVaultFile(ctx(input.actor), {
@@ -561,18 +607,19 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         }));
       };
       const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSession(input.path, deleteOnDisk));
-      if (!deletedLive.ok) return deletedLive;
+      if (!deletedLive.ok) return finishTreeMutation(deletedLive);
       if (deletedLive.value) {
-        return { ok: true, ...deleted!, live: true };
+        return finishTreeMutation({ ok: true, ...deleted!, live: true });
       }
       const result = serviceResult(await deleteVaultFile(ctx(input.actor), {
         path: input.path,
         permanent: input.permanent
       }));
-      return result;
+      return finishTreeMutation(result);
     },
 
     async moveNote(input) {
+      invalidateTreeReads();
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
       await flushPendingHistory([input.fromPath]);
       const moveOnDisk = async () => {
@@ -583,10 +630,10 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         }));
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
-      if (!movedLive.ok) return movedLive;
+      if (!movedLive.ok) return finishTreeMutation(movedLive);
       if (movedLive.value) {
         await carryHistoryAfterFileMove(moved!);
-        return { ok: true, ...moved!, live: true };
+        return finishTreeMutation({ ok: true, ...moved!, live: true });
       }
       const result = serviceResult(await moveVaultPath(ctx(input.actor), {
         kind: 'file',
@@ -596,15 +643,17 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       if (result.ok) {
         await carryHistoryAfterFileMove(result);
       }
-      return result;
+      return finishTreeMutation(result);
     },
 
     async createFolder(input) {
+      invalidateTreeReads();
       const result = serviceResult(await makeVaultFolder(ctx(input.actor), input.path));
-      return result;
+      return finishTreeMutation(result);
     },
 
     async deleteFolder(input) {
+      invalidateTreeReads();
       let deleted: Awaited<ReturnType<typeof deleteVaultFolder>> extends VaultResult<infer T> ? T : never;
       const deleteOnDisk = async () => {
         deleted = await expectOkValue(deleteVaultFolder(ctx(input.actor), {
@@ -614,11 +663,12 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         }));
       };
       const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSessionSubtree(input.path, deleteOnDisk));
-      if (!deletedLive.ok) return deletedLive;
-      return { ok: true, ...deleted!, liveDeleted: deletedLive.value };
+      if (!deletedLive.ok) return finishTreeMutation(deletedLive);
+      return finishTreeMutation({ ok: true, ...deleted!, liveDeleted: deletedLive.value });
     },
 
     async moveFolder(input) {
+      invalidateTreeReads();
       let moved: Awaited<ReturnType<typeof moveVaultPath>> extends VaultResult<infer T> ? T : never;
       await flushPendingHistory();
       const moveOnDisk = async () => {
@@ -629,9 +679,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         }));
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSessionSubtree(input.fromPath, input.toPath, moveOnDisk));
-      if (!movedLive.ok) return movedLive;
+      if (!movedLive.ok) return finishTreeMutation(movedLive);
       await carryHistoryAfterFolderMove(moved!);
-      return { ok: true, ...moved!, liveMoved: movedLive.value };
+      return finishTreeMutation({ ok: true, ...moved!, liveMoved: movedLive.value });
     },
 
     async search(input) {
