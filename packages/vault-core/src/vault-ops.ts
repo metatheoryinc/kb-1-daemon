@@ -317,25 +317,50 @@ async function walkEntries(
   if (currentDepth > maxDepth) return;
   const absDir = relDir.length === 0 ? root : vaultPath(root, relDir);
   const dirents = await readdir(absDir, { withFileTypes: true });
-  for (const dirent of dirents) {
+  const visibleDirents = dirents.filter((dirent) => {
     const rel =
       relDir.length === 0 ? dirent.name : path.posix.join(relDir, dirent.name);
-    if (isInternalVaultPath(rel)) continue;
-    const abs = vaultPath(root, rel);
-    const s = await stat(abs);
-    if (dirent.isDirectory()) {
-      entries.push({ path: rel, kind: "folder", size: 0, mtimeMs: s.mtimeMs });
-      if (entries.length >= cap) throw new EntryCapExceededError();
-      await walkEntries(root, rel, currentDepth + 1, maxDepth, cap, entries);
-    } else if (dirent.isFile()) {
-      entries.push({
-        path: rel,
-        kind: "file",
-        size: s.size,
-        mtimeMs: s.mtimeMs,
-        artifact: classifyArtifactPath(rel),
-      });
-      if (entries.length >= cap) throw new EntryCapExceededError();
+    return !isInternalVaultPath(rel);
+  });
+  const statBatchSize = 32;
+  for (let offset = 0; offset < visibleDirents.length; offset += statBatchSize) {
+    const batch = visibleDirents.slice(offset, offset + statBatchSize);
+    const rows = await Promise.all(
+      batch.map(async (dirent) => {
+        const rel =
+          relDir.length === 0
+            ? dirent.name
+            : path.posix.join(relDir, dirent.name);
+        return { dirent, rel, stat: await stat(vaultPath(root, rel)) };
+      }),
+    );
+    for (const row of rows) {
+      if (row.dirent.isDirectory()) {
+        entries.push({
+          path: row.rel,
+          kind: "folder",
+          size: 0,
+          mtimeMs: row.stat.mtimeMs,
+        });
+        if (entries.length >= cap) throw new EntryCapExceededError();
+        await walkEntries(
+          root,
+          row.rel,
+          currentDepth + 1,
+          maxDepth,
+          cap,
+          entries,
+        );
+      } else if (row.dirent.isFile()) {
+        entries.push({
+          path: row.rel,
+          kind: "file",
+          size: row.stat.size,
+          mtimeMs: row.stat.mtimeMs,
+          artifact: classifyArtifactPath(row.rel),
+        });
+        if (entries.length >= cap) throw new EntryCapExceededError();
+      }
     }
   }
 }

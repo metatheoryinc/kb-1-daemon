@@ -15,9 +15,11 @@
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs",
     "smoke:release": "node scripts/release-smoke.mjs",
+    "smoke:windows": "node scripts/windows-smoke.mjs",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
     "storybook": "pnpm --filter @kb-1/ui storybook",
-    "test": "nx run-many -t test",
+    "test": "pnpm test:scripts && nx run-many -t test",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "typecheck": "nx run-many -t typecheck"
   },
   "devDependencies": {

@@ -1,12 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { spawnPnpm, terminateProcessTree } from './process-runner.mjs';
 
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-// Node >=20.12 (CVE-2024-27980) refuses to spawn a .cmd/.bat without a shell,
-// so the Windows launcher needs one. Every argument below is a hardcoded
-// literal, so the DEP0190 arg-escaping hazard does not apply here.
-const useShell = process.platform === 'win32';
 const daemonHost = process.env.KB1_HOST || '127.0.0.1';
 const daemonPort = process.env.KB1_PORT || '7382';
 const webPort = process.env.KB1_WEB_PORT || '5173';
@@ -34,19 +29,17 @@ for (const child of children) {
       return;
     }
 
-    shuttingDown = true;
-    for (const other of children) {
-      if (other !== child) {
-        other.kill('SIGTERM');
-      }
+    void shutdownChildren({
+      skip: child,
+      signal: signal ?? 'SIGTERM',
+      exitCode: signal ? exitCodeForSignal(signal) : code ?? 1
+    });
+  });
+  child.once('error', (error) => {
+    console.error(error);
+    if (!shuttingDown) {
+      void shutdownChildren({ skip: child, exitCode: 1 });
     }
-
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-
-    process.exitCode = code ?? 1;
   });
 }
 
@@ -56,20 +49,19 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
       return;
     }
 
-    shuttingDown = true;
-    for (const child of children) {
-      child.kill(signal);
-    }
+    void shutdownChildren({
+      signal,
+      exitCode: exitCodeForSignal(signal)
+    });
   });
 }
 
 function spawnProcess(name, args, env) {
-  const child = spawn(pnpm, args, {
+  const child = spawnPnpm(args, {
     env: {
       ...process.env,
       ...env
     },
-    shell: useShell,
     stdio: ['inherit', 'pipe', 'pipe']
   });
 
@@ -77,6 +69,31 @@ function spawnProcess(name, args, env) {
   streamLines(name, child.stderr);
 
   return child;
+}
+
+async function shutdownChildren({ skip, signal = 'SIGTERM', exitCode = 1 }) {
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+  try {
+    await Promise.all(
+      children
+        .filter((child) => child !== skip)
+        .map((child) => terminateProcessTree(child, { signal }))
+    );
+    process.exitCode = exitCode;
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+}
+
+function exitCodeForSignal(signal) {
+  if (signal === 'SIGINT') return 130;
+  if (signal === 'SIGTERM') return 143;
+  return 1;
 }
 
 function streamLines(name, stream) {

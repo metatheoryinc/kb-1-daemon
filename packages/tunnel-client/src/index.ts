@@ -72,6 +72,7 @@ const DEFAULT_BACKOFF_MAX_MS = 10_000;
 const DEFAULT_BACKOFF_JITTER_RATIO = 0.25;
 export const CONTROL_HEARTBEAT_INTERVAL_MS = 15_000;
 export const CONTROL_HEARTBEAT_TIMEOUT_MS = 5_000;
+export const CONTROL_DURABLE_LIVENESS_INTERVAL_MS = 30_000;
 
 const hopByHopHeaders = new Set([
   'connection',
@@ -344,13 +345,23 @@ export class TunnelClient {
 
   private startControlHeartbeat(control: WebSocket): void {
     this.clearControlHeartbeat();
+    let durableLivenessElapsedMs = 0;
     this.controlHeartbeatInterval = setInterval(() => {
       if (this.control !== control || this.stopped || control.readyState !== WebSocket.OPEN) {
         return;
       }
 
       this.clearControlHeartbeatDeadline();
+      durableLivenessElapsedMs += CONTROL_HEARTBEAT_INTERVAL_MS;
+      // Keep the frequent text ping for the relay's non-waking auto-pong. A
+      // bounded binary pulse lets OrgChannel durably record liveness when
+      // Cloudflare does not expose that auto-response after hibernation,
+      // without waking and rewriting the Durable Object on every heartbeat.
       control.send(encodeTunnelMessage({ type: 'control.ping' }));
+      if (durableLivenessElapsedMs >= CONTROL_DURABLE_LIVENESS_INTERVAL_MS) {
+        durableLivenessElapsedMs = 0;
+        control.send(encodeJsonBytes({ type: 'control.ping' }));
+      }
       this.controlHeartbeatDeadline = setTimeout(() => {
         if (this.control !== control || this.stopped) return;
 
