@@ -58,7 +58,12 @@ describe('TunnelClient control heartbeat', () => {
   });
 
   it('terminates a missed-pong control socket to trip the existing reconnect path', async () => {
-    const { CONTROL_HEARTBEAT_INTERVAL_MS, CONTROL_HEARTBEAT_TIMEOUT_MS, TunnelClient } = await import('./index.js');
+    const {
+      CONTROL_DURABLE_LIVENESS_INTERVAL_MS,
+      CONTROL_HEARTBEAT_INTERVAL_MS,
+      CONTROL_HEARTBEAT_TIMEOUT_MS,
+      TunnelClient,
+    } = await import('./index.js');
     const logger = { log: vi.fn() };
     const client = new TunnelClient({
       relayUrl: new URL('http://relay.example/t/dev1'),
@@ -81,13 +86,19 @@ describe('TunnelClient control heartbeat', () => {
 
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_INTERVAL_MS);
     expect(sentText(firstControl, 1)).toBe(encodeTunnelMessage({ type: 'control.ping' }));
+    expect(typeof firstControl.sent[1]).toBe('string');
+    expect(firstControl.sent).toHaveLength(2);
 
     firstControl.message(encodeTunnelMessage({ type: 'control.pong' }));
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_TIMEOUT_MS);
     expect(firstControl.terminated).toBe(false);
 
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_INTERVAL_MS);
+    expect(CONTROL_DURABLE_LIVENESS_INTERVAL_MS).toBe(2 * CONTROL_HEARTBEAT_INTERVAL_MS);
     expect(sentText(firstControl, 2)).toBe(encodeTunnelMessage({ type: 'control.ping' }));
+    expect(typeof firstControl.sent[2]).toBe('string');
+    expect(Buffer.isBuffer(firstControl.sent[3])).toBe(true);
+    expect(sentText(firstControl, 3)).toBe(encodeTunnelMessage({ type: 'control.ping' }));
 
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_TIMEOUT_MS);
     expect(firstControl.terminated).toBe(true);
