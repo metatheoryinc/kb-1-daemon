@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawnPnpm } from './process-runner.mjs';
 
 const skipNxCache = process.argv.includes('--skip-nx-cache');
 const env = {
@@ -8,19 +8,20 @@ const env = {
 };
 
 for (const script of ['typecheck', 'test', 'build', 'licenses:check']) {
-  const code = await run('pnpm', [script], env);
+  const code = await run([script], env);
   if (code !== 0) {
     process.exitCode = code;
     break;
   }
 }
 
-function run(command, args, env) {
+function run(args, env) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
+    const child = spawnPnpm(args, {
       env,
       stdio: 'inherit'
     });
+    child.once('error', () => resolve(1));
     child.on('exit', (code, signal) => {
       if (signal) {
         resolve(signal === 'SIGINT' ? 130 : 1);

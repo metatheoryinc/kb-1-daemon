@@ -88,6 +88,11 @@ Command examples below use a POSIX shell. On Windows PowerShell, set
 environment variables with `$env:NAME="value"` before the command, for example
 `$env:KB1_PORT="17382"; pnpm dev`.
 
+Windows 11 source development is smoke-tested in CI for daemon startup, note
+create/read, restart persistence, and process-tree shutdown. Native
+installer/service packaging and soft-delete/trash portability remain separate
+follow-up work.
+
 ## Quick Start From Source
 
 Run the local daemon and web UI from a checkout:
