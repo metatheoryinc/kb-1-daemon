@@ -130,6 +130,9 @@ function Invoke-DirectRestMethod {
     [Net.Http.HttpMethod]::Get
   }
   $request = [Net.Http.HttpRequestMessage]::new($httpMethod, $Uri)
+  # Windows PowerShell 5.1 can omit the required brackets when it derives the
+  # Host header for an IPv6 literal. Pin the RFC-form authority explicitly.
+  $request.Headers.Host = $Uri.Authority
   foreach ($header in $Headers.GetEnumerator()) {
     $request.Headers.TryAddWithoutValidation(
       [string]$header.Key,
