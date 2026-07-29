@@ -279,15 +279,40 @@ function Invoke-Installer {
 }
 
 function Invoke-InstallerExpectedFailure {
-  param([string[]]$InstallerArguments)
+  param(
+    [string[]]$InstallerArguments,
+    [string[]]$ExpectedOutputSubstrings = @()
+  )
 
-  & $powerShell `
-    -NoProfile `
-    -NonInteractive `
-    -ExecutionPolicy Bypass `
-    -File $installer `
-    @InstallerArguments
-  if ($LASTEXITCODE -eq 0) {
+  if ($ExpectedOutputSubstrings.Count -eq 0) {
+    & $powerShell `
+      -NoProfile `
+      -NonInteractive `
+      -ExecutionPolicy Bypass `
+      -File $installer `
+      @InstallerArguments
+    $installerExitCode = $LASTEXITCODE
+  } else {
+    $installerOutput = @(
+      & $powerShell `
+        -NoProfile `
+        -NonInteractive `
+        -ExecutionPolicy Bypass `
+        -File $installer `
+        @InstallerArguments 2>&1
+    )
+    $installerExitCode = $LASTEXITCODE
+    foreach ($outputLine in $installerOutput) {
+      Write-Host ([string]$outputLine)
+    }
+    $combinedInstallerOutput = $installerOutput | Out-String
+    foreach ($expectedSubstring in $ExpectedOutputSubstrings) {
+      if (-not $combinedInstallerOutput.Contains($expectedSubstring)) {
+        throw "Expected installer failure output to contain: $expectedSubstring"
+      }
+    }
+  }
+  if ($installerExitCode -eq 0) {
     throw "Windows task installer unexpectedly succeeded."
   }
 }
@@ -532,13 +557,54 @@ try {
     }
   }
 
-  Invoke-InstallerExpectedFailure (@(
-    "-Action", "Install",
-    "-SkipRepoUpdate",
-    "-SkipDependencyInstall",
-    "-BuildOnly",
-    "-HealthTimeoutSeconds", "5"
-  ) + $commonArguments)
+  $failingBuildPath = Join-Path `
+    $trustedSourceRoot `
+    "apps\daemon\src\windows-smoke-build-failure.ts"
+  Set-Content `
+    -LiteralPath $failingBuildPath `
+    -Value "const windowsSmokeBuildFailure: string = 1; export {};"
+  & $sourceGitPath `
+    -C $trustedSourceRoot `
+    add `
+    -- `
+    "apps/daemon/src/windows-smoke-build-failure.ts"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not stage the intentional Windows smoke build failure."
+  }
+  & $sourceGitPath `
+    -C $trustedSourceRoot `
+    -c "user.name=KB-1 Windows Smoke" `
+    -c "user.email=windows-smoke@kb-1.invalid" `
+    commit `
+    --no-gpg-sign `
+    --no-verify `
+    -m "test: force Windows smoke build failure"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not commit the intentional Windows smoke build failure."
+  }
+  try {
+    Invoke-InstallerExpectedFailure `
+      -InstallerArguments (@(
+        "-Action", "Install",
+        "-SkipRepoUpdate",
+        "-BuildOnly",
+        "-HealthTimeoutSeconds", "5"
+      ) + $commonArguments) `
+      -ExpectedOutputSubstrings @(
+        "==> Building KB-1 Local",
+        "windows-smoke-build-failure.ts",
+        "TS2322"
+      )
+  } finally {
+    & $sourceGitPath `
+      -C $trustedSourceRoot `
+      reset `
+      --hard `
+      $sourceCommit
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not restore the Windows smoke source checkout."
+    }
+  }
 
   $healthyAfterBuildFailure = Invoke-DirectRestMethod `
     -Uri $healthUrl `
