@@ -405,8 +405,8 @@ function Test-CurrentUserTaskPrincipal {
   param($Task)
 
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $userId = [string]$Task.Principal.UserId
-  return (
+  $userId = ([string]$Task.Principal.UserId).Trim()
+  if (
     [string]::Equals(
       $userId,
       [string]$identity.User.Value,
@@ -417,7 +417,24 @@ function Test-CurrentUserTaskPrincipal {
       [string]$identity.Name,
       [StringComparison]::OrdinalIgnoreCase
     )
-  )
+  ) {
+    return $true
+  }
+
+  try {
+    $principalSid = (
+      [Security.Principal.NTAccount]::new($userId)
+    ).Translate(
+      [Security.Principal.SecurityIdentifier]
+    )
+    return [string]::Equals(
+      [string]$principalSid.Value,
+      [string]$identity.User.Value,
+      [StringComparison]::OrdinalIgnoreCase
+    )
+  } catch {
+    return $false
+  }
 }
 
 function Test-KB1RunnerAction {
