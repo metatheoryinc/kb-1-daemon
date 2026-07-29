@@ -293,15 +293,21 @@ function Invoke-InstallerExpectedFailure {
       @InstallerArguments
     $installerExitCode = $LASTEXITCODE
   } else {
-    $installerOutput = @(
-      & $powerShell `
-        -NoProfile `
-        -NonInteractive `
-        -ExecutionPolicy Bypass `
-        -File $installer `
-        @InstallerArguments 2>&1
-    )
-    $installerExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $installerOutput = @(
+        & $powerShell `
+          -NoProfile `
+          -NonInteractive `
+          -ExecutionPolicy Bypass `
+          -File $installer `
+          @InstallerArguments 2>&1
+      )
+      $installerExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     foreach ($outputLine in $installerOutput) {
       Write-Host ([string]$outputLine)
     }
