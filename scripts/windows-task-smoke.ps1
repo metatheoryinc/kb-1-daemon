@@ -13,7 +13,10 @@ if ($env:OS -ne "Windows_NT") {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $installer = Join-Path $repoRoot "skills\kb-1-daemon-setup\scripts\install_kb1_daemon_user_task.ps1"
 $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
-$kb1Home = Join-Path ([IO.Path]::GetTempPath()) "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
+$localAppData = [Environment]::GetFolderPath(
+  [Environment+SpecialFolder]::LocalApplicationData
+)
+$kb1Home = Join-Path $localAppData "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
 $taskName = "KB-1 Windows Smoke $([Guid]::NewGuid().ToString('N'))"
 function Get-StorageKey {
   param([string]$Value)
@@ -32,9 +35,7 @@ $homeKey = Get-StorageKey (
   [IO.Path]::GetFullPath($kb1Home).ToUpperInvariant()
 )
 $taskStateDirectory = Join-Path (
-  [Environment]::GetFolderPath(
-    [Environment+SpecialFolder]::LocalApplicationData
-  )
+  $localAppData
 ) "KB-1\tasks"
 $configPath = Join-Path $taskStateDirectory "windows-task-$taskKey.json"
 $runtimeRoot = Join-Path `
