@@ -1,6 +1,6 @@
 ---
 name: kb-1-daemon-setup
-description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux or macOS. Use when setting up kb-1-daemon, configuring MCP clients, copying a Markdown/Obsidian vault into KB1_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
+description: Install, run, repair, and verify the KB-1 local open-source daemon for local web/API/MCP use on Linux, macOS, or Windows 11. Use when setting up kb-1-daemon, configuring MCP clients, copying a Markdown/Obsidian vault into KB1_HOME, or explicitly enabling private Tailscale access after the user approves exposure.
 ---
 
 # KB-1 Daemon Setup
@@ -18,7 +18,8 @@ Safe to automate after stating what will change:
 1. Clone or update `https://github.com/metatheoryinc/kb-1-daemon.git` into `$HOME/repos/kb-1-daemon` or a user-approved path.
 2. Install Node/pnpm dependencies.
 3. Run checks/builds.
-4. Install or update a user-level service on Linux systemd or macOS launchd.
+4. Install or update a user-level service on Linux systemd or macOS launchd,
+   or a per-user logon Scheduled Task on Windows 11.
 5. Start or restart the daemon and verify `/api/health`, `/api/vaults`, and `/mcp` reachability.
 6. Configure MCP clients when their CLI/config is available, after inspecting existing entries.
 7. Report Tailscale status without changing it.
@@ -65,6 +66,7 @@ Defaults:
 - Port: `7382`
 - Linux service: user systemd unit `kb1d.service`
 - macOS service: user LaunchAgent `dev.metatheory.kb1.kb1d`
+- Windows background task: per-user Scheduled Task `KB-1 Local`
 - MCP endpoint: `http://127.0.0.1:7382/mcp`
 
 For a default-path in-place upgrade, first boot copies existing `$HOME/.kb2`
@@ -169,6 +171,66 @@ For Linux services that should survive logout/reboot, ask the user before runnin
 sudo loginctl enable-linger "$USER"
 ```
 
+On Windows 11, run the PowerShell installer from the cloned repository:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\skills\kb-1-daemon-setup\scripts\install_kb1_daemon_user_task.ps1
+```
+
+It installs a per-user Scheduled Task that starts at logon and immediately
+starts it for the current session. The task runs with the current user's limited
+privileges, though local policy may require an elevated PowerShell window to
+register it. The installer does not change Tailscale or expose KB-1 beyond
+loopback. This is a source-based background task, not a signed native installer
+or Windows Service Control Manager service.
+
+Manage the Windows task with the same script:
+
+```powershell
+$installer = ".\skills\kb-1-daemon-setup\scripts\install_kb1_daemon_user_task.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Action Status
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Action Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Action Start
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Action Uninstall
+```
+
+`Uninstall` unregisters the task and removes its generated task configuration,
+but preserves the repository, task log, and all vault data. Private task
+configuration, logs, and managed runtimes live under
+`$env:LOCALAPPDATA\KB-1\tasks`, separately from `KB1_HOME`. Use
+`-BuildOnly` to build without the slower full check after a known-good checkout.
+The installer also accepts `-RepoDir`, `-KB1Home`, `-BindHost`, `-Port`, and
+`-TaskName`; without `-RepoDir`, it uses the checkout containing the installer.
+Stop, replacement, and uninstall verify the task's private launch identity,
+stop new HTTP mutations, drain active transports, and close every vault session
+before the process exits. If exact task health or graceful shutdown is
+unavailable, they fail closed; use `-ForceStop` only after the user accepts that
+the latest in-memory edits may be lost. The fallback matches the protected PID,
+Node path, and process start time before terminating the complete daemon process
+tree. A second task cannot manage the same `KB1_HOME`. If a fresh task fails its
+health check, the installer removes it; if a replacement fails, the previous
+task definition and configuration are restored and restarted when they were
+active before the attempt. Initial installation and upgrades clone and build an
+isolated, owner-only versioned runtime from the exact selected commit first,
+preserving the last-known-good runnable code. Dependencies use a runtime-local
+pnpm store, and reparse points may not escape the protected runtime. The three
+skip switches together may only reuse that already-installed protected runtime;
+they cannot register a first task directly from an arbitrary checkout. A clean
+branch that is only behind its upstream advances to that fetched upstream
+commit; detached checkouts, local commits, and diverged branches preserve their
+selected commit. Upgrades preserve the installed source checkout, `KB1_HOME`,
+bind, and port unless the operator explicitly supplies an override. Before any
+repository tool or script runs, the installer
+verifies the checkout boundary and executable ownership/permissions. It
+restricts task configuration and managed runtimes to the current Windows user,
+refuses task code or its persistent executable chain when owned or writable by
+another untrusted local principal, and prunes inactive versioned runtimes after
+a healthy replacement. Task-name and `KB1_HOME` mutexes serialize lifecycle
+operations so differently named tasks cannot race into the same vault home.
+The installer fails closed if a same-named root task does not carry KB-1's
+current-user ownership signature.
+
 ## Manual Foreground Run
 
 Use this path on unsupported systems, while debugging, or when the user does not want a service installed:
@@ -189,6 +251,15 @@ Then verify from another shell:
 ```bash
 curl -fsS http://127.0.0.1:7382/api/health
 curl -fsS http://127.0.0.1:7382/api/vaults
+```
+
+On Windows PowerShell, set the equivalent environment variables before
+starting the foreground process:
+
+```powershell
+$env:KB1_HOST = "127.0.0.1"
+$env:KB1_PORT = "7382"
+pnpm --filter @kb-1/daemon dev
 ```
 
 ## Existing Vault Or Obsidian Copy
@@ -359,6 +430,10 @@ legacy instance, set `KB1_SERVICE_NAME=kb2d.service` on Linux or
 `KB1_LAUNCHD_LABEL=dev.metatheory.kb1.kb2d` on macOS, together with that
 instance's matching `KB1_HOST` and `KB1_PORT`.
 
+On Windows, use the task installer with `-Action Status`; it verifies that the
+task is running and that the health endpoint matches the configured KB-1 home,
+status file, and Node process.
+
 MCP smoke once tools are loaded:
 
 1. `list_vaults`.
@@ -378,6 +453,10 @@ MCP smoke once tools are loaded:
 - Linux `systemctl --user` fails in a container: install/run on the host OS or use the foreground run path.
 - Linux service stops after logout: ask before enabling lingering with `sudo loginctl enable-linger "$USER"`.
 - macOS service does not start: inspect `~/Library/Logs/<launchd-label>.{out,err}.log` and `launchctl print "gui/$(id -u)/<launchd-label>"`; custom labels get their own log pair, and the defaults are `dev.metatheory.kb1.kb1d` (current) and `dev.metatheory.kb1.kb2d` (legacy).
+- Windows task does not start: run the installer with `-Action Status`, inspect
+  the task-specific `windows-task-*.log`, `*.stdout.log`, and `*.stderr.log`
+  files under `$env:LOCALAPPDATA\KB-1\tasks`, and confirm the configured
+  protected runtime still contains `apps\daemon\dist\main.js`.
 - Tailscale not installed or logged in: keep KB-1 local-only and give the user Tailscale setup steps.
 - Tailscale Serve already has unrelated routes: do not overwrite in auto mode; require explicit approval and a chosen port.
 - UI works but agents cannot edit: check the MCP URL, restart the client, and ensure every data tool call includes `vaultId`.

@@ -10,6 +10,7 @@ export interface DaemonStatus {
   statusFile: string;
   pid: number;
   nodeVersion: string;
+  instanceId?: string;
 }
 
 export async function writeDaemonStatus(config: DaemonConfig): Promise<DaemonStatus> {
@@ -20,7 +21,8 @@ export async function writeDaemonStatus(config: DaemonConfig): Promise<DaemonSta
     daemonHome: config.daemonHome,
     statusFile: config.statusFile,
     pid: config.pid,
-    nodeVersion: process.version
+    nodeVersion: process.version,
+    ...(config.instanceId ? { instanceId: config.instanceId } : {})
   };
 
   await mkdir(config.daemonHome, { recursive: true });
@@ -53,5 +55,6 @@ function isDaemonStatus(value: unknown): value is DaemonStatus {
     && typeof status.daemonHome === 'string'
     && typeof status.statusFile === 'string'
     && typeof status.pid === 'number'
-    && typeof status.nodeVersion === 'string';
+    && typeof status.nodeVersion === 'string'
+    && (status.instanceId === undefined || typeof status.instanceId === 'string');
 }

@@ -131,6 +131,62 @@ describe("daemon routing", () => {
     expect(statusFileContents).toMatchObject(body.status);
   });
 
+  it("requires the private control token before requesting daemon shutdown", async () => {
+    const { config, registry } = await setupScopedVault();
+    let requested = false;
+    const request = vi.fn(() => {
+      requested = true;
+    });
+    const app = createApp({
+      statusFile: config.statusFile,
+      registry,
+      shutdown: {
+        token: "test-control-token",
+        requested: () => requested,
+        request,
+      },
+    });
+
+    const missing = await app.request("/api/control/shutdown", {
+      method: "POST",
+    });
+    expect(missing.status).toBe(401);
+
+    const wrong = await app.request("/api/control/shutdown", {
+      method: "POST",
+      headers: { "x-kb1-control-token": "wrong-control-token" },
+    });
+    expect(wrong.status).toBe(401);
+    expect(request).not.toHaveBeenCalled();
+
+    const accepted = await app.request("/api/control/shutdown", {
+      method: "POST",
+      headers: { "x-kb1-control-token": "test-control-token" },
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toEqual({
+      ok: true,
+      shuttingDown: true,
+    });
+    expect(request).toHaveBeenCalledOnce();
+
+    const quiesced = await app.request("/api/health");
+    expect(quiesced.status).toBe(503);
+    await expect(quiesced.json()).resolves.toMatchObject({
+      ok: false,
+      error: "shutting_down",
+    });
+
+    const quiescedMcp = await app.request("/mcp", { method: "POST" });
+    expect(quiescedMcp.status).toBe(503);
+    await expect(quiescedMcp.json()).resolves.toMatchObject({
+      ok: false,
+      error: "shutting_down",
+    });
+
+    await registry.close();
+  });
+
   it("exposes daemon relay lifecycle controls when relay is configured", async () => {
     const relay = fakeRelayLifecycleController();
     const config = createDaemonConfig({
@@ -2175,6 +2231,28 @@ describe("daemon routing", () => {
       await stream.close();
       await server.close();
     }
+  });
+
+  it("closes long-lived event streams when daemon shutdown begins", async () => {
+    const { registry, config } = await setupScopedVault();
+    const shutdown = new AbortController();
+    const app = createApp({
+      statusFile: config.statusFile,
+      registry,
+      actorDefault: config.actorDefault,
+      shutdownSignal: shutdown.signal,
+    });
+
+    const response = await app.request(`/api/vaults/${VAULT}/events`);
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Expected SSE response body");
+
+    shutdown.abort();
+    await expect(reader.read()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    });
   });
 
   it("covers vault info and non-live folder route branches", async () => {

@@ -89,8 +89,8 @@ environment variables with `$env:NAME="value"` before the command, for example
 `$env:KB1_PORT="17382"; pnpm dev`.
 
 Windows 11 source development is smoke-tested in CI for daemon startup, note
-create/read, restart persistence, and process-tree shutdown. Native
-installer/service packaging and soft-delete/trash portability remain separate
+create/read/soft-delete, restart persistence, and process-tree shutdown. Native
+installer and Windows Service Control Manager packaging remain separate
 follow-up work.
 
 ## Quick Start From Source
@@ -122,6 +122,44 @@ curl http://127.0.0.1:7382/api/health
 
 Then open http://127.0.0.1:7382 in a browser. A fresh daemon home creates a
 starter `demo-vault` so the UI has content immediately.
+
+### Windows background startup
+
+After cloning the repository, Windows 11 users can build KB-1 Local and install
+it as a per-user Scheduled Task that starts at logon:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\skills\kb-1-daemon-setup\scripts\install_kb1_daemon_user_task.ps1
+```
+
+The task runs with limited current-user privileges, binds to `127.0.0.1`, keeps
+vault data under `$HOME\.kb1`, and leaves network exposure unchanged. Local
+policy may require launching PowerShell as administrator to register the task;
+the daemon itself still runs as the current user at the limited run level.
+Manage it with the same script and `-Action Status`, `Start`, `Stop`, or
+`Uninstall`. Private task configuration, logs, and managed runtimes live under
+`$env:LOCALAPPDATA\KB-1\tasks`; uninstalling the task preserves the repository,
+logs, and vault data. Stop, replacement, and uninstall authenticate to the exact
+supervised daemon, stop accepting new work, drain its connections, and persist
+open document sessions before the process exits. Use `-ForceStop` only to
+recover an unhealthy task when accepting possible loss of the latest in-memory
+edits; the fallback verifies the protected launch identity before terminating
+the complete daemon process tree.
+Task replacement is transactional: if the new daemon does not become healthy,
+the installer restores the prior task definition and configuration. Initial
+installation and upgrades build in an isolated, owner-only versioned runtime
+from the exact selected commit so a failed update cannot corrupt the
+last-known-good daemon or silently switch revisions. Dependencies use a runtime-
+local pnpm store, and reparse points may not escape that protected runtime.
+Upgrades preserve the installed source checkout, home, bind, and port unless
+the operator explicitly supplies a replacement value.
+Task secrets and managed runtimes use current-user-only Windows permissions;
+successful upgrades prune inactive versioned runtimes.
+
+This is a source-based per-user background task, not a signed native installer
+or Windows service. Its install/status/stop/restart/uninstall lifecycle is
+smoke-tested on Windows in CI.
 
 ## Connect an Agent
 

@@ -11,6 +11,7 @@ import {
   type VaultChangeEvent,
   type VaultService
 } from '@kb-1/vault-service';
+import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -43,6 +44,8 @@ interface CreateAppOptions {
   webProxyTarget?: string;
   actorDefault?: ActorDefault;
   relay?: RelayLifecycleController;
+  shutdown?: ShutdownController;
+  shutdownSignal?: AbortSignal;
 }
 
 export interface RelayLifecycleStatus {
@@ -56,6 +59,12 @@ export interface RelayLifecycleController {
   status(): RelayLifecycleStatus;
   connect(): RelayLifecycleStatus;
   disconnect(): RelayLifecycleStatus;
+}
+
+export interface ShutdownController {
+  token: string;
+  requested(): boolean;
+  request(): void;
 }
 
 /**
@@ -95,6 +104,17 @@ export function createApp(options: CreateAppOptions): Hono {
   const app = new Hono();
   const api = new Hono();
 
+  api.use('*', async (context, next) => {
+    if (options.shutdown?.requested()) {
+      return context.json({
+        ok: false,
+        error: 'shutting_down',
+        message: 'The daemon is shutting down and is not accepting new work.'
+      }, 503);
+    }
+    await next();
+  });
+
   api.get('/health', async (context) => {
     const status = await readDaemonStatus(options.statusFile);
 
@@ -103,6 +123,20 @@ export function createApp(options: CreateAppOptions): Hono {
       service: SERVICE_NAME,
       status
     });
+  });
+
+  api.post('/control/shutdown', (context) => {
+    const token = context.req.header('x-kb1-control-token');
+    if (!options.shutdown || !token || !tokensMatch(token, options.shutdown.token)) {
+      return context.json({
+        ok: false,
+        error: 'unauthorized',
+        message: 'A valid daemon control token is required.'
+      }, 401);
+    }
+
+    options.shutdown.request();
+    return context.json({ ok: true, shuttingDown: true }, 202);
   });
 
   api.get('/relay/status', (context) => {
@@ -141,6 +175,13 @@ export function createApp(options: CreateAppOptions): Hono {
       }
     });
     app.all('/mcp', async (context) => {
+      if (options.shutdown?.requested()) {
+        return context.json({
+          ok: false,
+          error: 'shutting_down',
+          message: 'The daemon is shutting down and is not accepting new work.'
+        }, 503);
+      }
       return mcpEndpoint.handleRequest(context.req.raw);
     });
 
@@ -227,9 +268,9 @@ export function createApp(options: CreateAppOptions): Hono {
       if (!registry.get(id)) {
         return mapServiceResult(context, { ok: false, error: 'not_found', message: `No vault with id "${id}".` });
       }
-      return registryEventStreamResponse(registry, id);
+      return registryEventStreamResponse(registry, id, options.shutdownSignal);
     });
-    registerVaultDataRoutes(api, scopedScope, actorDefault, '/vaults/:id');
+    registerVaultDataRoutes(api, scopedScope, actorDefault, '/vaults/:id', options.shutdownSignal);
   }
 
   app.route('/api', api);
@@ -260,6 +301,13 @@ export function createApp(options: CreateAppOptions): Hono {
   return app;
 }
 
+function tokensMatch(provided: string, expected: string): boolean {
+  const providedBytes = Buffer.from(provided);
+  const expectedBytes = Buffer.from(expected);
+  return providedBytes.length === expectedBytes.length
+    && timingSafeEqual(providedBytes, expectedBytes);
+}
+
 function relayStatus(relay: RelayLifecycleController | undefined): RelayLifecycleStatus {
   return relay?.status() ?? {
     configured: false,
@@ -279,7 +327,8 @@ function registerVaultDataRoutes(
   router: Hono,
   scope: VaultRouteScope,
   actorDefault: ActorDefault,
-  basePath = ''
+  basePath = '',
+  shutdownSignal?: AbortSignal
 ): void {
   router.post(`${basePath}/ops/flush`, async (context) => {
     const resolved = scope.resolve(context);
@@ -290,7 +339,7 @@ function registerVaultDataRoutes(
   router.get(`${basePath}/events`, (context) => {
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
-    return eventStreamResponse(resolved.service);
+    return eventStreamResponse(resolved.service, shutdownSignal);
   });
 
   router.get(`${basePath}/vault`, async (context) => {
@@ -613,17 +662,30 @@ async function readMutationJson<T extends MutationRequestSetup>(
   return { ok: true, ...request, body: body.body };
 }
 
-function eventStreamResponse(vaultService: VaultService): Response {
+function eventStreamResponse(vaultService: VaultService, shutdownSignal?: AbortSignal): Response {
   const encoder = new TextEncoder();
   let unsubscribe: () => void = () => undefined;
+  let removeAbortListener: () => void = () => undefined;
+  let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       unsubscribe = vaultService.onEvent((event) => {
         controller.enqueue(encoder.encode(formatServerSentEvent(event)));
       });
+      const abort = () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        controller.close();
+      };
+      shutdownSignal?.addEventListener('abort', abort, { once: true });
+      removeAbortListener = () => shutdownSignal?.removeEventListener('abort', abort);
+      if (shutdownSignal?.aborted) abort();
     },
     cancel() {
+      closed = true;
+      removeAbortListener();
       unsubscribe();
     }
   });
@@ -637,9 +699,15 @@ function eventStreamResponse(vaultService: VaultService): Response {
   });
 }
 
-function registryEventStreamResponse(registry: VaultRegistry, vaultId: string): Response {
+function registryEventStreamResponse(
+  registry: VaultRegistry,
+  vaultId: string,
+  shutdownSignal?: AbortSignal
+): Response {
   const encoder = new TextEncoder();
   let unsubscribe: () => void = () => undefined;
+  let removeAbortListener: () => void = () => undefined;
+  let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -647,8 +715,19 @@ function registryEventStreamResponse(registry: VaultRegistry, vaultId: string): 
         if (event.vaultSlug !== vaultId) return;
         controller.enqueue(encoder.encode(formatServerSentEvent(event.event)));
       });
+      const abort = () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        controller.close();
+      };
+      shutdownSignal?.addEventListener('abort', abort, { once: true });
+      removeAbortListener = () => shutdownSignal?.removeEventListener('abort', abort);
+      if (shutdownSignal?.aborted) abort();
     },
     cancel() {
+      closed = true;
+      removeAbortListener();
       unsubscribe();
     }
   });
