@@ -21,7 +21,37 @@ if ([string]::IsNullOrWhiteSpace($systemDriveRoot)) {
   throw "A local Windows system drive is required for the Windows task smoke test."
 }
 $kb1Home = Join-Path $systemDriveRoot "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
+$trustedToolsRoot = Join-Path $systemDriveRoot "kb1-windows-tools-$([Guid]::NewGuid().ToString('N'))"
+$sourceNodeDirectory = Split-Path -Parent (
+  (Get-Command node.exe -ErrorAction Stop).Source
+)
+$originalPath = [string]$env:PATH
 $taskName = "KB-1 Windows Smoke $([Guid]::NewGuid().ToString('N'))"
+function Set-OwnerOnlyDirectoryAcl {
+  param([string]$Path)
+
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $acl = Get-Acl -LiteralPath $Path
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($accessRule in @($acl.Access)) {
+    $null = $acl.RemoveAccessRuleSpecific($accessRule)
+  }
+  $acl.SetOwner($identity.User)
+  $acl.AddAccessRule(
+    [Security.AccessControl.FileSystemAccessRule]::new(
+      $identity.User,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      (
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+      ),
+      [Security.AccessControl.PropagationFlags]::None,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+  )
+  Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 function Get-StorageKey {
   param([string]$Value)
 
@@ -129,6 +159,12 @@ $commonArguments = @(
 )
 
 try {
+  New-Item -ItemType Directory -Path $trustedToolsRoot | Out-Null
+  Set-OwnerOnlyDirectoryAcl $trustedToolsRoot
+  Get-ChildItem -LiteralPath $sourceNodeDirectory -Force |
+    Copy-Item -Destination $trustedToolsRoot -Recurse -Force
+  $env:PATH = "$trustedToolsRoot;$originalPath"
+
   Invoke-Installer (@(
     "-Action", "Install",
     "-SkipRepoUpdate",
@@ -405,6 +441,12 @@ try {
   }
   Remove-Item `
     -LiteralPath $runtimeRoot `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue
+  $env:PATH = $originalPath
+  Remove-Item `
+    -LiteralPath $trustedToolsRoot `
     -Recurse `
     -Force `
     -ErrorAction SilentlyContinue
