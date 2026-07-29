@@ -199,10 +199,12 @@ function folderMetadataPath(root: string): string {
 }
 
 function trashRelativePath(originalPath: string): string {
+  const deletedAt = new Date().toISOString().replaceAll(":", "-");
+  const batchId = `${deletedAt}-${randomUUID()}`;
   return path.posix.join(
     ".kb1",
     "trash",
-    new Date().toISOString(),
+    batchId,
     originalPath,
   );
 }

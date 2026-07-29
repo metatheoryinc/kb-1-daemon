@@ -60,6 +60,8 @@ export type StartDaemonOptions = ResolveConfigOptions;
 
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<StartedDaemon> {
   const config = createDaemonConfig(options);
+  const env = options.env ?? process.env;
+  const controlToken = env.KB1_CONTROL_TOKEN?.trim();
 
   for (const warning of config.deprecationWarnings) {
     console.warn(`[${config.serviceName}] ${warning}`);
@@ -98,6 +100,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
   // Every data tool requires a vaultId; there is no default vault.
   const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry));
   const relay = createRelayLifecycleController(config, registry);
+  const shutdownSignal = new AbortController();
+  let closeDaemon: (() => Promise<void>) | undefined;
+  let shutdownRequested = false;
+  const completeShutdownRequest = () => {
+    const close = closeDaemon;
+    if (!close) return;
+    void close().catch((error: unknown) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+  };
 
   const app = createApp({
     statusFile: config.statusFile,
@@ -106,11 +119,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget,
     actorDefault: config.actorDefault,
-    relay
+    relay,
+    shutdownSignal: shutdownSignal.signal,
+    ...(controlToken ? {
+      shutdown: {
+        token: controlToken,
+        requested: () => shutdownRequested,
+        request() {
+          if (shutdownRequested) return;
+          shutdownRequested = true;
+          setTimeout(completeShutdownRequest, 0);
+        }
+      }
+    } : {})
   });
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let closePromise: Promise<void> | undefined;
     const fail = (error: Error) => {
       if (!settled) {
         settled = true;
@@ -137,18 +163,18 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
             console.log(`KB1_WEB_PROXY_TARGET=${config.webProxyTarget}`);
           }
           console.log(`status=${config.statusFile}`);
-          relay?.connect();
+          if (!shutdownRequested) {
+            relay?.connect();
+          }
 
+          const close = closeDaemon;
+          if (!close) {
+            throw new Error('KB-1 close handler was not initialized.');
+          }
           resolve({
             config,
             status,
-            close: async () => {
-              relay?.disconnect();
-              await mcpEndpoint.close();
-              await closeWebSocketServer(webSocketServer, activeDocumentConnections);
-              await closeServer(server);
-              await registry.close();
-            }
+            close
           });
         } catch (error) {
           server.close();
@@ -157,7 +183,57 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
       }
     );
 
+    closeDaemon = () => {
+      if (!closePromise) {
+        // Stop accepting HTTP mutations first. Closing MCP and WebSocket
+        // transports then drains active work before the registry persists
+        // and closes every document session.
+        const serverClosed = closeServer(server);
+        shutdownSignal.abort();
+        closePromise = (async () => {
+          const errors: unknown[] = [];
+          try {
+            relay?.disconnect();
+          } catch (error) {
+            errors.push(error);
+          }
+
+          const transportResults = await Promise.allSettled([
+            mcpEndpoint.close(),
+            closeWebSocketServer(webSocketServer, activeDocumentConnections),
+            serverClosed
+          ]);
+          for (const result of transportResults) {
+            if (result.status === 'rejected') {
+              errors.push(result.reason);
+            }
+          }
+
+          // Registry persistence is the last shutdown step, but it must still
+          // run if one of the transport drains failed. Otherwise a transport
+          // error can strand dirty document state in memory.
+          try {
+            await registry.close();
+          } catch (error) {
+            errors.push(error);
+          }
+
+          if (errors.length > 0) {
+            throw new AggregateError(errors, 'KB-1 daemon shutdown did not complete cleanly.');
+          }
+        })();
+      }
+      return closePromise;
+    };
+    if (shutdownRequested) {
+      setTimeout(completeShutdownRequest, 0);
+    }
+
     server.on('upgrade', (request, socket, head) => {
+      if (shutdownRequested) {
+        socket.destroy();
+        return;
+      }
       const pathname = request.url ? new URL(request.url, `http://${request.headers.host ?? 'localhost'}`).pathname : '';
       // Resolve the addressed vault's document manager from the scoped
       // `/api/vaults/:id/files/.../yjs` path. An unknown vault or invalid path

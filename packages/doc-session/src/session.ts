@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { watch, type FSWatcher } from 'node:fs';
+import { realpathSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
@@ -21,6 +21,32 @@ const DOCUMENT_SESSION_STATE_VERSION = 1;
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb1.external-change');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
+const WINDOWS_WATCH_DIRECTORY_CACHE = new Map<string, string>();
+
+export function resolveWatchDirectory(
+  directory: string,
+  platform: NodeJS.Platform = process.platform,
+  nativeRealpath: (path: string) => string = realpathSync.native,
+  cache: Map<string, string> = WINDOWS_WATCH_DIRECTORY_CACHE
+): string {
+  // Windows can report the watched directory through its long path even when
+  // the caller supplied an equivalent 8.3 short path. Older libuv releases
+  // assert when those two spellings no longer share a textual prefix, so hand
+  // fs.watch() the canonical spelling up front.
+  if (platform !== 'win32') {
+    return directory;
+  }
+
+  const cached = cache.get(directory);
+  if (cached) {
+    return cached;
+  }
+
+  const resolved = nativeRealpath(directory);
+  cache.set(directory, resolved);
+  cache.set(resolved, resolved);
+  return resolved;
+}
 
 interface DocumentSessionStateFile {
   version: typeof DOCUMENT_SESSION_STATE_VERSION;
@@ -602,28 +628,32 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     const directory = dirname(this.filePath);
     const filename = basename(this.filePath);
 
-    this.watcher = watch(directory, (eventType, changedFilename) => {
-      if (eventType !== 'change' && eventType !== 'rename') {
-        return;
-      }
-
-      if (changedFilename && changedFilename.toString() !== filename) {
-        return;
-      }
-
-      this.scheduleExternalCheck();
-    });
-
-    this.watcher.on('error', (error) => {
-      console.warn(`KB-1 file watcher failed for ${this.filePath}; fallback polling remains active.`, error);
-    });
-
     this.watchPollTimer = setInterval(() => {
       this.checkForExternalChange().catch((error: unknown) => {
         console.warn(`KB-1 fallback file poll failed for ${this.filePath}.`, error);
       });
     }, this.watchPollMs);
     this.watchPollTimer.unref?.();
+
+    try {
+      this.watcher = watch(resolveWatchDirectory(directory), (eventType, changedFilename) => {
+        if (eventType !== 'change' && eventType !== 'rename') {
+          return;
+        }
+
+        if (changedFilename && changedFilename.toString() !== filename) {
+          return;
+        }
+
+        this.scheduleExternalCheck();
+      });
+
+      this.watcher.on('error', (error) => {
+        console.warn(`KB-1 file watcher failed for ${this.filePath}; fallback polling remains active.`, error);
+      });
+    } catch (error) {
+      console.warn(`KB-1 file watcher could not start for ${this.filePath}; fallback polling remains active.`, error);
+    }
   }
 
   private stopWatching(): void {

@@ -1656,10 +1656,42 @@ describe("vault-core filesystem operations", () => {
     });
     expect(deleted.ok).toBe(true);
     const trashPath = deleted.ok ? deleted.value.trashPath : undefined;
-    expect(trashPath).toMatch(/^\.kb1\/trash\/.+\/folder$/);
+    expect(trashPath).toMatch(
+      /^\.kb1\/trash\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f-]{36}\/folder$/,
+    );
+    const trashBatch = trashPath?.split("/")[2];
+    expect(trashBatch).not.toMatch(/[<>:"\\|?*]/);
     await expect(
       readFile(path.join(root, trashPath!, "file.md"), "utf8"),
     ).resolves.toBe("x");
+  });
+
+  it("keeps repeated soft deletes distinct even within the same millisecond", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T10:13:11.123Z"));
+    try {
+      await writeVaultFile(ctx, { path: "recreated.md", content: "first" });
+      const first = await deleteVaultFile(ctx, { path: "recreated.md" });
+      await writeVaultFile(ctx, { path: "recreated.md", content: "second" });
+      const second = await deleteVaultFile(ctx, { path: "recreated.md" });
+
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      const firstTrashPath = first.ok ? first.value.trashPath : undefined;
+      const secondTrashPath = second.ok ? second.value.trashPath : undefined;
+      expect(firstTrashPath).toMatch(
+        /^\.kb1\/trash\/2026-07-28T10-13-11\.123Z-[0-9a-f-]{36}\/recreated\.md$/,
+      );
+      expect(secondTrashPath).not.toBe(firstTrashPath);
+      await expect(
+        readFile(path.join(root, firstTrashPath!), "utf8"),
+      ).resolves.toBe("first");
+      await expect(
+        readFile(path.join(root, secondTrashPath!), "utf8"),
+      ).resolves.toBe("second");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("permanently deletes files when requested", async () => {

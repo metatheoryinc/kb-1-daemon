@@ -37,7 +37,10 @@ interface LocalMcpEndpointOptions {
 
 interface LocalMcpServerOptions {
   actor?: LocalMcpActor;
+  trackOperation?: ToolOperationTracker;
 }
+
+type ToolOperationTracker = <T>(operation: () => Promise<T>) => Promise<T>;
 
 interface SessionRecord {
   server: McpServer;
@@ -51,6 +54,7 @@ interface SessionRecord {
  * surface is identical either way.
  */
 type LocalMcpVaultSource = LocalMcpVaultProvider | LocalMcpVaultService;
+const toolOperationTrackers = new WeakMap<McpServer, ToolOperationTracker>();
 
 export function createLocalMcpEndpoint(
   source: LocalMcpVaultSource,
@@ -58,62 +62,186 @@ export function createLocalMcpEndpoint(
 ): LocalMcpEndpoint {
   const provider = asProvider(source);
   const sessions = new Map<string, SessionRecord>();
-
-  return {
-    async handleRequest(request) {
-      const sessionId = request.headers.get("mcp-session-id") ?? undefined;
-      const existing = sessionId ? sessions.get(sessionId) : undefined;
-      if (existing) {
-        return existing.transport.handleRequest(request);
+  const activeHttpRequests = new Set<Promise<void>>();
+  const activeOperations = new Set<Promise<void>>();
+  let acceptingRequests = true;
+  let acceptingOperations = true;
+  let closePromise: Promise<void> | undefined;
+  const trackOperation: ToolOperationTracker = async (operation) => {
+    if (!acceptingOperations) {
+      throw new Error("MCP endpoint is shutting down");
+    }
+    let markFinished: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => {
+      markFinished = resolve;
+    });
+    activeOperations.add(finished);
+    try {
+      return await operation();
+    } finally {
+      // Let the MCP SDK finish formatting and enqueueing the tool response
+      // before close() tears down the transport and clears its response map.
+      setImmediate(() => {
+        activeOperations.delete(finished);
+        markFinished?.();
+      });
+    }
+  };
+  const trackHttpRequest = async (
+    request: Promise<Response>,
+  ): Promise<Response> => {
+    let markFinished: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => {
+      markFinished = resolve;
+    });
+    let isFinished = false;
+    const finish = () => {
+      if (isFinished) return;
+      isFinished = true;
+      activeHttpRequests.delete(finished);
+      markFinished?.();
+    };
+    activeHttpRequests.add(finished);
+    try {
+      const response = await request;
+      if (!response.body) {
+        finish();
+        return response;
       }
 
-      const parsedBody =
-        request.method === "POST"
-          ? await request
-              .clone()
-              .json()
-              .catch(() => undefined)
-          : undefined;
-      if (request.method !== "POST" || !isInitializeRequest(parsedBody)) {
-        return jsonRpcError(
-          "Bad Request: No valid MCP session id provided",
-          400,
-        );
-      }
-
-      const actor = options.actorFromRequest?.(request);
-      if (isServiceFailure(actor)) {
-        return jsonRpcError(`Bad Request: ${actor.message}`, 400);
-      }
-
-      let assignedSessionId: string | undefined;
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (nextSessionId) => {
-          assignedSessionId = nextSessionId;
+      // The MCP transport may resolve handleRequest() as soon as it creates a
+      // streaming response, before its JSON-RPC handler has enqueued the
+      // response body. Keep the request active until the server/client has
+      // actually consumed or cancelled that body so close() cannot tear down
+      // the transport between those two events.
+      const reader = response.body.getReader();
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const chunk = await reader.read();
+            if (chunk.done) {
+              controller.close();
+              reader.releaseLock();
+              finish();
+              return;
+            }
+            controller.enqueue(chunk.value);
+          } catch (error) {
+            controller.error(error);
+            reader.releaseLock();
+            finish();
+          }
+        },
+        async cancel(reason) {
+          try {
+            await reader.cancel(reason);
+          } finally {
+            reader.releaseLock();
+            finish();
+          }
         },
       });
-      const server = createLocalMcpServer(provider, { actor });
+      return new Response(body, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    } catch (error) {
+      finish();
+      throw error;
+    }
+  };
 
-      transport.onclose = () => {
-        const id = transport.sessionId ?? assignedSessionId;
-        if (id) sessions.delete(id);
-      };
-
-      await server.connect(transport);
-      const response = await transport.handleRequest(request, { parsedBody });
-      const id = transport.sessionId ?? assignedSessionId;
-      if (id) {
-        sessions.set(id, { server, transport });
+  return {
+    handleRequest(request) {
+      if (!acceptingRequests) {
+        return Promise.resolve(
+          jsonRpcError("Service Unavailable: MCP endpoint is shutting down", 503),
+        );
       }
-      return response;
+      const response = handleMcpRequest(
+        provider,
+        sessions,
+        options,
+        trackOperation,
+        request,
+      );
+      return request.method === "GET" ? response : trackHttpRequest(response);
     },
-    async close() {
-      const records = [...sessions.values()];
-      sessions.clear();
-      await Promise.all(records.map(({ server }) => server.close()));
+    close() {
+      if (!closePromise) {
+        acceptingRequests = false;
+        closePromise = (async () => {
+          // Requests admitted before the shutdown boundary may still be
+          // parsing their body or dispatching a tool. Let those requests
+          // finish admitting their operations before closing that second
+          // gate, then drain every operation before tearing down sessions.
+          await Promise.all([...activeHttpRequests]);
+          acceptingOperations = false;
+          await Promise.all([...activeOperations]);
+          const records = [...sessions.values()];
+          sessions.clear();
+          await Promise.all(records.map(({ server }) => server.close()));
+        })();
+      }
+      return closePromise;
     },
   };
+}
+
+async function handleMcpRequest(
+  provider: LocalMcpVaultProvider,
+  sessions: Map<string, SessionRecord>,
+  options: LocalMcpEndpointOptions,
+  trackOperation: ToolOperationTracker,
+  request: Request,
+): Promise<Response> {
+  const sessionId = request.headers.get("mcp-session-id") ?? undefined;
+  const existing = sessionId ? sessions.get(sessionId) : undefined;
+  if (existing) {
+    return existing.transport.handleRequest(request);
+  }
+
+  const parsedBody =
+    request.method === "POST"
+      ? await request
+          .clone()
+          .json()
+          .catch(() => undefined)
+      : undefined;
+  if (request.method !== "POST" || !isInitializeRequest(parsedBody)) {
+    return jsonRpcError(
+      "Bad Request: No valid MCP session id provided",
+      400,
+    );
+  }
+
+  const actor = options.actorFromRequest?.(request);
+  if (isServiceFailure(actor)) {
+    return jsonRpcError(`Bad Request: ${actor.message}`, 400);
+  }
+
+  let assignedSessionId: string | undefined;
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (nextSessionId) => {
+      assignedSessionId = nextSessionId;
+    },
+  });
+  const server = createLocalMcpServer(provider, { actor, trackOperation });
+
+  transport.onclose = () => {
+    const id = transport.sessionId ?? assignedSessionId;
+    if (id) sessions.delete(id);
+  };
+
+  await server.connect(transport);
+  const response = await transport.handleRequest(request, { parsedBody });
+  const id = transport.sessionId ?? assignedSessionId;
+  if (id) {
+    sessions.set(id, { server, transport });
+  }
+  return response;
 }
 
 export function createLocalMcpServer(
@@ -127,6 +255,9 @@ export function createLocalMcpServer(
     name: "kb-1-local-daemon",
     version: "0.0.0",
   });
+  if (options.trackOperation) {
+    toolOperationTrackers.set(server, options.trackOperation);
+  }
 
   const actor = (): LocalMcpActor => {
     if (options.actor) return options.actor;
@@ -730,7 +861,9 @@ function registerTool<TInput extends object>(
   handler: (input: TInput) => Promise<unknown>,
 ): void {
   server.registerTool(name, config, async (input) => {
-    const result = await handler(input as TInput);
+    const operation = () => handler(input as TInput);
+    const tracker = toolOperationTrackers.get(server);
+    const result = await (tracker ? tracker(operation) : operation());
     if (isDirectToolResult(result)) {
       return result;
     }

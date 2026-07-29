@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,6 +18,7 @@ const port = await reservePort();
 const origin = `http://127.0.0.1:${port}`;
 const timeoutMs = Number(process.env.KB1_WINDOWS_SMOKE_TIMEOUT_MS || '90000');
 const expectedContent = `# Windows smoke\n\nPersistent note ${Date.now()}\n`;
+const trashedContent = `# Windows trash smoke\n\nSoft-deleted note ${Date.now()}\n`;
 let daemon;
 
 try {
@@ -34,6 +35,7 @@ try {
     throw new Error(`Windows smoke note create failed: HTTP ${created.status} ${await created.text()}`);
   }
   await verifyNote();
+  await verifySoftDelete();
 
   await stopDaemon(daemon);
   daemon = undefined;
@@ -44,7 +46,7 @@ try {
   await verifyNote();
 
   console.log('Windows source smoke passed.');
-  console.log('Verified daemon startup, note create/read, process-tree shutdown, and restart persistence.');
+  console.log('Verified daemon startup, note create/read/soft-delete, process-tree shutdown, and restart persistence.');
 } catch (error) {
   if (daemon?.logs) {
     console.error('\nDaemon output:');
@@ -130,6 +132,57 @@ async function verifyNote() {
     throw new Error(
       `Windows smoke note read failed: HTTP ${response.status} ${JSON.stringify(body)}`
     );
+  }
+}
+
+async function verifySoftDelete() {
+  const noteUrl = `${origin}/api/vaults/demo-vault/files/windows-trash-smoke.md`;
+  const created = await fetch(noteUrl, {
+    method: 'PUT',
+    headers: { 'content-type': 'text/plain' },
+    body: trashedContent,
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (created.status !== 201) {
+    throw new Error(`Windows trash smoke note create failed: HTTP ${created.status} ${await created.text()}`);
+  }
+
+  const deleted = await fetch(noteUrl, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  const body = await deleted.json();
+  if (!deleted.ok || body.ok !== true || typeof body.trashPath !== 'string') {
+    throw new Error(
+      `Windows trash smoke delete failed: HTTP ${deleted.status} ${JSON.stringify(body)}`
+    );
+  }
+
+  const trashSegments = body.trashPath.split('/');
+  const trashBatch = trashSegments[2];
+  if (
+    trashSegments[0] !== '.kb1'
+    || trashSegments[1] !== 'trash'
+    || trashSegments.at(-1) !== 'windows-trash-smoke.md'
+    || typeof trashBatch !== 'string'
+    || /[<>:"\\|?*]/.test(trashBatch)
+  ) {
+    throw new Error(`Windows trash smoke returned a non-portable path: ${body.trashPath}`);
+  }
+
+  const trashed = await readFile(
+    join(kb1Home, 'vaults', 'demo-vault', ...trashSegments),
+    'utf8'
+  );
+  if (trashed !== trashedContent) {
+    throw new Error(`Windows trash smoke content mismatch at ${body.trashPath}`);
+  }
+
+  const missing = await fetch(noteUrl, {
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (missing.status !== 404) {
+    throw new Error(`Windows trash smoke original remained readable: HTTP ${missing.status}`);
   }
 }
 

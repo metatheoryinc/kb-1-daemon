@@ -57,3 +57,7 @@ jobs:
           pnpm typecheck
           pnpm build
           pnpm smoke:windows
+
+      - name: Verify Windows background task lifecycle
+        shell: powershell
+        run: .\scripts\windows-task-smoke.ps1

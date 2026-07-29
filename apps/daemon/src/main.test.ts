@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
 import { isDaemonCliEntrypoint, startDaemon } from './main.js';
+import * as statusModule from './status.js';
 
 describe('daemon startup', () => {
   let kb1Home: string;
@@ -222,6 +223,97 @@ describe('daemon startup', () => {
     await expect(readFile(join(started.config.vaultRoot, 'typo', 'missing.md'), 'utf8')).resolves.toBe('created immediately\n');
 
     await started.close();
+  });
+
+  it('authenticates a supervised shutdown and exposes its launch nonce in health', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port),
+      KB1_CONTROL_TOKEN: 'supervisor-secret',
+      KB1_INSTANCE_ID: 'scheduled-task-run-123'
+    };
+
+    const started = await startDaemon();
+    const origin = `http://127.0.0.1:${port}`;
+    const health = await fetch(`${origin}/api/health`);
+    await expect(health.json()).resolves.toMatchObject({
+      ok: true,
+      status: {
+        pid: process.pid,
+        instanceId: 'scheduled-task-run-123'
+      }
+    });
+
+    const rejected = await fetch(`${origin}/api/control/shutdown`, {
+      method: 'POST',
+      headers: { 'x-kb1-control-token': 'not-the-secret' }
+    });
+    expect(rejected.status).toBe(401);
+    expect((await fetch(`${origin}/api/health`)).status).toBe(200);
+
+    const accepted = await fetch(`${origin}/api/control/shutdown`, {
+      method: 'POST',
+      headers: { 'x-kb1-control-token': 'supervisor-secret' }
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toEqual({ ok: true, shuttingDown: true });
+
+    await started.close();
+    await expect(fetch(`${origin}/api/health`)).rejects.toBeTruthy();
+  });
+
+  it('completes an authenticated shutdown requested while startup status is pending', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port),
+      KB1_CONTROL_TOKEN: 'startup-shutdown-secret'
+    };
+
+    let releaseStatusWrite: (() => void) | undefined;
+    const statusWriteGate = new Promise<void>((resolve) => {
+      releaseStatusWrite = resolve;
+    });
+    let markStatusWriteStarted: (() => void) | undefined;
+    const statusWriteStarted = new Promise<void>((resolve) => {
+      markStatusWriteStarted = resolve;
+    });
+    const writeDaemonStatus = statusModule.writeDaemonStatus;
+    const statusSpy = vi
+      .spyOn(statusModule, 'writeDaemonStatus')
+      .mockImplementation(async (config) => {
+        markStatusWriteStarted?.();
+        await statusWriteGate;
+        return writeDaemonStatus(config);
+      });
+
+    try {
+      const starting = startDaemon();
+      await statusWriteStarted;
+      const origin = `http://127.0.0.1:${port}`;
+      const accepted = await fetch(`${origin}/api/control/shutdown`, {
+        method: 'POST',
+        headers: { 'x-kb1-control-token': 'startup-shutdown-secret' }
+      });
+      expect(accepted.status).toBe(202);
+      await expect(accepted.json()).resolves.toEqual({
+        ok: true,
+        shuttingDown: true
+      });
+
+      releaseStatusWrite?.();
+      const started = await starting;
+      await started.close();
+      await expect(fetch(`${origin}/api/health`)).rejects.toBeTruthy();
+    } finally {
+      releaseStatusWrite?.();
+      statusSpy.mockRestore();
+    }
   });
 });
 

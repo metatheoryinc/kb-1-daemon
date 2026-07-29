@@ -39,8 +39,134 @@ describe("local MCP server", () => {
       }),
     );
     expect(postResponse.status).toBe(400);
+    await expect(postResponse.json()).resolves.toMatchObject({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: "Bad Request: No valid MCP session id provided",
+      },
+      id: null,
+    });
 
     await endpoint.close();
+  });
+
+  it("waits for an accepted initialization request before closing sessions", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService());
+    const request = new Request("http://127.0.0.1/mcp", {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "init-race-test", version: "1.0.0" },
+        },
+      }),
+    });
+    const cloneRequest = request.clone.bind(request);
+    let releaseParsing: (() => void) | undefined;
+    const parseGate = new Promise<void>((resolve) => {
+      releaseParsing = resolve;
+    });
+    let markParsingStarted: (() => void) | undefined;
+    const parsingStarted = new Promise<void>((resolve) => {
+      markParsingStarted = resolve;
+    });
+    vi.spyOn(request, "clone").mockImplementation(() => {
+      const clone = cloneRequest();
+      const parseJson = clone.json.bind(clone);
+      vi.spyOn(clone, "json").mockImplementation(async () => {
+        markParsingStarted?.();
+        await parseGate;
+        return parseJson();
+      });
+      return clone;
+    });
+
+    const initialization = endpoint.handleRequest(request);
+    await within(parsingStarted, "initialization parsing did not start");
+    let closeResolved = false;
+    const closing = endpoint.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+
+    releaseParsing?.();
+    const response = await within(
+      initialization,
+      "initialization did not finish",
+    );
+    expect(response.status).toBe(200);
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+    const responseBody = await within(
+      response.text(),
+      "initialization response body did not finish",
+    );
+    expect(responseBody).toContain('"serverInfo"');
+    await within(closing, "endpoint close did not finish after initialization");
+  });
+
+  it("finishes draining when an admitted response body is cancelled", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService());
+    const response = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "cancel-test", version: "1.0.0" },
+          },
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+
+    let closeResolved = false;
+    const closing = endpoint.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+
+    await response.body?.cancel("client disconnected");
+    await within(closing, "endpoint close did not finish after cancellation");
+  });
+
+  it("releases request tracking when dispatch rejects", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService());
+    const request = new Request("http://127.0.0.1/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    vi.spyOn(request, "clone").mockImplementation(() => {
+      throw new Error("request body unavailable");
+    });
+
+    await expect(endpoint.handleRequest(request)).rejects.toThrow(
+      "request body unavailable",
+    );
+    await within(
+      endpoint.close(),
+      "endpoint close did not finish after dispatch rejection",
+    );
   });
 
   it("registers every tier-1 tool and forwards calls to the injected service with initialize attribution", async () => {
@@ -500,7 +626,169 @@ describe("local MCP server", () => {
     await transport.terminateSession();
     await endpoint.close();
   });
+
+  it("waits for an in-flight tool mutation before closing MCP transports", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    let markMutationStarted: (() => void) | undefined;
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    let markMutationFinished: (() => void) | undefined;
+    const mutationFinished = new Promise<void>((resolve) => {
+      markMutationFinished = resolve;
+    });
+    const service = {
+      ...emptyService(),
+      appendNote: async () => {
+        markMutationStarted?.();
+        await mutationGate;
+        markMutationFinished?.();
+        return { ok: true as const };
+      },
+    } satisfies LocalMcpVaultService;
+    const endpoint = createLocalMcpEndpoint(service);
+    const client = new Client({ name: "drain-test-client", version: "1.0.0" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL("http://127.0.0.1/mcp"),
+      {
+        fetch: async (input, init) =>
+          endpoint.handleRequest(
+            input instanceof Request ? input : new Request(input, init),
+          ),
+      },
+    );
+
+    await client.connect(transport);
+    const mutation = toolJson(client, "append_note", {
+      vaultId: "default",
+      path: "note.md",
+      content: "pending",
+    });
+    await within(mutationStarted, "mutation did not start");
+
+    let closeResolved = false;
+    const closing = endpoint.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+    expect(closeResolved).toBe(false);
+
+    releaseMutation?.();
+    await within(mutationFinished, "mutation service did not finish");
+    await within(closing, "endpoint close did not finish");
+    await expect(within(mutation, "mutation did not finish")).resolves.toEqual({
+      ok: true,
+    });
+
+    const rejected = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp"),
+    );
+    expect(rejected.status).toBe(503);
+  });
+
+  it("drains an admitted request whose tool starts during shutdown", async () => {
+    let sessionId: string | null = null;
+    let markMutationStarted: (() => void) | undefined;
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    const service = {
+      ...emptyService(),
+      appendNote: async () => {
+        markMutationStarted?.();
+        return { ok: true as const };
+      },
+    } satisfies LocalMcpVaultService;
+    const endpoint = createLocalMcpEndpoint(service);
+    const client = new Client({
+      name: "admission-drain-test-client",
+      version: "1.0.0",
+    });
+    const transport = new StreamableHTTPClientTransport(
+      new URL("http://127.0.0.1/mcp"),
+      {
+        fetch: async (input, init) => {
+          const response = await endpoint.handleRequest(
+            input instanceof Request ? input : new Request(input, init),
+          );
+          sessionId ??= response.headers.get("mcp-session-id");
+          return response;
+        },
+      },
+    );
+    await client.connect(transport);
+    expect(sessionId).toBeTruthy();
+
+    let releaseBody: (() => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseBody = () => {
+          controller.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: 2,
+                method: "tools/call",
+                params: {
+                  name: "append_note",
+                  arguments: {
+                    vaultId: "default",
+                    path: "note.md",
+                    content: "admitted",
+                  },
+                },
+              }),
+            ),
+          );
+          controller.close();
+        };
+      },
+    });
+    const admittedRequest = endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+    const closing = endpoint.close();
+
+    releaseBody?.();
+    await within(mutationStarted, "admitted mutation did not start");
+    const response = await within(
+      admittedRequest,
+      "admitted request did not finish",
+    );
+    expect(response.status).toBe(200);
+    const responseBody = await within(
+      response.text(),
+      "admitted request response body did not finish",
+    );
+    expect(responseBody).toContain('"id":2');
+    expect(responseBody).toContain('"result"');
+    await within(closing, "endpoint close did not finish");
+  });
 });
+
+async function within<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), 1_000);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function toolJson(
   client: Client,

@@ -96,6 +96,64 @@ open http://127.0.0.1:8787/
 The daemon owns one port in this mode: `/api/*` is the Hono API and every
 non-API route is served from the built SvelteKit shell with an SPA fallback.
 
+## Windows per-user background task
+
+Windows 11 supports the same source-built daemon through a per-user Scheduled
+Task. From a cloned checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\skills\kb-1-daemon-setup\scripts\install_kb1_daemon_user_task.ps1
+```
+
+The installer prepares the requested source revision, installs the lockfile,
+runs `pnpm check` (`-BuildOnly` runs `pnpm build` instead), registers `KB-1
+Local` to start at logon, starts it immediately, and verifies that `/api/health`
+belongs to the configured task process and home. The task runs as the current
+user with limited privileges and stays bound to loopback unless the operator
+explicitly passes `-ConfirmNonLoopbackBind`.
+
+Use `-Action Status`, `Start`, `Stop`, or `Uninstall` for lifecycle management.
+Stop, replacement, and uninstall use a private per-task control token and launch
+nonce to verify the exact supervised daemon. Graceful shutdown stops new HTTP
+mutations, drains active transports, and closes every vault session before the
+process exits. Lifecycle operations fail closed when that shutdown cannot be
+verified unless the operator explicitly supplies `-ForceStop`; that fallback
+matches the protected PID, Node path, and process start time before terminating
+the complete daemon process tree. Uninstalling preserves the repository, logs,
+and vault data. CI exercises the complete register/status/stop/restart/unregister
+lifecycle on a Windows runner. By default the installer uses the checkout
+containing the script; pass `-RepoDir` only to select a different clone.
+Private task configuration, logs, and managed runtimes are stored beneath
+`$env:LOCALAPPDATA\KB-1\tasks`, separately from vault data in `KB1_HOME`.
+Registration is transactional: a failed fresh install removes the broken task,
+while a failed replacement restores the prior task definition, configuration,
+and runnable code. Initial installation and upgrades clone and build the exact
+selected commit in an isolated, owner-only versioned runtime before the old task
+is stopped. Dependencies use a runtime-local pnpm store, and runtime reparse
+points may not escape the protected root. A clean branch that is only behind its configured
+upstream advances to that fetched upstream commit; detached checkouts, local
+commits, and diverged branches preserve their selected commit. Task
+upgrades also preserve the installed source checkout, `KB1_HOME`, bind, and
+port unless the operator explicitly supplies an override. Task
+configuration and managed runtimes are restricted to the current Windows user.
+Task-name and `KB1_HOME` mutexes serialize lifecycle operations, so differently
+named tasks cannot race past the one-task-per-home check.
+Before any repository tool or script runs, the installer verifies the checkout
+boundary and executable ownership/permissions; it also rejects persistent paths
+another untrusted local principal can replace (including through the checkout
+parent or selected PowerShell binary). Inactive versioned runtimes are pruned
+after a successful replacement. A same-named task without KB-1's current-user
+ownership signature is never replaced or removed.
+
+Windows policy can require an elevated PowerShell window for registration, but
+the registered task itself uses the current user's limited run level.
+
+This is intentionally described as a source-based background task. It is not a
+signed MSI/MSIX and does not register Node directly with Windows Service Control
+Manager. A true native service requires a service-aware wrapper, code signing,
+artifact provenance, upgrade/rollback behavior, and an owned release channel.
+
 ## Docker
 
 The Docker path supports direct image runs and includes a Compose-backed
@@ -194,7 +252,8 @@ The daemon package reserves the future CLI binary name:
 ```
 
 Publishing is deferred. The supported public setup path is `git clone` plus the
-setup skill while packaging is hardened. Packaging hardening should make
+setup skill, including its Windows per-user task path, while native packaging is
+hardened. Packaging hardening should make
 `@kb-1/daemon` publishable, add provenance/signing rules, define whether the
 open-source package publishes from this package directly or from a dedicated
 release wrapper, and choose the public binary/package names.

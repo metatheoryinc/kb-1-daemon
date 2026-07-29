@@ -1,7 +1,9 @@
 # Release Process
 
 KB-1 Local is currently distributed from source and as a Docker build from this
-repository. The npm workspace packages are private and are not published.
+repository. Windows source installs may use the tested per-user Scheduled Task
+installer. The npm workspace packages are private and are not published, and
+there is no signed native Windows installer or SCM service release.
 
 ## Release Checklist
 
@@ -36,6 +38,12 @@ repository. The npm workspace packages are private and are not published.
    check fails. Set
    `KB1_RELEASE_SMOKE_IMAGE` to override the image tag or
    `KB1_RELEASE_SMOKE_PORT` when a fixed host port is needed.
+
+   The regular GitHub Actions check must also pass its Windows jobs. Those jobs
+   verify source startup, note create/read/soft-delete, restart persistence,
+   process-tree shutdown, and the per-user Scheduled Task lifecycle, including
+   isolation after a failed staged build and rollback after a failed
+   replacement.
 
 6. Run a dedicated secret scanner across the full Git history and review
    dependency alerts.

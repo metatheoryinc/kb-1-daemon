@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 import * as Y from 'yjs';
 
-import { createFastDiffYTextDelta } from './session.js';
+import { createFastDiffYTextDelta, resolveWatchDirectory } from './session.js';
 import {
   OneFileDocumentSession,
   DocumentSessionManager,
@@ -24,6 +24,23 @@ describe('OneFileDocumentSession', () => {
 
   afterEach(async () => {
     await rm(kb1Home, { force: true, recursive: true });
+  });
+
+  it('canonicalizes Windows watcher directories before starting fs.watch', () => {
+    const shortPath = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\kb1';
+    const longPath = 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\kb1';
+    const nativeRealpath = vi.fn(() => longPath);
+    const cache = new Map<string, string>();
+
+    expect(resolveWatchDirectory(shortPath, 'win32', nativeRealpath, cache)).toBe(longPath);
+    expect(nativeRealpath).toHaveBeenCalledOnce();
+    expect(nativeRealpath).toHaveBeenCalledWith(shortPath);
+
+    nativeRealpath.mockClear();
+    expect(resolveWatchDirectory(shortPath, 'win32', nativeRealpath, cache)).toBe(longPath);
+    expect(resolveWatchDirectory(longPath, 'win32', nativeRealpath, cache)).toBe(longPath);
+    expect(resolveWatchDirectory('/tmp/kb1', 'linux', nativeRealpath, cache)).toBe('/tmp/kb1');
+    expect(nativeRealpath).not.toHaveBeenCalled();
   });
 
   it('maps fast-diff output to a Y.Text delta that reproduces randomized disk content exactly', () => {

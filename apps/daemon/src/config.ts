@@ -36,6 +36,8 @@ export interface DaemonConfig {
   statusFile: string;
   startedAt: string;
   pid: number;
+  /** Optional launch nonce used by supervised runtimes to prove process ownership. */
+  instanceId?: string;
   deprecationWarnings: string[];
 }
 
@@ -161,6 +163,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
   const daemonHome = join(kb1Home, 'daemon');
   const vaultsHome = join(kb1Home, VAULTS_DIRNAME);
   const vaultRoot = join(vaultsHome, DEFAULT_VAULT_SLUG);
+  const instanceId = optionalEnv(env.KB1_INSTANCE_ID);
 
   return {
     serviceName: SERVICE_NAME,
@@ -177,6 +180,7 @@ export function createDaemonConfig(options: ResolveConfigOptions = {}): DaemonCo
     statusFile: join(daemonHome, 'status.json'),
     startedAt: (options.now ?? new Date()).toISOString(),
     pid: options.pid ?? process.pid,
+    ...(instanceId ? { instanceId } : {}),
     deprecationWarnings: collectConfigDeprecationWarnings(env, homeDir)
   };
 }
