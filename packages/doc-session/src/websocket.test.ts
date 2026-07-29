@@ -374,6 +374,10 @@ describe('Yjs WebSocket session', () => {
       encoding.writeVarUint8Array(encoder, Y.encodeStateAsUpdate(stalePeer));
     }));
     await session.flush();
+    await waitUntil(
+      () => staleSocket.closed.length > 0,
+      () => 'Timed out waiting for the divergent stale socket to close',
+    );
 
     expect(staleSocket.closed).toEqual([{
       code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,

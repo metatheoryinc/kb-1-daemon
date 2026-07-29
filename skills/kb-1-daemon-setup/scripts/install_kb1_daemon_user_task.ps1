@@ -10,7 +10,7 @@ param(
   [string]$RepoDir = $(if ($env:KB1_REPO_DIR) {
     $env:KB1_REPO_DIR
   } else {
-    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
+    ""
   }),
 
   [string]$KB1Home = $(if ($env:KB1_HOME) {
@@ -66,6 +66,12 @@ foreach ($environmentOverride in @{
   }
 }
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($RepoDir)) {
+  if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    throw "Could not resolve the installer script directory."
+  }
+  $RepoDir = Join-Path $PSScriptRoot "..\..\.."
+}
 $RepoDir = [IO.Path]::GetFullPath($RepoDir)
 $KB1Home = [IO.Path]::GetFullPath($KB1Home)
 if ($BindHost.StartsWith("[") -and $BindHost.EndsWith("]")) {
