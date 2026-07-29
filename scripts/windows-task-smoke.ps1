@@ -20,11 +20,31 @@ $systemDriveRoot = [IO.Path]::GetPathRoot([string]$env:SystemRoot)
 if ([string]::IsNullOrWhiteSpace($systemDriveRoot)) {
   throw "A local Windows system drive is required for the Windows task smoke test."
 }
-$kb1Home = Join-Path $systemDriveRoot "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
-$trustedToolsRoot = Join-Path $systemDriveRoot "kb1-windows-tools-$([Guid]::NewGuid().ToString('N'))"
+$trustedWorkspaceRoot = Join-Path $systemDriveRoot "kb1-windows-smoke-$([Guid]::NewGuid().ToString('N'))"
+$kb1Home = Join-Path $trustedWorkspaceRoot "home~archive"
+$trustedToolsRoot = Join-Path $trustedWorkspaceRoot "tools"
+$trustedSourceRoot = Join-Path $trustedWorkspaceRoot "source"
 $sourceNodeDirectory = Split-Path -Parent (
   (Get-Command node.exe -ErrorAction Stop).Source
 )
+$sourceGitPath = (Get-Command git.exe -ErrorAction Stop).Source
+$sourceStatus = & $sourceGitPath `
+  -C $repoRoot `
+  status `
+  --porcelain `
+  --untracked-files=all
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not inspect the Windows smoke source checkout."
+}
+if (-not [string]::IsNullOrWhiteSpace([string]$sourceStatus)) {
+  throw "The Windows task smoke requires a clean source checkout."
+}
+$sourceCommit = (
+  & $sourceGitPath -C $repoRoot rev-parse HEAD
+).Trim()
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not resolve the Windows smoke source commit."
+}
 $originalPath = [string]$env:PATH
 $taskName = "KB-1 Windows Smoke $([Guid]::NewGuid().ToString('N'))"
 function Set-OwnerOnlyDirectoryAcl {
@@ -151,7 +171,7 @@ function New-OwnerOnlyGlobalMutex {
 }
 
 $commonArguments = @(
-  "-RepoDir", $repoRoot,
+  "-RepoDir", $trustedSourceRoot,
   "-KB1Home", $kb1Home,
   "-BindHost", "[::1]",
   "-Port", [string]$port,
@@ -159,11 +179,30 @@ $commonArguments = @(
 )
 
 try {
+  New-Item -ItemType Directory -Path $trustedWorkspaceRoot | Out-Null
+  Set-OwnerOnlyDirectoryAcl $trustedWorkspaceRoot
   New-Item -ItemType Directory -Path $trustedToolsRoot | Out-Null
   Set-OwnerOnlyDirectoryAcl $trustedToolsRoot
   Get-ChildItem -LiteralPath $sourceNodeDirectory -Force |
     Copy-Item -Destination $trustedToolsRoot -Recurse -Force
   $env:PATH = "$trustedToolsRoot;$originalPath"
+  & $sourceGitPath `
+    clone `
+    --no-hardlinks `
+    --no-checkout `
+    $repoRoot `
+    $trustedSourceRoot
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not create the trusted Windows smoke source checkout."
+  }
+  & $sourceGitPath `
+    -C $trustedSourceRoot `
+    checkout `
+    --detach `
+    $sourceCommit
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not check out the Windows smoke source commit."
+  }
 
   Invoke-Installer (@(
     "-Action", "Install",
@@ -266,7 +305,7 @@ try {
     [int]$preservedConfig.port -ne $port -or
     -not [string]::Equals(
       [IO.Path]::GetFullPath([string]$preservedConfig.sourceRepoDir),
-      [IO.Path]::GetFullPath($repoRoot),
+      [IO.Path]::GetFullPath($trustedSourceRoot),
       [StringComparison]::OrdinalIgnoreCase
     )
   ) {
@@ -447,6 +486,11 @@ try {
   $env:PATH = $originalPath
   Remove-Item `
     -LiteralPath $trustedToolsRoot `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue
+  Remove-Item `
+    -LiteralPath $trustedWorkspaceRoot `
     -Recurse `
     -Force `
     -ErrorAction SilentlyContinue
