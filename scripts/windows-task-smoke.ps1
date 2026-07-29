@@ -105,6 +105,59 @@ $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
 $listener.Stop()
 $healthUrl = "http://[::1]:$port/api/health"
 
+function Invoke-DirectRestMethod {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Uri]$Uri,
+    [ValidateSet("Get", "Post")]
+    [string]$Method = "Get",
+    [hashtable]$Headers = @{},
+    [ValidateRange(1, 300)]
+    [int]$TimeoutSec = 30
+  )
+
+  if (-not ("System.Net.Http.HttpClient" -as [type])) {
+    Add-Type -AssemblyName System.Net.Http
+  }
+
+  $handler = [Net.Http.HttpClientHandler]::new()
+  $handler.UseProxy = $false
+  $client = [Net.Http.HttpClient]::new($handler)
+  $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+  $httpMethod = if ($Method -eq "Post") {
+    [Net.Http.HttpMethod]::Post
+  } else {
+    [Net.Http.HttpMethod]::Get
+  }
+  $request = [Net.Http.HttpRequestMessage]::new($httpMethod, $Uri)
+  foreach ($header in $Headers.GetEnumerator()) {
+    $request.Headers.TryAddWithoutValidation(
+      [string]$header.Key,
+      [string]$header.Value
+    ) | Out-Null
+  }
+
+  $response = $null
+  try {
+    $response = $client.SendAsync($request).GetAwaiter().GetResult()
+    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if (-not $response.IsSuccessStatusCode) {
+      throw "HTTP $([int]$response.StatusCode) $($response.ReasonPhrase): $body"
+    }
+    if ([string]::IsNullOrWhiteSpace($body)) {
+      return $null
+    }
+    return $body | ConvertFrom-Json
+  } finally {
+    if ($null -ne $response) {
+      $response.Dispose()
+    }
+    $request.Dispose()
+    $client.Dispose()
+    $handler.Dispose()
+  }
+}
+
 function Invoke-Installer {
   param([string[]]$InstallerArguments)
 
@@ -137,7 +190,7 @@ function Wait-UntilUnavailable {
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
     try {
-      Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1 | Out-Null
+      Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 1 | Out-Null
     } catch {
       return
     }
@@ -376,7 +429,7 @@ try {
     "-HealthTimeoutSeconds", "5"
   ) + $commonArguments)
 
-  $healthyAfterBuildFailure = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+  $healthyAfterBuildFailure = Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 5
   if (
     $healthyAfterBuildFailure.ok -ne $true -or
     $healthyAfterBuildFailure.service -ne "kb1d"
@@ -412,7 +465,7 @@ try {
     $blockedListener.Stop()
   }
 
-  $restoredHealth = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+  $restoredHealth = Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 5
   if ($restoredHealth.ok -ne $true -or $restoredHealth.service -ne "kb1d") {
     throw "The prior Scheduled Task was not restored after failed replacement."
   }
@@ -456,7 +509,7 @@ try {
   Wait-UntilUnavailable
   Invoke-Installer (@("-Action", "Start") + $commonArguments)
 
-  $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+  $health = Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 5
   if ($health.ok -ne $true -or $health.service -ne "kb1d") {
     throw "Unexpected health response after restarting the Scheduled Task."
   }

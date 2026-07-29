@@ -119,6 +119,59 @@ function Get-LifecycleUrlHost {
   return $probeHost
 }
 
+function Invoke-DirectRestMethod {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Uri]$Uri,
+    [ValidateSet("Get", "Post")]
+    [string]$Method = "Get",
+    [hashtable]$Headers = @{},
+    [ValidateRange(1, 300)]
+    [int]$TimeoutSec = 30
+  )
+
+  if (-not ("System.Net.Http.HttpClient" -as [type])) {
+    Add-Type -AssemblyName System.Net.Http
+  }
+
+  $handler = [Net.Http.HttpClientHandler]::new()
+  $handler.UseProxy = $false
+  $client = [Net.Http.HttpClient]::new($handler)
+  $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+  $httpMethod = if ($Method -eq "Post") {
+    [Net.Http.HttpMethod]::Post
+  } else {
+    [Net.Http.HttpMethod]::Get
+  }
+  $request = [Net.Http.HttpRequestMessage]::new($httpMethod, $Uri)
+  foreach ($header in $Headers.GetEnumerator()) {
+    $request.Headers.TryAddWithoutValidation(
+      [string]$header.Key,
+      [string]$header.Value
+    ) | Out-Null
+  }
+
+  $response = $null
+  try {
+    $response = $client.SendAsync($request).GetAwaiter().GetResult()
+    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if (-not $response.IsSuccessStatusCode) {
+      throw "HTTP $([int]$response.StatusCode) $($response.ReasonPhrase): $body"
+    }
+    if ([string]::IsNullOrWhiteSpace($body)) {
+      return $null
+    }
+    return $body | ConvertFrom-Json
+  } finally {
+    if ($null -ne $response) {
+      $response.Dispose()
+    }
+    $request.Dispose()
+    $client.Dispose()
+    $handler.Dispose()
+  }
+}
+
 function Set-RuntimeUrls {
   $healthHost = Get-LifecycleUrlHost $script:BindHost
   $taskKey = Get-TaskStorageKey
@@ -594,7 +647,7 @@ function Stop-KB1Task {
       $taskConfig = Get-Content -LiteralPath $installedConfigPath -Raw |
         ConvertFrom-Json
       $urlHost = Get-LifecycleUrlHost ([string]$taskConfig.bindHost)
-      $shutdown = Invoke-RestMethod `
+      $shutdown = Invoke-DirectRestMethod `
         -Uri "http://${urlHost}:$($taskConfig.port)/api/control/shutdown" `
         -Method Post `
         -Headers @{ "x-kb1-control-token" = [string]$taskConfig.controlToken } `
@@ -737,7 +790,7 @@ function Assert-HealthyTask {
         throw "Scheduled Task '$TaskName' is not running."
       }
 
-      $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2
+      $health = Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 2
       $expectedStatusFile = Join-Path ([string]$taskConfig.kb1Home) "daemon\status.json"
       $runtimeState = Get-Content `
         -LiteralPath ([string]$taskConfig.runtimeStatePath) `
