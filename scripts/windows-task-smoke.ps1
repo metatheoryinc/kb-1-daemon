@@ -16,7 +16,11 @@ $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
 $localAppData = [Environment]::GetFolderPath(
   [Environment+SpecialFolder]::LocalApplicationData
 )
-$kb1Home = Join-Path $localAppData "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
+$userProfile = [string]$env:USERPROFILE
+if ([string]::IsNullOrWhiteSpace($userProfile)) {
+  throw "USERPROFILE is required for the Windows task smoke test."
+}
+$kb1Home = Join-Path $userProfile "kb1-windows-task~archive-$([Guid]::NewGuid().ToString('N'))"
 $taskName = "KB-1 Windows Smoke $([Guid]::NewGuid().ToString('N'))"
 function Get-StorageKey {
   param([string]$Value)
