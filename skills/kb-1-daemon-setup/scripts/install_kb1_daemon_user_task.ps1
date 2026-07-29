@@ -123,6 +123,10 @@ function Invoke-DirectRestMethod {
   param(
     [Parameter(Mandatory = $true)]
     [Uri]$Uri,
+    [Parameter(Mandatory = $true)]
+    [string]$NodePath,
+    [Parameter(Mandatory = $true)]
+    [string]$ErrorDirectory,
     [ValidateSet("Get", "Post")]
     [string]$Method = "Get",
     [hashtable]$Headers = @{},
@@ -130,49 +134,147 @@ function Invoke-DirectRestMethod {
     [int]$TimeoutSec = 30
   )
 
-  if (-not ("System.Net.Http.HttpClient" -as [type])) {
-    Add-Type -AssemblyName System.Net.Http
-  }
-
-  $handler = [Net.Http.HttpClientHandler]::new()
-  $handler.UseProxy = $false
-  $client = [Net.Http.HttpClient]::new($handler)
-  $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
-  $httpMethod = if ($Method -eq "Post") {
-    [Net.Http.HttpMethod]::Post
-  } else {
-    [Net.Http.HttpMethod]::Get
-  }
-  $request = [Net.Http.HttpRequestMessage]::new($httpMethod, $Uri)
-  # Windows PowerShell 5.1 can omit the required brackets when it derives the
-  # Host header for an IPv6 literal. Pin the RFC-form authority explicitly.
-  $request.Headers.Host = $Uri.Authority
-  foreach ($header in $Headers.GetEnumerator()) {
-    $request.Headers.TryAddWithoutValidation(
-      [string]$header.Key,
-      [string]$header.Value
-    ) | Out-Null
-  }
-
-  $response = $null
+  $requestScript = @'
+const [url, method, timeoutSeconds] = process.argv.slice(1);
+const { default: http } = await import("node:http");
+const { default: https } = await import("node:https");
+const headers = JSON.parse(process.env.KB1_DIRECT_REQUEST_HEADERS || "{}");
+const writeUtf8 = (value) => {
+  process.stdout.write(Buffer.from(value, "utf8").toString("base64"));
+};
+try {
+  const target = new URL(url);
+  const transport = target.protocol === "https:" ? https : http;
+  const controller = new AbortController();
+  const deadline = setTimeout(() => {
+    controller.abort(new Error(`Request timed out after ${timeoutSeconds}s`));
+  }, Number(timeoutSeconds) * 1000);
   try {
-    $response = $client.SendAsync($request).GetAwaiter().GetResult()
-    $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-    if (-not $response.IsSuccessStatusCode) {
-      throw "HTTP $([int]$response.StatusCode) $($response.ReasonPhrase): $body"
+    const response = await new Promise((resolve, reject) => {
+      const request = transport.request(target, {
+        method: method.toUpperCase(),
+        headers,
+        signal: controller.signal
+      }, resolve);
+      request.on("error", reject);
+      request.end();
+    });
+    const chunks = [];
+    for await (const chunk of response) {
+      chunks.push(chunk);
     }
-    if ([string]::IsNullOrWhiteSpace($body)) {
-      return $null
+    const body = Buffer.concat(chunks);
+    if (
+      response.statusCode === undefined ||
+      response.statusCode < 200 ||
+      response.statusCode >= 300
+    ) {
+      writeUtf8(
+        `HTTP ${response.statusCode ?? "unknown"} ` +
+        `${response.statusMessage ?? ""}: ${body.toString("utf8")}`
+      );
+      process.exitCode = 1;
+    } else {
+      process.stdout.write(body.toString("base64"));
     }
-    return $body | ConvertFrom-Json
   } finally {
-    if ($null -ne $response) {
-      $response.Dispose()
-    }
-    $request.Dispose()
-    $client.Dispose()
-    $handler.Dispose()
+    clearTimeout(deadline);
   }
+} catch (error) {
+  writeUtf8(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+'@
+  $encodedRequestScript = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($requestScript)
+  )
+  $bootstrapScript = "const[a,b]=process.argv.splice(1,2);await(import(a+b))"
+  $previousHeaders = $env:KB1_DIRECT_REQUEST_HEADERS
+  $previousNodeOptions = $env:NODE_OPTIONS
+  $previousNodePath = $env:NODE_PATH
+  $previousNodeProxy = $env:NODE_USE_ENV_PROXY
+  $previousNodeDebug = $env:NODE_DEBUG
+  $previousNodeDebugNative = $env:NODE_DEBUG_NATIVE
+  $previousExtraCaCertificates = $env:NODE_EXTRA_CA_CERTS
+  $stderrPath = Join-Path `
+    $ErrorDirectory `
+    "windows-request-$([Guid]::NewGuid().ToString('N')).stderr.log"
+  $output = @()
+  $exitCode = 1
+  try {
+    $env:KB1_DIRECT_REQUEST_HEADERS = ConvertTo-Json `
+      -InputObject $Headers `
+      -Compress
+    $env:NODE_OPTIONS = $null
+    $env:NODE_PATH = $null
+    $env:NODE_USE_ENV_PROXY = $null
+    $env:NODE_DEBUG = $null
+    $env:NODE_DEBUG_NATIVE = $null
+    $env:NODE_EXTRA_CA_CERTS = $null
+    $output = @(
+      & $NodePath `
+        --input-type=module `
+        -e $bootstrapScript `
+        -- `
+        "data:text/javascript;base64," `
+        $encodedRequestScript `
+        ([string]$Uri.AbsoluteUri) `
+        $Method `
+        ([string]$TimeoutSec) `
+        2> $stderrPath
+    )
+    $exitCode = $LASTEXITCODE
+  } finally {
+    foreach ($environmentValue in @(
+      @{ Name = "KB1_DIRECT_REQUEST_HEADERS"; Value = $previousHeaders },
+      @{ Name = "NODE_OPTIONS"; Value = $previousNodeOptions },
+      @{ Name = "NODE_PATH"; Value = $previousNodePath },
+      @{ Name = "NODE_USE_ENV_PROXY"; Value = $previousNodeProxy },
+      @{ Name = "NODE_DEBUG"; Value = $previousNodeDebug },
+      @{ Name = "NODE_DEBUG_NATIVE"; Value = $previousNodeDebugNative },
+      @{
+        Name = "NODE_EXTRA_CA_CERTS"
+        Value = $previousExtraCaCertificates
+      }
+    )) {
+      if ($null -eq $environmentValue.Value) {
+        Remove-Item `
+          -LiteralPath "Env:$($environmentValue.Name)" `
+          -ErrorAction SilentlyContinue
+      } else {
+        [Environment]::SetEnvironmentVariable(
+          [string]$environmentValue.Name,
+          [string]$environmentValue.Value
+        )
+      }
+    }
+    Remove-Item `
+      -LiteralPath $stderrPath `
+      -Force `
+      -ErrorAction SilentlyContinue
+  }
+
+  $encodedBody = ($output -join "").Trim()
+  $body = ""
+  if (-not [string]::IsNullOrWhiteSpace($encodedBody)) {
+    try {
+      $body = [Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String($encodedBody)
+      )
+    } catch {
+      throw "Direct Node request returned invalid encoded output."
+    }
+  }
+  if ($exitCode -ne 0) {
+    if ([string]::IsNullOrWhiteSpace($body)) {
+      throw "Direct Node request failed with exit code $exitCode."
+    }
+    throw $body
+  }
+  if ([string]::IsNullOrWhiteSpace($body)) {
+    return $null
+  }
+  return $body | ConvertFrom-Json
 }
 
 function Set-RuntimeUrls {
@@ -652,6 +754,8 @@ function Stop-KB1Task {
       $urlHost = Get-LifecycleUrlHost ([string]$taskConfig.bindHost)
       $shutdown = Invoke-DirectRestMethod `
         -Uri "http://${urlHost}:$($taskConfig.port)/api/control/shutdown" `
+        -NodePath ([string]$taskConfig.nodePath) `
+        -ErrorDirectory ([string]$taskConfig.taskStateRoot) `
         -Method Post `
         -Headers @{ "x-kb1-control-token" = [string]$taskConfig.controlToken } `
         -TimeoutSec 3
@@ -793,7 +897,11 @@ function Assert-HealthyTask {
         throw "Scheduled Task '$TaskName' is not running."
       }
 
-      $health = Invoke-DirectRestMethod -Uri $healthUrl -TimeoutSec 2
+      $health = Invoke-DirectRestMethod `
+        -Uri $healthUrl `
+        -NodePath ([string]$taskConfig.nodePath) `
+        -ErrorDirectory ([string]$taskConfig.taskStateRoot) `
+        -TimeoutSec 2
       $expectedStatusFile = Join-Path ([string]$taskConfig.kb1Home) "daemon\status.json"
       $runtimeState = Get-Content `
         -LiteralPath ([string]$taskConfig.runtimeStatePath) `
