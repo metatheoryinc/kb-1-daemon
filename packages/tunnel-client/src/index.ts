@@ -71,7 +71,8 @@ const DEFAULT_BACKOFF_BASE_MS = 250;
 const DEFAULT_BACKOFF_MAX_MS = 10_000;
 const DEFAULT_BACKOFF_JITTER_RATIO = 0.25;
 export const CONTROL_HEARTBEAT_INTERVAL_MS = 15_000;
-export const CONTROL_HEARTBEAT_TIMEOUT_MS = 5_000;
+export const CONTROL_HEARTBEAT_TIMEOUT_MS = 12_000;
+export const CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT = 2;
 export const CONTROL_DURABLE_LIVENESS_INTERVAL_MS = 30_000;
 
 const hopByHopHeaders = new Set([
@@ -105,6 +106,7 @@ export class TunnelClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private controlHeartbeatInterval: ReturnType<typeof setInterval> | undefined;
   private controlHeartbeatDeadline: ReturnType<typeof setTimeout> | undefined;
+  private controlHeartbeatMisses = 0;
   private readonly httpAssembler = new ChunkedHttpRequestAssembler();
   private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
   private stopped = true;
@@ -181,7 +183,9 @@ export class TunnelClient {
     // Coordinated relay wire paths: keep `/__kb1_tunnel/*` stable until the
     // cloud relay and all clients migrate together.
     const controlUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/control');
-    const control = new WebSocket(controlUrl);
+    const control = new WebSocket(controlUrl, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
     this.control = control;
 
     control.on('open', () => {
@@ -206,7 +210,7 @@ export class TunnelClient {
       });
     });
 
-    control.on('close', (code) => {
+    control.on('close', (code, reason) => {
       if (this.control === control) {
         this.control = undefined;
         this.clearControlHeartbeat();
@@ -223,7 +227,11 @@ export class TunnelClient {
 
       const delayMs = createBackoffDelay(this.reconnectAttempt, {}, this.random);
       this.reconnectAttempt += 1;
-      this.logger.log('warn', 'relay control closed; reconnect scheduled', { code, delayMs });
+      this.logger.log('warn', 'relay control closed; reconnect scheduled', {
+        code,
+        reason: reason.toString(),
+        delayMs,
+      });
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = undefined;
         this.connectControl();
@@ -248,6 +256,7 @@ export class TunnelClient {
         return;
       case 'control.pong':
         this.clearControlHeartbeatDeadline();
+        this.controlHeartbeatMisses = 0;
         return;
       case 'control.error':
         this.logger.log('error', 'relay control rejected message', {
@@ -345,6 +354,7 @@ export class TunnelClient {
 
   private startControlHeartbeat(control: WebSocket): void {
     this.clearControlHeartbeat();
+    this.controlHeartbeatMisses = 0;
     let durableLivenessElapsedMs = 0;
     this.controlHeartbeatInterval = setInterval(() => {
       if (this.control !== control || this.stopped || control.readyState !== WebSocket.OPEN) {
@@ -365,7 +375,20 @@ export class TunnelClient {
       this.controlHeartbeatDeadline = setTimeout(() => {
         if (this.control !== control || this.stopped) return;
 
-        this.logger.log('warn', 'relay control heartbeat missed; terminating socket to reconnect');
+        this.controlHeartbeatDeadline = undefined;
+        this.controlHeartbeatMisses += 1;
+        if (this.controlHeartbeatMisses < CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT) {
+          this.logger.log('warn', 'relay control heartbeat missed; waiting for next probe', {
+            consecutiveMisses: this.controlHeartbeatMisses,
+            reconnectAfterMisses: CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT,
+          });
+          return;
+        }
+
+        this.logger.log('warn', 'relay control heartbeat missed; terminating socket to reconnect', {
+          consecutiveMisses: this.controlHeartbeatMisses,
+          reconnectAfterMisses: CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT,
+        });
         control.terminate();
       }, CONTROL_HEARTBEAT_TIMEOUT_MS);
     }, CONTROL_HEARTBEAT_INTERVAL_MS);
@@ -377,6 +400,7 @@ export class TunnelClient {
       this.controlHeartbeatInterval = undefined;
     }
     this.clearControlHeartbeatDeadline();
+    this.controlHeartbeatMisses = 0;
   }
 
   private clearControlHeartbeatDeadline(): void {
@@ -488,7 +512,9 @@ export class TunnelClient {
     const daemonWsUrl = new URL(envelope.path, this.config.daemonUrl);
     daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    const relaySocket = new WebSocket(dialbackUrl);
+    const relaySocket = new WebSocket(dialbackUrl, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
     const daemonSocket = new WebSocket(daemonWsUrl, {
       headers: withoutHopByHop(envelope.headers),
     });

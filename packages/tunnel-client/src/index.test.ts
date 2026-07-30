@@ -102,9 +102,12 @@ describe('tunnel-client helpers', () => {
   });
 
   it('normalizes gzipped materialized response bodies before serializing them over the tunnel', async () => {
-    const body = await materializedResponseBody(new Response(gzipSync(Buffer.from('{"ok":true}')), {
+    const body = await materializedResponseBody(new Response(
+      new Uint8Array(gzipSync(Buffer.from('{"ok":true}'))),
+      {
       headers: { 'content-encoding': 'gzip' },
-    }));
+      },
+    ));
 
     expect(body.toString('utf8')).toBe('{"ok":true}');
   });

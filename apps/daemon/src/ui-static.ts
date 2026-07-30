@@ -31,7 +31,7 @@ export async function serveUi(webBuildDir: string, pathname: string): Promise<Re
 
   const body = await readFile(filePath);
 
-  return new Response(body, {
+  return new Response(new Uint8Array(body), {
     headers: {
       'content-type': contentTypeFor(filePath)
     }
