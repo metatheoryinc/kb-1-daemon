@@ -2,11 +2,14 @@ import { EventEmitter } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import {
   RELAY_ERROR_CODES,
+  RELAY_PENDING_REQUEST_LIMIT,
   RELAY_TRANSPORT_PROTOCOL_VERSION,
   TUNNEL_CLOSE_CODES,
+  TUNNEL_FEATURES,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   encodeTunnelMessage,
+  type RelayFrame,
 } from '@kb-1/tunnel-protocol';
 import {
   ChunkedHttpRequestAssembler,
@@ -232,6 +235,609 @@ describe('TunnelClient typed relay RPC', () => {
     });
   });
 
+  it('handles mcp.tool.call in one relay RPC while preserving actor attribution', async () => {
+    const observedMethods: string[] = [];
+    const observedToolCalls: unknown[] = [];
+    let toolResultText = '{"ok":true}';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      observedMethods.push(request.method);
+      expect(request.url).toBe('http://daemon.test/mcp');
+      expect(request.headers.get('x-kb1-actor')).toBe(JSON.stringify({
+        kind: 'integration',
+        id: 'integration-1',
+        name: 'Codex',
+        client: 'codex',
+      }));
+
+      if (request.method === 'GET') {
+        return new Response(null, { status: 405 });
+      }
+      if (request.method === 'DELETE') {
+        return new Response(null, { status: 200 });
+      }
+
+      const message = await request.json() as {
+        id?: string | number;
+        method?: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.method === 'initialize') {
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: 'kb-1-test-daemon', version: '0.0.0' },
+          },
+        }, {
+          headers: { 'mcp-session-id': 'session-1' },
+        });
+      }
+      if (message.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method === 'tools/call') {
+        observedToolCalls.push(message);
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: [{ type: 'text', text: toolResultText }],
+          },
+        });
+      }
+      throw new Error(`Unexpected MCP request: ${JSON.stringify(message)}`);
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          deadlineMs?: number;
+          payload?: {
+            encoding: 'json';
+            value: Record<string, unknown>;
+          };
+          context?: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-1',
+      capability: 'mcp.tool.call',
+      deadlineMs: 1_000,
+      payload: {
+        encoding: 'json',
+        value: {
+          toolName: 'read_note',
+          arguments: { vaultId: 'ledger', path: 'README.md' },
+          clientName: 'codex',
+        },
+      },
+      context: {
+        actor: {
+          kind: 'integration',
+          id: 'integration-1',
+          name: 'Codex',
+          client: 'codex',
+        },
+      },
+    });
+
+    expect(response).toEqual({
+      type: 'rpc.response',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-1',
+      ok: true,
+      payload: {
+        encoding: 'json',
+        value: {
+          content: [{ type: 'text', text: '{"ok":true}' }],
+        },
+      },
+    });
+    expect(observedToolCalls).toHaveLength(1);
+    expect(observedMethods.filter((method) => method === 'POST').length).toBe(3);
+    expect(observedMethods).toContain('DELETE');
+
+    toolResultText = 'x'.repeat(192 * 1024);
+    const oversizedResponse = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          deadlineMs?: number;
+          payload?: {
+            encoding: 'json';
+            value: Record<string, unknown>;
+          };
+          context?: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-large',
+      capability: 'mcp.tool.call',
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'read_note', arguments: {} },
+      },
+      context: {
+        actor: {
+          kind: 'integration',
+          id: 'integration-1',
+          name: 'Codex',
+          client: 'codex',
+        },
+      },
+    });
+    expect(oversizedResponse).toMatchObject({
+      ok: false,
+      error: { code: RELAY_ERROR_CODES.PAYLOAD_TOO_LARGE },
+    });
+
+    const oversizedMutationResponse = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          payload: {
+            encoding: 'json';
+            value: Record<string, unknown>;
+          };
+          context: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-large-mutation-result',
+      capability: 'mcp.tool.call',
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'append_note', arguments: {} },
+      },
+      context: {
+        actor: {
+          kind: 'integration',
+          id: 'integration-1',
+          name: 'Codex',
+          client: 'codex',
+        },
+      },
+    });
+    expect(oversizedMutationResponse).toMatchObject({
+      ok: true,
+      payload: {
+        value: {
+          content: [{
+            type: 'text',
+            text: expect.stringContaining('"resultOmitted":true'),
+          }],
+        },
+      },
+    });
+  });
+
+  it('rejects malformed mcp.tool.call payloads before reaching the daemon', async () => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          payload?: { encoding: 'json'; value: Record<string, unknown> };
+          context?: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-bad',
+      capability: 'mcp.tool.call',
+      payload: {
+        encoding: 'json',
+        value: { toolName: '', arguments: [] },
+      },
+      context: {
+        actor: { kind: 'integration', client: 'codex' },
+      },
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      type: 'rpc.response',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-bad',
+      ok: false,
+      error: { code: RELAY_ERROR_CODES.BAD_MESSAGE },
+    });
+  });
+
+  it.each([
+    {
+      label: 'non-object arguments',
+      payload: { toolName: 'read_note', arguments: [] },
+      context: { actor: { kind: 'integration', client: 'codex' } },
+    },
+    {
+      label: 'missing actor',
+      payload: { toolName: 'read_note', arguments: {} },
+      context: {},
+    },
+    {
+      label: 'non-string actor fields',
+      payload: { toolName: 'read_note', arguments: {} },
+      context: { actor: { kind: 'integration', id: 42 } },
+    },
+  ])('rejects $label for mcp.tool.call without a daemon fetch', async ({ payload, context }) => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          payload?: { encoding: 'json'; value: Record<string, unknown> };
+          context?: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-invalid',
+      capability: 'mcp.tool.call',
+      payload: { encoding: 'json', value: payload },
+      context,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: RELAY_ERROR_CODES.BAD_MESSAGE },
+    });
+  });
+
+  it('returns a deadline error and independently terminates the initialized MCP session', async () => {
+    const observedMethods: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      observedMethods.push(request.method);
+      if (request.method === 'DELETE') {
+        return new Response(null, { status: 200 });
+      }
+
+      const message = await request.json() as {
+        id?: string | number;
+        method?: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.method === 'initialize') {
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: 'kb-1-test-daemon', version: '0.0.0' },
+          },
+        }, {
+          headers: { 'mcp-session-id': 'session-timeout' },
+        });
+      }
+      if (message.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method !== 'tools/call') {
+        throw new Error(`Unexpected MCP request: ${JSON.stringify(message)}`);
+      }
+
+      const signal = init?.signal;
+      if (!signal) throw new Error('Expected the relay deadline signal');
+      if (signal.aborted) {
+        throw signal.reason;
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => reject(signal.reason),
+          { once: true },
+        );
+      });
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const response = await (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          deadlineMs: number;
+          payload: { encoding: 'json'; value: Record<string, unknown> };
+          context: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-timeout',
+      capability: 'mcp.tool.call',
+      deadlineMs: 5,
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'read_note', arguments: {} },
+      },
+      context: {
+        actor: { kind: 'integration', client: 'codex' },
+      },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: RELAY_ERROR_CODES.DEADLINE_EXCEEDED },
+    });
+    expect(observedMethods).toContain('DELETE');
+  });
+
+  it('returns a completed tool result without waiting for session cleanup', async () => {
+    let markCleanupStarted: (() => void) | undefined;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      markCleanupStarted = resolve;
+    });
+    let releaseCleanup: (() => void) | undefined;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.method === 'DELETE') {
+        markCleanupStarted?.();
+        return new Promise<Response>((resolve) => {
+          releaseCleanup = () => resolve(new Response(null, { status: 200 }));
+        });
+      }
+
+      const message = await request.json() as {
+        id?: string | number;
+        method?: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.method === 'initialize') {
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: 'kb-1-test-daemon', version: '0.0.0' },
+          },
+        }, {
+          headers: { 'mcp-session-id': 'session-slow-cleanup' },
+        });
+      }
+      if (message.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method === 'tools/call') {
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: [{ type: 'text', text: '{"ok":true}' }],
+          },
+        });
+      }
+      throw new Error(`Unexpected MCP request: ${JSON.stringify(message)}`);
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+
+    const responsePromise = (
+      client as unknown as {
+        handleRelayRpcRequest(request: {
+          type: 'rpc.request';
+          version: typeof RELAY_TRANSPORT_PROTOCOL_VERSION;
+          id: string;
+          capability: string;
+          deadlineMs: number;
+          payload: { encoding: 'json'; value: Record<string, unknown> };
+          context: Record<string, unknown>;
+        }): Promise<unknown>;
+      }
+    ).handleRelayRpcRequest({
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-slow-cleanup',
+      capability: 'mcp.tool.call',
+      deadlineMs: 1_000,
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'append_note', arguments: {} },
+      },
+      context: {
+        actor: { kind: 'integration', client: 'codex' },
+      },
+    });
+
+    const response = await Promise.race([
+      responsePromise,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new Error('Tool result waited for MCP cleanup')),
+          100,
+        );
+      }),
+    ]);
+    expect(response).toMatchObject({
+      ok: true,
+      payload: {
+        value: {
+          content: [{ type: 'text', text: '{"ok":true}' }],
+        },
+      },
+    });
+    await cleanupStarted;
+    releaseCleanup?.();
+  });
+
+  it('aborts an in-flight MCP tool and cleans up its session on relay cancellation', async () => {
+    let toolCallStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      toolCallStarted = resolve;
+    });
+    const observedMethods: string[] = [];
+    const observedJsonRpcMethods: Array<string | undefined> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      observedMethods.push(request.method);
+      if (request.method === 'DELETE') {
+        return new Response(null, { status: 200 });
+      }
+
+      const message = await request.json() as {
+        id?: string | number;
+        method?: string;
+        params?: { protocolVersion?: string };
+      };
+      observedJsonRpcMethods.push(message.method);
+      if (message.method === 'initialize') {
+        return Response.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: 'kb-1-test-daemon', version: '0.0.0' },
+          },
+        }, {
+          headers: { 'mcp-session-id': 'session-cancel' },
+        });
+      }
+      if (message.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method === 'notifications/cancelled') {
+        expect(request.signal.aborted).toBe(false);
+        return new Response(null, { status: 202 });
+      }
+      if (message.method !== 'tools/call') {
+        throw new Error(`Unexpected MCP request: ${JSON.stringify(message)}`);
+      }
+
+      toolCallStarted?.();
+      const signal = init?.signal;
+      if (!signal) throw new Error('Expected the relay cancellation signal');
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => reject(signal.reason),
+          { once: true },
+        );
+      });
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+    const handleRelayFrame = (
+      client as unknown as {
+        handleRelayFrame(control: unknown, frame: RelayFrame): Promise<void>;
+      }
+    ).handleRelayFrame.bind(client);
+
+    const request = handleRelayFrame(control, {
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'rpc-mcp-cancel',
+      capability: 'mcp.tool.call',
+      deadlineMs: 1_000,
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'append_note', arguments: { content: 'new' } },
+      },
+      context: {
+        actor: { kind: 'integration', client: 'codex' },
+      },
+    });
+    await started;
+
+    await handleRelayFrame(control, {
+      type: 'cancel',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      target: { kind: 'rpc', id: 'rpc-mcp-cancel' },
+      reason: 'Cloud caller disconnected',
+    });
+    await request;
+
+    const sent = control.sent.map(({ data }) =>
+      JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+        frame?: { ok?: boolean; error?: { code?: string } };
+      });
+    expect(sent.at(-1)?.frame).toMatchObject({
+      ok: false,
+      error: {
+        code: RELAY_ERROR_CODES.INDETERMINATE,
+        message: expect.stringContaining('reconcile state before retrying'),
+      },
+    });
+    expect(observedMethods).toContain('DELETE');
+    await vi.waitFor(() => {
+      expect(observedJsonRpcMethods).toContain('notifications/cancelled');
+    });
+  });
+
+  it('advertises one-hop MCP tool support as a control feature', () => {
+    expect(TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1).toBe(
+      'relay.mcp-tool-call.bounded-results.v1',
+    );
+  });
+
   it('rejects unknown typed relay RPC capabilities without proxying arbitrary paths', async () => {
     const fetchImpl = vi.fn();
     const client = new TunnelClient({
@@ -265,6 +871,52 @@ describe('TunnelClient typed relay RPC', () => {
       ok: false,
       error: { code: RELAY_ERROR_CODES.UNKNOWN_CAPABILITY },
     });
+  });
+
+  it('applies relay RPC backpressure before creating another MCP session', async () => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const pending = (
+      client as unknown as {
+        pendingRelayRpcRequests: Map<string, AbortController>;
+      }
+    ).pendingRelayRpcRequests;
+    for (let index = 0; index < RELAY_PENDING_REQUEST_LIMIT; index += 1) {
+      pending.set(`existing-${index}`, new AbortController());
+    }
+    const control = new FakeSocket();
+    control.open();
+
+    await (
+      client as unknown as {
+        handleRelayFrame(control: unknown, frame: RelayFrame): Promise<void>;
+      }
+    ).handleRelayFrame(control, {
+      type: 'rpc.request',
+      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+      id: 'over-capacity',
+      capability: 'mcp.tool.call',
+      payload: {
+        encoding: 'json',
+        value: { toolName: 'read_note', arguments: {} },
+      },
+      context: {
+        actor: { kind: 'integration', client: 'codex' },
+      },
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const lastSent = control.sent.at(-1);
+    if (!lastSent) throw new Error('Expected a backpressure response');
+    const sent = JSON.parse(
+      Buffer.from(lastSent.data as Uint8Array).toString('utf8'),
+    ) as { frame?: { error?: { code?: string } } };
+    expect(sent.frame?.error?.code).toBe(RELAY_ERROR_CODES.BACKPRESSURE);
   });
 });
 

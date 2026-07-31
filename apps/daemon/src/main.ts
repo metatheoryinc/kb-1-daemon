@@ -98,7 +98,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
   // One MCP endpoint, every vault: vaultId resolution and vault enumeration both
   // go through the SAME live registry the HTTP layer uses — no second vault map.
   // Every data tool requires a vaultId; there is no default vault.
-  const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry));
+  const mcpEndpoint = createLocalMcpEndpoint(mcpVaultProvider(registry), {
+    actorFromRequest: (request) => {
+      const parsed = actorFromHeaders(
+        request.headers.get(ACTOR_HEADER) ?? undefined
+      );
+      return parsed.ok ? parsed.actor : parsed;
+    }
+  });
   const relay = createRelayLifecycleController(config, registry);
   const shutdownSignal = new AbortController();
   let closeDaemon: (() => Promise<void>) | undefined;
