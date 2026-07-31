@@ -835,6 +835,53 @@ describe('daemon multi-vault MCP surface', () => {
     expect(listVaults?.inputSchema.properties ?? {}).not.toHaveProperty('vaultId');
   });
 
+  it('preserves the authenticated relay actor on production MCP mutations', async () => {
+    const actor = {
+      kind: 'integration',
+      id: 'relay-integration-1',
+      name: 'Cloud relay',
+      client: 'kb-1-cloud'
+    } as const;
+    const attributedTransport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+      {
+        requestInit: {
+          headers: {
+            'x-kb1-actor': JSON.stringify(actor)
+          }
+        }
+      }
+    );
+    const attributedClient = new Client({
+      name: 'caller-controlled-client-name',
+      version: '1.0.0'
+    });
+
+    try {
+      await attributedClient.connect(attributedTransport);
+      await expect(mcpToolJson(attributedClient, 'create_note', {
+        vaultId: 'demo-vault',
+        path: 'attributed.md',
+        content: 'attributed\n'
+      })).resolves.toMatchObject({ ok: true, path: 'attributed.md' });
+    } finally {
+      await attributedTransport.terminateSession().catch(() => undefined);
+    }
+
+    const auditText = await readFile(
+      join(kb1Home, 'vaults', 'demo-vault', '.kb1', 'audit', 'changes.jsonl'),
+      'utf8'
+    );
+    const rows = auditText.trim().split('\n').map((line) => JSON.parse(line) as {
+      actor?: unknown;
+      path?: string;
+    });
+    expect(rows.at(-1)).toMatchObject({
+      actor,
+      path: 'attributed.md'
+    });
+  });
+
   it('rejects a data-tool call that omits vaultId (no default vault)', async () => {
     const missing = await client.callTool({ name: 'create_note', arguments: { path: 'nope.md', content: 'x\n' } });
     expect(missing.isError).toBe(true);

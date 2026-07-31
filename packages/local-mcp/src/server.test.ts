@@ -51,6 +51,40 @@ describe("local MCP server", () => {
     await endpoint.close();
   });
 
+  it("rejects an initialization actor that the endpoint cannot authorize", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService(), {
+      actorFromRequest: () => ({
+        ok: false,
+        error: "invalid_actor",
+        message: "actor attribution rejected",
+      }),
+    });
+    const response = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "rejected-actor", version: "1.0.0" },
+          },
+        }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { message: "Bad Request: actor attribution rejected" },
+    });
+    await endpoint.close();
+  });
+
   it("waits for an accepted initialization request before closing sessions", async () => {
     const endpoint = createLocalMcpEndpoint(emptyService());
     const request = new Request("http://127.0.0.1/mcp", {
@@ -244,8 +278,11 @@ describe("local MCP server", () => {
       readRawFile: async (input: ServiceInput<"readRawFile">) => ({
         ok: true,
         path: input.path,
-        filePath: fixturePath,
-        size: 8,
+        filePath:
+          input.path === "assets/huge.bin"
+            ? "/this-file-must-not-be-read"
+            : fixturePath,
+        size: input.path === "assets/huge.bin" ? 1024 * 1024 + 1 : 8,
         mtimeMs: 2,
         artifact: {
           kind: "attachment",
@@ -455,6 +492,20 @@ describe("local MCP server", () => {
         path: "assets/pixel.png",
       }),
     ).toMatchObject({ ok: true, path: "assets/pixel.png", preview: "image" });
+    const oversizedAttachment = await client.callTool({
+      name: "read_attachment",
+      arguments: {
+        vaultId: V,
+        path: "assets/huge.bin",
+      },
+    });
+    expect(oversizedAttachment.isError).toBe(true);
+    expect(textContent(oversizedAttachment)).toContain(
+      '"error":"too_large"',
+    );
+    expect(textContent(oversizedAttachment)).toContain(
+      '"maxBytes":1048576',
+    );
     expect(
       await toolJson(client, "upload_attachment", {
         vaultId: V,
@@ -624,6 +675,276 @@ describe("local MCP server", () => {
     expect(mutationActors).toEqual([actor]);
 
     await transport.terminateSession();
+    await endpoint.close();
+  });
+
+  it("expires an abandoned MCP initialization after its handshake budget", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService(), {
+      sessionInitializationTimeoutMs: 10,
+      sessionIdleTimeoutMs: 1_000,
+    });
+    const initialized = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: {
+              name: "abandoned-initialize-test-client",
+              version: "1.0.0",
+            },
+          },
+        }),
+      }),
+    );
+    const sessionId = initialized.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    const malformedFollowUp = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "unsupported/method",
+        }),
+      }),
+    );
+    await malformedFollowUp.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const expired = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 99,
+          method: "tools/list",
+        }),
+      }),
+    );
+    expect(expired.status).toBe(400);
+    await expired.text();
+    await initialized.body
+      ?.cancel("initialize response abandoned")
+      .catch(() => undefined);
+
+    await endpoint.close();
+  });
+
+  it("recognizes an initialized notification inside a JSON-RPC batch", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService(), {
+      sessionInitializationTimeoutMs: 10,
+      sessionIdleTimeoutMs: 1_000,
+    });
+    const initialized = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: {
+              name: "batch-initialize-test-client",
+              version: "1.0.0",
+            },
+          },
+        }),
+      }),
+    );
+    const sessionId = initialized.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    await initialized.text();
+
+    const acknowledged = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify([{
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }]),
+      }),
+    );
+    expect(acknowledged.status).toBe(202);
+    await acknowledged.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const stillActive = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/list",
+        }),
+      }),
+    );
+    expect(stillActive.status).toBe(200);
+    await stillActive.text();
+    await endpoint.close();
+  });
+
+  it("claims an existing session before parsing a slow request body", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService(), {
+      sessionInitializationTimeoutMs: 1_000,
+      sessionIdleTimeoutMs: 10,
+    });
+    let sessionId: string | null = null;
+    const client = new Client({
+      name: "slow-body-test-client",
+      version: "1.0.0",
+    });
+    const transport = new StreamableHTTPClientTransport(
+      new URL("http://127.0.0.1/mcp"),
+      {
+        fetch: async (input, init) => {
+          const response = await endpoint.handleRequest(
+            input instanceof Request ? input : new Request(input, init),
+          );
+          sessionId ??= response.headers.get("mcp-session-id");
+          return response;
+        },
+      },
+    );
+    await client.connect(transport);
+    expect(sessionId).toBeTruthy();
+
+    let releaseBody: (() => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseBody = () => {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/list",
+            })),
+          );
+          controller.close();
+        };
+      },
+    });
+    const slowRequest = endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseBody?.();
+
+    const response = await within(slowRequest, "slow request did not finish");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"id":2');
+    await endpoint.close();
+  });
+
+  it("expires a completed MCP session after its idle budget", async () => {
+    const endpoint = createLocalMcpEndpoint(emptyService(), {
+      sessionInitializationTimeoutMs: 1_000,
+      sessionIdleTimeoutMs: 10,
+    });
+    const initialized = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: {
+              name: "idle-expiry-test-client",
+              version: "1.0.0",
+            },
+          },
+        }),
+      }),
+    );
+    const sessionId = initialized.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    await initialized.text();
+
+    const acknowledged = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }),
+      }),
+    );
+    expect(acknowledged.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const expired = await endpoint.handleRequest(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId!,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 99,
+          method: "tools/list",
+        }),
+      }),
+    );
+    expect(expired.status).toBe(400);
+    await expired.text();
     await endpoint.close();
   });
 

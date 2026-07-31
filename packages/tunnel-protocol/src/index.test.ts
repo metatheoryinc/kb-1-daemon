@@ -48,7 +48,10 @@ it("round-trips control hello feature advertisement", () => {
     token: "test-token",
     daemonVersion: "0.1.0",
     daemonBuild: "registry.example/kb1d@sha256:abc123",
-    features: [TUNNEL_FEATURES.RELAY_FRAMES_V1]
+    features: [
+      TUNNEL_FEATURES.RELAY_FRAMES_V1,
+      TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1
+    ]
   } as const;
 
   expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
@@ -152,6 +155,10 @@ it("exports named pending stream caps and close codes", () => {
   expect(TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT).not.toBe(
     TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW
   );
+});
+
+it("defines an explicit indeterminate mutation outcome", () => {
+  expect(RELAY_ERROR_CODES.INDETERMINATE).toBe("indeterminate");
 });
 
 it("uses named pending stream caps by default", () => {

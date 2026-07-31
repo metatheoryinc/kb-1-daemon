@@ -357,6 +357,9 @@ importers:
       '@kb-1/tunnel-protocol':
         specifier: workspace:*
         version: link:../tunnel-protocol
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
       ws:
         specifier: 8.21.0
         version: 8.21.0

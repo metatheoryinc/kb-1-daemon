@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isInitializeRequest,
+  isInitializedNotification,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod/v4";
 
 import type {
@@ -23,6 +26,9 @@ const unknownActor: LocalMcpActor = localAgentActor("unknown local caller");
 /** The single synthetic vault id used when the endpoint is built from a bare service. */
 const SINGLE_VAULT_ID = "default";
 const MAX_INLINE_ATTACHMENT_BYTES = 4 * 1024;
+const MAX_INLINE_ATTACHMENT_READ_BYTES = 1024 * 1024;
+const DEFAULT_SESSION_INITIALIZATION_TIMEOUT_MS = 30_000;
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 export interface LocalMcpEndpoint {
   handleRequest(request: Request): Promise<Response>;
@@ -33,6 +39,8 @@ interface LocalMcpEndpointOptions {
   actorFromRequest?: (
     request: Request,
   ) => LocalMcpActor | ServiceFailure | undefined;
+  sessionInitializationTimeoutMs?: number;
+  sessionIdleTimeoutMs?: number;
 }
 
 interface LocalMcpServerOptions {
@@ -45,6 +53,9 @@ type ToolOperationTracker = <T>(operation: () => Promise<T>) => Promise<T>;
 interface SessionRecord {
   server: McpServer;
   transport: WebStandardStreamableHTTPServerTransport;
+  activeRequests: number;
+  initializationTimer?: ReturnType<typeof setTimeout>;
+  idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -181,6 +192,12 @@ export function createLocalMcpEndpoint(
           await Promise.all([...activeOperations]);
           const records = [...sessions.values()];
           sessions.clear();
+          for (const record of records) {
+            if (record.initializationTimer) {
+              clearTimeout(record.initializationTimer);
+            }
+            if (record.idleTimer) clearTimeout(record.idleTimer);
+          }
           await Promise.all(records.map(({ server }) => server.close()));
         })();
       }
@@ -199,7 +216,26 @@ async function handleMcpRequest(
   const sessionId = request.headers.get("mcp-session-id") ?? undefined;
   const existing = sessionId ? sessions.get(sessionId) : undefined;
   if (existing) {
-    return existing.transport.handleRequest(request);
+    return trackSessionRequest(
+      sessions,
+      sessionId!,
+      existing,
+      async () => {
+        const parsedBody =
+          request.method === "POST"
+            ? await request
+                .clone()
+                .json()
+                .catch(() => undefined)
+            : undefined;
+        return {
+          response: await existing.transport.handleRequest(request),
+          isInitializationAcknowledgement:
+            containsInitializedNotification(parsedBody),
+        };
+      },
+      options.sessionIdleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+    );
   }
 
   const parsedBody =
@@ -232,16 +268,166 @@ async function handleMcpRequest(
 
   transport.onclose = () => {
     const id = transport.sessionId ?? assignedSessionId;
-    if (id) sessions.delete(id);
+    if (!id) return;
+    const record = sessions.get(id);
+    if (record?.transport !== transport) return;
+    if (record.initializationTimer) {
+      clearTimeout(record.initializationTimer);
+    }
+    if (record.idleTimer) clearTimeout(record.idleTimer);
+    sessions.delete(id);
   };
 
   await server.connect(transport);
-  const response = await transport.handleRequest(request, { parsedBody });
-  const id = transport.sessionId ?? assignedSessionId;
-  if (id) {
-    sessions.set(id, { server, transport });
+  let response: Response;
+  try {
+    response = await transport.handleRequest(request, { parsedBody });
+  } catch (error) {
+    await server.close().catch(() => undefined);
+    throw error;
   }
-  return response;
+  const id = transport.sessionId ?? assignedSessionId;
+  /* v8 ignore next 4 -- a successful initialize with our generator always assigns an id */
+  if (!id) {
+    await server.close().catch(() => undefined);
+    return response;
+  }
+  const record: SessionRecord = {
+    server,
+    transport,
+    activeRequests: 1,
+  };
+  sessions.set(id, record);
+  record.initializationTimer = setTimeout(() => {
+    if (sessions.get(id) !== record) return;
+    sessions.delete(id);
+    void record.server.close().catch(() => undefined);
+  }, options.sessionInitializationTimeoutMs ?? DEFAULT_SESSION_INITIALIZATION_TIMEOUT_MS);
+  record.initializationTimer.unref();
+  return finishSessionRequestWhenConsumed(
+    sessions,
+    id,
+    record,
+    response,
+    options.sessionIdleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+  );
+}
+
+async function trackSessionRequest(
+  sessions: Map<string, SessionRecord>,
+  sessionId: string,
+  record: SessionRecord,
+  request: () => Promise<{
+    response: Response;
+    isInitializationAcknowledgement: boolean;
+  }>,
+  idleTimeoutMs: number,
+): Promise<Response> {
+  if (record.idleTimer) {
+    clearTimeout(record.idleTimer);
+    record.idleTimer = undefined;
+  }
+  record.activeRequests += 1;
+  try {
+    const { response, isInitializationAcknowledgement } = await request();
+    if (
+      isInitializationAcknowledgement &&
+      response.ok &&
+      record.initializationTimer
+    ) {
+      clearTimeout(record.initializationTimer);
+      record.initializationTimer = undefined;
+    }
+    return finishSessionRequestWhenConsumed(
+      sessions,
+      sessionId,
+      record,
+      response,
+      idleTimeoutMs,
+    );
+  } catch (error) {
+    finishSessionRequest(sessions, sessionId, record, idleTimeoutMs);
+    throw error;
+  }
+}
+
+function containsInitializedNotification(parsedBody: unknown): boolean {
+  const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+  return messages.some((message) => isInitializedNotification(message));
+}
+
+function finishSessionRequestWhenConsumed(
+  sessions: Map<string, SessionRecord>,
+  sessionId: string,
+  record: SessionRecord,
+  response: Response,
+  idleTimeoutMs: number,
+): Response {
+  if (!response.body) {
+    finishSessionRequest(sessions, sessionId, record, idleTimeoutMs);
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    finishSessionRequest(sessions, sessionId, record, idleTimeoutMs);
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          reader.releaseLock();
+          finish();
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        reader.releaseLock();
+        finish();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+        finish();
+      }
+    },
+  });
+  return new Response(body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
+function finishSessionRequest(
+  sessions: Map<string, SessionRecord>,
+  sessionId: string,
+  record: SessionRecord,
+  idleTimeoutMs: number,
+): void {
+  record.activeRequests = Math.max(0, record.activeRequests - 1);
+  if (sessions.get(sessionId) !== record || record.activeRequests > 0) return;
+
+  record.idleTimer = setTimeout(() => {
+    if (
+      sessions.get(sessionId) !== record ||
+      record.activeRequests > 0
+    ) {
+      return;
+    }
+    sessions.delete(sessionId);
+    void record.server.close().catch(() => undefined);
+  }, idleTimeoutMs);
+  record.idleTimer.unref();
 }
 
 export function createLocalMcpServer(
@@ -387,6 +573,16 @@ export function createLocalMcpServer(
           ok: false,
           error: "invalid_request",
           message: `"${input.path}" is an editable text document, not an attachment. Use read_note instead.`,
+        };
+      }
+      if (result.size > MAX_INLINE_ATTACHMENT_READ_BYTES) {
+        return {
+          ok: false,
+          error: "too_large",
+          message:
+            `"${input.path}" is too large for inline MCP attachment reads.`,
+          maxBytes: MAX_INLINE_ATTACHMENT_READ_BYTES,
+          size: result.size,
         };
       }
 

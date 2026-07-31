@@ -1,6 +1,7 @@
 import {
   PendingFrameBuffer,
   RELAY_ERROR_CODES,
+  RELAY_PENDING_REQUEST_LIMIT,
   RELAY_TRANSPORT_PROTOCOL_VERSION,
   TUNNEL_CLOSE_CODES,
   TUNNEL_FEATURES,
@@ -28,6 +29,8 @@ import {
   type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketOpenEnvelope,
 } from '@kb-1/tunnel-protocol';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { gunzipSync } from 'node:zlib';
 import { WebSocket } from 'ws';
 
@@ -70,6 +73,22 @@ export type BackoffOptions = {
 const DEFAULT_BACKOFF_BASE_MS = 250;
 const DEFAULT_BACKOFF_MAX_MS = 10_000;
 const DEFAULT_BACKOFF_JITTER_RATIO = 0.25;
+const MCP_RELAY_CLIENT_NAME = 'kb-1-cloud-relay';
+const MCP_RELAY_MAX_PAYLOAD_BYTES = 192 * 1024;
+const MAX_MCP_TOOL_NAME_BYTES = 256;
+const MAX_MCP_CLIENT_NAME_BYTES = 256;
+const MAX_ACTOR_HEADER_BYTES = 1_024;
+const MCP_SESSION_CLEANUP_TIMEOUT_MS = 1_000;
+const MCP_READ_ONLY_TOOLS = new Set([
+  'list_vaults',
+  'vault_info',
+  'list_files',
+  'list_attachments',
+  'read_attachment',
+  'get_folder_metadata',
+  'read_note',
+  'search',
+]);
 export const CONTROL_HEARTBEAT_INTERVAL_MS = 15_000;
 export const CONTROL_HEARTBEAT_TIMEOUT_MS = 12_000;
 export const CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT = 2;
@@ -109,6 +128,7 @@ export class TunnelClient {
   private controlHeartbeatMisses = 0;
   private readonly httpAssembler = new ChunkedHttpRequestAssembler();
   private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
+  private readonly pendingRelayRpcRequests = new Map<string, AbortController>();
   private stopped = true;
   private reconnectAttempt = 0;
 
@@ -134,6 +154,7 @@ export class TunnelClient {
     }
     this.clearControlHeartbeat();
     this.abortPendingHttpRequests();
+    this.abortPendingRelayRpcRequests('Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
   }
@@ -195,7 +216,10 @@ export class TunnelClient {
         token: this.config.token,
         ...(this.config.daemonVersion ? { daemonVersion: this.config.daemonVersion } : {}),
         ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
-        features: [TUNNEL_FEATURES.RELAY_FRAMES_V1],
+        features: [
+          TUNNEL_FEATURES.RELAY_FRAMES_V1,
+          TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
+        ],
       }));
       this.startControlHeartbeat(control);
       this.logger.log('info', 'relay control connected', {
@@ -215,6 +239,7 @@ export class TunnelClient {
         this.control = undefined;
         this.clearControlHeartbeat();
         this.abortPendingHttpRequests();
+        this.abortPendingRelayRpcRequests('Relay control disconnected');
       }
 
       if (this.stopped) return;
@@ -297,38 +322,87 @@ export class TunnelClient {
   }
 
   private async handleRelayFrame(control: WebSocket, frame: RelayFrame): Promise<void> {
+    if (frame.type === 'cancel' && frame.target.kind === 'rpc') {
+      this.pendingRelayRpcRequests
+        .get(frame.target.id)
+        ?.abort(new Error(frame.reason ?? 'Relay cancelled RPC request'));
+      return;
+    }
+
     if (frame.type !== 'rpc.request') {
       this.logger.log('warn', 'relay frame type is not handled by tunnel client', { frameType: frame.type });
       return;
     }
 
-    control.send(encodeJsonBytes({
-      type: 'relay.frame',
-      frame: await this.handleRelayRpcRequest(frame),
-    }));
+    if (this.pendingRelayRpcRequests.has(frame.id)) {
+      control.send(encodeJsonBytes({
+        type: 'relay.frame',
+        frame: relayRpcError(
+          frame.id,
+          RELAY_ERROR_CODES.BACKPRESSURE,
+          `Relay RPC request ${frame.id} is already in flight`,
+        ),
+      }));
+      return;
+    }
+    if (this.pendingRelayRpcRequests.size >= RELAY_PENDING_REQUEST_LIMIT) {
+      control.send(encodeJsonBytes({
+        type: 'relay.frame',
+        frame: relayRpcError(
+          frame.id,
+          RELAY_ERROR_CODES.BACKPRESSURE,
+          `Relay RPC concurrency limit of ${RELAY_PENDING_REQUEST_LIMIT} reached`,
+        ),
+      }));
+      return;
+    }
+
+    const abort = new AbortController();
+    this.pendingRelayRpcRequests.set(frame.id, abort);
+    try {
+      control.send(encodeJsonBytes({
+        type: 'relay.frame',
+        frame: await this.handleRelayRpcRequest(frame, abort.signal),
+      }));
+    } finally {
+      if (this.pendingRelayRpcRequests.get(frame.id) === abort) {
+        this.pendingRelayRpcRequests.delete(frame.id);
+      }
+    }
   }
 
-  private async handleRelayRpcRequest(request: RelayRpcRequestFrame): Promise<RelayRpcResponseFrame> {
+  private async handleRelayRpcRequest(
+    request: RelayRpcRequestFrame,
+    relaySignal?: AbortSignal,
+  ): Promise<RelayRpcResponseFrame> {
     switch (request.capability) {
       case 'vault.list':
-        return this.handleVaultListRpc(request);
+        return this.handleVaultListRpc(request, relaySignal);
+      case 'mcp.tool.call':
+        return this.handleMcpToolCallRpc(request, relaySignal);
       default:
         return relayRpcError(request.id, RELAY_ERROR_CODES.UNKNOWN_CAPABILITY, `Unknown relay capability: ${request.capability}`);
     }
   }
 
-  private async handleVaultListRpc(request: RelayRpcRequestFrame): Promise<RelayRpcResponseFrame> {
-    const abort = new AbortController();
+  private async handleVaultListRpc(
+    request: RelayRpcRequestFrame,
+    relaySignal?: AbortSignal,
+  ): Promise<RelayRpcResponseFrame> {
+    const deadlineAbort = new AbortController();
     const timeout = setTimeout(
-      () => abort.abort(),
+      () => deadlineAbort.abort(new Error('Vault list relay RPC deadline exceeded')),
       request.deadlineMs ?? TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
     );
+    const signal = relaySignal
+      ? AbortSignal.any([deadlineAbort.signal, relaySignal])
+      : deadlineAbort.signal;
 
     try {
       const response = await this.fetchImpl(new URL('/api/vaults', this.config.daemonUrl), {
         method: 'GET',
         headers: { accept: 'application/json' },
-        signal: abort.signal,
+        signal,
       });
       if (!response.ok) {
         return relayRpcError(request.id, RELAY_ERROR_CODES.INTERNAL, `Daemon vault list failed with status ${response.status}`);
@@ -344,12 +418,189 @@ export class TunnelClient {
     } catch (error) {
       return relayRpcError(
         request.id,
-        abort.signal.aborted ? RELAY_ERROR_CODES.DEADLINE_EXCEEDED : RELAY_ERROR_CODES.INTERNAL,
+        deadlineAbort.signal.aborted
+          ? RELAY_ERROR_CODES.DEADLINE_EXCEEDED
+          : relaySignal?.aborted
+            ? RELAY_ERROR_CODES.CANCELLED
+            : RELAY_ERROR_CODES.INTERNAL,
         `Daemon vault list RPC failed: ${String(error)}`,
       );
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async handleMcpToolCallRpc(
+    request: RelayRpcRequestFrame,
+    relaySignal?: AbortSignal,
+  ): Promise<RelayRpcResponseFrame> {
+    const parsed = parseMcpToolCallRpcRequest(request);
+    if (!parsed.ok) {
+      return relayRpcError(request.id, RELAY_ERROR_CODES.BAD_MESSAGE, parsed.message);
+    }
+
+    const deadlineAbort = new AbortController();
+    const timeout = setTimeout(
+      () => deadlineAbort.abort(new Error('MCP relay RPC deadline exceeded')),
+      request.deadlineMs ?? TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
+    );
+    const operationSignal = relaySignal
+      ? AbortSignal.any([deadlineAbort.signal, relaySignal])
+      : deadlineAbort.signal;
+    let toolCallDispatched = false;
+    let cleaningUp = false;
+    const transport = new StreamableHTTPClientTransport(
+      new URL('/mcp', this.config.daemonUrl),
+      {
+        fetch: (input, init) => {
+          if (cleaningUp) {
+            const cleanupAbort = new AbortController();
+            const cleanupTimeout = setTimeout(
+              () => cleanupAbort.abort(new Error('MCP session cleanup timed out')),
+              MCP_SESSION_CLEANUP_TIMEOUT_MS,
+            );
+            return this.fetchImpl(input, { ...init, signal: cleanupAbort.signal })
+              .finally(() => clearTimeout(cleanupTimeout));
+          }
+          const transportSignal =
+            input instanceof Request ? input.signal : init?.signal;
+          if (operationSignal.aborted) {
+            const cancellationAbort = new AbortController();
+            const cancellationTimeout = setTimeout(
+              () => cancellationAbort.abort(
+                new Error('MCP cancellation notification timed out'),
+              ),
+              MCP_SESSION_CLEANUP_TIMEOUT_MS,
+            );
+            const cancellationSignal = transportSignal
+              ? AbortSignal.any([
+                cancellationAbort.signal,
+                transportSignal,
+              ])
+              : cancellationAbort.signal;
+            return this.fetchImpl(input, {
+              ...init,
+              signal: cancellationSignal,
+            }).finally(() => clearTimeout(cancellationTimeout));
+          }
+          const signals = [
+            operationSignal,
+            ...(transportSignal ? [transportSignal] : []),
+          ];
+          const signal = signals.length === 1
+            ? signals[0]
+            : AbortSignal.any(signals);
+          return this.fetchImpl(input, { ...init, signal });
+        },
+        requestInit: {
+          headers: { 'x-kb1-actor': parsed.actorHeader },
+        },
+      },
+    );
+    const client = new Client({
+      name: parsed.clientName,
+      version: '0.0.1',
+    });
+
+    try {
+      await client.connect(transport);
+      toolCallDispatched = true;
+      const result = await client.callTool(
+        {
+          name: parsed.toolName,
+          arguments: parsed.arguments,
+        },
+        undefined,
+        { signal: operationSignal },
+      );
+      if (
+        Buffer.byteLength(JSON.stringify(result), 'utf8')
+        > MCP_RELAY_MAX_PAYLOAD_BYTES
+      ) {
+        if (!MCP_READ_ONLY_TOOLS.has(parsed.toolName)) {
+          const originalSucceeded = result.isError !== true;
+          return {
+            type: 'rpc.response',
+            version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+            id: request.id,
+            ok: true,
+            payload: {
+              encoding: 'json',
+              value: {
+                ...(originalSucceeded ? {} : { isError: true }),
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify(originalSucceeded
+                    ? {
+                      ok: true,
+                      resultOmitted: true,
+                      message:
+                        'Mutation completed, but its full result exceeded the one-hop relay limit. Read current state before another mutation.',
+                    }
+                    : {
+                      ok: false,
+                      error: 'result_too_large',
+                      resultOmitted: true,
+                      message:
+                        'Mutation rejection exceeded the one-hop relay limit. Reconcile current state before retrying.',
+                    }),
+                }],
+              },
+            },
+          };
+        }
+        return relayRpcError(
+          request.id,
+          RELAY_ERROR_CODES.PAYLOAD_TOO_LARGE,
+          'Daemon MCP tool result is too large for one-hop relay RPC',
+        );
+      }
+      return {
+        type: 'rpc.response',
+        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+        id: request.id,
+        ok: true,
+        payload: { encoding: 'json', value: result as RelayJsonValue },
+      };
+    } catch (error) {
+      const aborted =
+        deadlineAbort.signal.aborted || relaySignal?.aborted === true;
+      const mutationOutcomeIsIndeterminate =
+        aborted &&
+        toolCallDispatched &&
+        !MCP_READ_ONLY_TOOLS.has(parsed.toolName);
+      return relayRpcError(
+        request.id,
+        mutationOutcomeIsIndeterminate
+          ? RELAY_ERROR_CODES.INDETERMINATE
+          : deadlineAbort.signal.aborted
+            ? RELAY_ERROR_CODES.DEADLINE_EXCEEDED
+            : relaySignal?.aborted
+              ? RELAY_ERROR_CODES.CANCELLED
+              : RELAY_ERROR_CODES.INTERNAL,
+        mutationOutcomeIsIndeterminate
+          ? `Daemon MCP mutation outcome is indeterminate after relay cancellation; reconcile state before retrying: ${String(error)}`
+          : `Daemon MCP tool RPC failed: ${String(error)}`,
+      );
+    } finally {
+      clearTimeout(timeout);
+      cleaningUp = true;
+      void transport
+        .terminateSession()
+        .catch((error: unknown) => {
+          this.logger.log('warn', 'daemon MCP relay session cleanup failed', {
+            error: String(error),
+          });
+        })
+        .finally(() => transport.close().catch(() => undefined));
+    }
+  }
+
+  private abortPendingRelayRpcRequests(reason: string): void {
+    for (const abort of this.pendingRelayRpcRequests.values()) {
+      abort.abort(new Error(reason));
+    }
+    this.pendingRelayRpcRequests.clear();
   }
 
   private startControlHeartbeat(control: WebSocket): void {
@@ -867,6 +1118,82 @@ function relayRpcError(
     ok: false,
     error: { code, message },
   };
+}
+
+type ParsedMcpToolCallRpcRequest =
+  | {
+      ok: true;
+      toolName: string;
+      arguments: Record<string, unknown>;
+      clientName: string;
+      actorHeader: string;
+    }
+  | { ok: false; message: string };
+
+function parseMcpToolCallRpcRequest(
+  request: RelayRpcRequestFrame,
+): ParsedMcpToolCallRpcRequest {
+  if (request.payload?.encoding !== 'json' || !isRelayJsonObject(request.payload.value)) {
+    return { ok: false, message: 'mcp.tool.call requires a JSON object payload' };
+  }
+
+  const toolName = request.payload.value.toolName;
+  if (
+    typeof toolName !== 'string'
+    || toolName.length === 0
+    || Buffer.byteLength(toolName, 'utf8') > MAX_MCP_TOOL_NAME_BYTES
+  ) {
+    return { ok: false, message: 'mcp.tool.call toolName must be a non-empty string no larger than 256 bytes' };
+  }
+
+  const args = request.payload.value.arguments;
+  if (args !== undefined && !isRelayJsonObject(args)) {
+    return { ok: false, message: 'mcp.tool.call arguments must be a JSON object when provided' };
+  }
+
+  const requestedClientName = request.payload.value.clientName;
+  if (
+    requestedClientName !== undefined
+    && (
+      typeof requestedClientName !== 'string'
+      || requestedClientName.length === 0
+      || Buffer.byteLength(requestedClientName, 'utf8') > MAX_MCP_CLIENT_NAME_BYTES
+    )
+  ) {
+    return { ok: false, message: 'mcp.tool.call clientName must be a non-empty string no larger than 256 bytes when provided' };
+  }
+
+  const actor = request.context?.actor;
+  if (!isRelayJsonObject(actor) || (actor.kind !== 'user' && actor.kind !== 'integration')) {
+    return { ok: false, message: 'mcp.tool.call requires an attributed user or integration actor' };
+  }
+  for (const key of ['id', 'name', 'client'] as const) {
+    if (actor[key] !== undefined && typeof actor[key] !== 'string') {
+      return { ok: false, message: `mcp.tool.call actor.${key} must be a string when provided` };
+    }
+  }
+
+  const actorHeader = JSON.stringify({
+    kind: actor.kind,
+    ...(typeof actor.id === 'string' ? { id: actor.id } : {}),
+    ...(typeof actor.name === 'string' ? { name: actor.name } : {}),
+    ...(typeof actor.client === 'string' ? { client: actor.client } : {}),
+  });
+  if (Buffer.byteLength(actorHeader, 'utf8') > MAX_ACTOR_HEADER_BYTES) {
+    return { ok: false, message: 'mcp.tool.call actor must be no larger than 1 KiB' };
+  }
+
+  return {
+    ok: true,
+    toolName,
+    arguments: (args ?? {}) as Record<string, unknown>,
+    clientName: requestedClientName ?? MCP_RELAY_CLIENT_NAME,
+    actorHeader,
+  };
+}
+
+function isRelayJsonObject(value: unknown): value is RelayJsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function relayInternalUrl(relayUrl: URL, internalPath: string): URL {

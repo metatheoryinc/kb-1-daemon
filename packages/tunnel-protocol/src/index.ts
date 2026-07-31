@@ -22,7 +22,9 @@ export const RELAY_PENDING_REQUEST_LIMIT = 128 as const;
 export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
 
 export const TUNNEL_FEATURES = {
-  RELAY_FRAMES_V1: "relay.frame.v1"
+  RELAY_FRAMES_V1: "relay.frame.v1",
+  MCP_TOOL_CALL_BOUNDED_RESULTS_V1:
+    "relay.mcp-tool-call.bounded-results.v1"
 } as const;
 
 export type TunnelFeature = (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
@@ -34,6 +36,7 @@ export const RELAY_ERROR_CODES = {
   UNAUTHORIZED: "unauthorized",
   DEADLINE_EXCEEDED: "deadline-exceeded",
   CANCELLED: "cancelled",
+  INDETERMINATE: "indeterminate",
   PAYLOAD_TOO_LARGE: "payload-too-large",
   BACKPRESSURE: "backpressure",
   INTERNAL: "internal"
