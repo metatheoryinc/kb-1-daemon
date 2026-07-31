@@ -8,6 +8,8 @@ import {
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   DocumentSessionNotFoundError,
   PersistFailedError,
+  type DocumentSessionTimingEvent,
+  type DocumentSessionTimingHandler,
   type OneFileDocumentSession
 } from './session.js';
 import {
@@ -44,13 +46,29 @@ export interface BoundYjsWebSocket {
 
 export interface YjsWebSocketBindingOptions {
   attribution?: DocumentUpdateAttribution;
+  onTiming?: YjsWebSocketTimingHandler;
 }
+
+export type YjsWebSocketTimingEvent =
+  | DocumentSessionTimingEvent
+  | {
+      stage:
+        | 'document_session.open'
+        | 'initial_sync.emitted'
+        | 'synced_marker.emitted'
+        | 'save_ack.emitted';
+      durationMs: number;
+      ackId?: string;
+    };
+
+export type YjsWebSocketTimingHandler = (event: YjsWebSocketTimingEvent) => void;
 
 export async function bindYjsWebSocket(
   session: OneFileDocumentSession,
   socket: YjsWebSocketLike,
   options: YjsWebSocketBindingOptions = {}
 ): Promise<BoundYjsWebSocket> {
+  const bindingStartedAt = performance.now();
   let cleanupStarted = false;
   let sessionReady = false;
   const pendingMessages: unknown[] = [];
@@ -113,6 +131,10 @@ export async function bindYjsWebSocket(
     }
     syncedMessageSent = true;
     sendBytes(socket, encodeSyncedMessage());
+    emitTiming(options.onTiming, {
+      stage: 'synced_marker.emitted',
+      durationMs: elapsedMs(bindingStartedAt),
+    });
   };
 
   const processSyncMessage = (data: unknown) => {
@@ -136,8 +158,14 @@ export async function bindYjsWebSocket(
           return;
         }
         Y.applyUpdate(session.ydoc, ackedUpdate.update, socketUpdateOrigin);
-        void session.flush().then(() => {
+        const saveStartedAt = performance.now();
+        void session.flush({ onTiming: options.onTiming as DocumentSessionTimingHandler | undefined }).then(() => {
           sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
+          emitTiming(options.onTiming, {
+            stage: 'save_ack.emitted',
+            durationMs: elapsedMs(saveStartedAt),
+            ackId: ackedUpdate.ackId,
+          });
         }, (error: unknown) => {
           if (error instanceof PersistFailedError) {
             deferredPersistedAckIds.add(ackedUpdate.ackId);
@@ -174,7 +202,15 @@ export async function bindYjsWebSocket(
   socket.on('error', cleanup);
 
   try {
-    await session.open({ createIfMissing: false });
+    const sessionOpenStartedAt = performance.now();
+    await session.open({
+      createIfMissing: false,
+      onTiming: options.onTiming as DocumentSessionTimingHandler | undefined,
+    });
+    emitTiming(options.onTiming, {
+      stage: 'document_session.open',
+      durationMs: elapsedMs(sessionOpenStartedAt),
+    });
   } catch (error) {
     if (error instanceof DocumentSessionNotFoundError) {
       socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(error.failure));
@@ -207,6 +243,10 @@ export async function bindYjsWebSocket(
 
   sendSync(socket, (encoder) => {
     syncProtocol.writeSyncStep1(encoder, session.ydoc);
+  });
+  emitTiming(options.onTiming, {
+    stage: 'initial_sync.emitted',
+    durationMs: elapsedMs(bindingStartedAt),
   });
 
   return { closed };
@@ -300,6 +340,22 @@ function stateVectorsShareClient(left: Map<number, number>, right: Map<number, n
 
 function closeUnsafeDivergence(socket: YjsWebSocketLike): void {
   socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE));
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+}
+
+function emitTiming(
+  handler: YjsWebSocketTimingHandler | undefined,
+  event: YjsWebSocketTimingEvent,
+): void {
+  if (!handler) return;
+  try {
+    handler(event);
+  } catch {
+    // Diagnostic observers must never affect document availability or durability.
+  }
 }
 
 function toUint8Array(data: unknown): Uint8Array | undefined {

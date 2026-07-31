@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-1/doc-session';
+import {
+  bindYjsWebSocket,
+  type DocumentSessionManager,
+  type DocumentUpdateAttribution,
+  type YjsWebSocketTimingEvent
+} from '@kb-1/doc-session';
 import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
 import type { VaultChangeEventKind } from '@kb-1/vault-service';
@@ -38,6 +43,7 @@ import {
 } from './vault-registry.js';
 
 const VAULT_TREE_CHANGED_TOPIC = 'vault.tree.changed';
+const DOCUMENT_TRACE_HEADER = 'x-kb1-document-trace-id';
 const TREE_DIRTY_EVENT_KINDS = new Set<VaultChangeEventKind>([
   'file_created',
   'folder_created',
@@ -237,6 +243,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
     }
 
     server.on('upgrade', (request, socket, head) => {
+      const documentTraceId = traceIdFromDocumentRequest(request);
+      const documentTimingStartedAt = performance.now();
+      const onDocumentTiming = documentTraceId
+        ? (event: YjsWebSocketTimingEvent) => {
+            logDocumentTiming(documentTraceId, documentTimingStartedAt, event);
+          }
+        : undefined;
       if (shutdownRequested) {
         socket.destroy();
         return;
@@ -258,17 +271,32 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
       }
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        if (documentTraceId) {
+          logDocumentTiming(documentTraceId, documentTimingStartedAt, {
+            stage: 'websocket.accepted',
+            durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
+          });
+        }
         // Track the connection's whole lifecycle — handshake, session open (which
-        // writes the session-state snapshot), and the bound stream — in the drain
+        // may repair the session-state snapshot), and the bound stream — in the drain
         // set synchronously, before any await. Shutdown must wait for a connection
         // that is still opening, or its in-flight state write can outlive teardown.
         const lifecycle = (async () => {
           const bindingLease = target.manager.attachClientSession(target.documentPath);
+          if (documentTraceId) {
+            logDocumentTiming(documentTraceId, documentTimingStartedAt, {
+              stage: 'document_session.attached',
+              durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
+            });
+          }
           try {
             const binding = await bindYjsWebSocket(
               bindingLease.session,
               webSocket,
-              attribution.attribution ? { attribution: attribution.attribution } : {}
+              {
+                ...(attribution.attribution ? { attribution: attribution.attribution } : {}),
+                ...(onDocumentTiming ? { onTiming: onDocumentTiming } : {})
+              }
             );
             try {
               await binding.closed;
@@ -439,6 +467,38 @@ function documentUpdateAttributionForActor(actor: VaultActor): DocumentUpdateAtt
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function traceIdFromDocumentRequest(request: IncomingMessage): string | undefined {
+  const value = firstHeaderValue(request.headers[DOCUMENT_TRACE_HEADER]);
+  return value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : undefined;
+}
+
+function logDocumentTiming(
+  traceId: string,
+  startedAt: number,
+  event: {
+    stage: string;
+    durationMs: number;
+    outcome?: string;
+    ackId?: string;
+  }
+): void {
+  console.log('[document timing]', {
+    component: 'daemon',
+    traceId,
+    stage: event.stage,
+    elapsedMs: elapsedDocumentTimingMs(startedAt),
+    durationMs: event.durationMs,
+    ...(event.outcome ? { outcome: event.outcome } : {}),
+    ...(event.ackId ? { ackId: event.ackId } : {})
+  });
+}
+
+function elapsedDocumentTimingMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
 }
 
 /** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */

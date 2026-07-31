@@ -7,6 +7,9 @@ export {
   PersistFailedError,
   type DocumentSessionFailure,
   type DocumentSessionEventHandler,
+  type DocumentSessionTimingEvent,
+  type DocumentSessionTimingHandler,
+  type DocumentSessionTimingStage,
   type DocumentSessionMutationOptions,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions,
@@ -26,6 +29,8 @@ export {
   bindYjsWebSocket,
   type BoundYjsWebSocket,
   type YjsWebSocketBindingOptions,
+  type YjsWebSocketTimingEvent,
+  type YjsWebSocketTimingHandler,
   type YjsWebSocketLike
 } from './websocket.js';
 export {

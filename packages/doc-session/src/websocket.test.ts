@@ -28,6 +28,7 @@ import {
   encodeAckedSyncUpdate,
   type AttributedSyncUpdate,
   type DocumentSessionEvent,
+  type YjsWebSocketTimingEvent,
   type YjsWebSocketLike
 } from './index.js';
 import { bindYjsWebSocket } from './websocket.js';
@@ -89,10 +90,17 @@ describe('Yjs WebSocket session', () => {
   it('acknowledges a tagged client update only after it is persisted', async () => {
     await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
     const filePath = join(kb1Home, 'demo-vault', 'acked.md');
-    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'acked.json');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: '',
+      stateFilePath
+    });
     await session.open();
     const socket = new FakeSocket();
-    const binding = await bindYjsWebSocket(session, socket);
+    const timings: YjsWebSocketTimingEvent[] = [];
+    const binding = await bindYjsWebSocket(session, socket, {
+      onTiming: (event) => timings.push(event)
+    });
     const clientDoc = new Y.Doc();
     clientDoc.getText('markdown').insert(0, 'acked browser edit\n');
 
@@ -110,6 +118,18 @@ describe('Yjs WebSocket session', () => {
     const ack = findSyncUpdateAck(socket.sent, 'update-1');
     expect(ack?.ackId).toBe('update-1');
     expect(typeof ack?.ts).toBe('number');
+    expect(timings.map((event) => event.stage)).toEqual(expect.arrayContaining([
+      'document_session.open',
+      'initial_sync.emitted',
+      'markdown.read',
+      'markdown.atomic_write_fsync',
+      'yjs_state.atomic_write_fsync',
+      'save_ack.emitted'
+    ]));
+    const timingStages = timings.map((event) => event.stage);
+    expect(timingStages.lastIndexOf('save_ack.emitted')).toBeGreaterThan(
+      timingStages.lastIndexOf('yjs_state.atomic_write_fsync')
+    );
 
     socket.emitClose();
     await binding.closed;

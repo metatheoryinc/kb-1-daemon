@@ -10,6 +10,7 @@ import {
   OneFileDocumentSession,
   DocumentSessionManager,
   type DocumentSessionEvent,
+  type DocumentSessionTimingEvent,
   type DocumentSessionWarning
 } from './index.js';
 
@@ -176,6 +177,56 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('reports cold-open timings to every concurrent opener', async () => {
+    await writeFileWithParents(filePath, 'from disk\n');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'concurrent.json');
+    const session = new OneFileDocumentSession(filePath, { stateFilePath });
+    const firstTimings: DocumentSessionTimingEvent[] = [];
+    const secondTimings: DocumentSessionTimingEvent[] = [];
+
+    await Promise.all([
+      session.open({ onTiming: (event) => firstTimings.push(event) }),
+      session.open({ onTiming: (event) => secondTimings.push(event) }),
+    ]);
+
+    expect(firstTimings).toEqual(secondTimings);
+    expect(firstTimings.map((event) => event.stage)).toEqual([
+      'markdown.read',
+      'yjs_state.read',
+      'yjs_state.atomic_write_fsync',
+    ]);
+    await session.close();
+  });
+
+  it('does not rewrite a valid Yjs state snapshot during a cold reopen', async () => {
+    await writeFileWithParents(filePath, 'from disk\n');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'valid.json');
+    const firstTimings: DocumentSessionTimingEvent[] = [];
+    const first = new OneFileDocumentSession(filePath, { stateFilePath });
+
+    await first.open({ onTiming: (event) => firstTimings.push(event) });
+    await first.close();
+
+    expect(firstTimings).toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.atomic_write_fsync',
+      outcome: 'written'
+    }));
+
+    const secondTimings: DocumentSessionTimingEvent[] = [];
+    const second = new OneFileDocumentSession(filePath, { stateFilePath });
+    await second.open({ onTiming: (event) => secondTimings.push(event) });
+
+    expect(second.ydoc.getText('markdown').toString()).toBe('from disk\n');
+    expect(secondTimings).toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.restore',
+      outcome: 'valid'
+    }));
+    expect(secondTimings).not.toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.atomic_write_fsync'
+    }));
+    await second.close();
+  });
+
   it('materializes Yjs edits to the filesystem', async () => {
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
@@ -186,6 +237,32 @@ describe('OneFileDocumentSession', () => {
     await session.flush();
 
     await expect(readFile(filePath, 'utf8')).resolves.toBe('written through Yjs\n');
+    await session.close();
+  });
+
+  it('does not replay persist timings when one observer flushes the same cycle twice', async () => {
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'flush.json');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: '',
+      stateFilePath,
+    });
+    await session.open();
+
+    session.ydoc.getText('markdown').insert(0, 'written through Yjs\n');
+    const timings: DocumentSessionTimingEvent[] = [];
+    const onTiming = (event: DocumentSessionTimingEvent): void => {
+      timings.push(event);
+    };
+    await Promise.all([
+      session.flush({ onTiming }),
+      session.flush({ onTiming }),
+    ]);
+
+    expect(timings.map((event) => event.stage)).toEqual([
+      'markdown.read',
+      'markdown.atomic_write_fsync',
+      'yjs_state.atomic_write_fsync',
+    ]);
     await session.close();
   });
 
