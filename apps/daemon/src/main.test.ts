@@ -732,6 +732,11 @@ describe('daemon vault management API', () => {
   });
 
   it('edits a live document over the scoped Yjs WebSocket and persists to the scoped vault', async () => {
+    const traceId = '123e4567-e89b-42d3-a456-426614174000';
+    const timingLogs: unknown[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((label, fields) => {
+      if (label === '[document timing]') timingLogs.push(fields);
+    });
     await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -746,12 +751,28 @@ describe('daemon vault management API', () => {
     // A scoped Yjs socket opens against the addressed vault's document manager.
     // The daemon's own shutdown (in afterEach) drains and closes it in order, so
     // the document-session state is flushed before the throwaway home is removed.
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/ws-vault/files/doc.md/yjs`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/ws-vault/files/doc.md/yjs`, {
+      headers: { 'x-kb1-document-trace-id': traceId }
+    });
     const opened = new Promise<void>((resolveOpen, rejectOpen) => {
       socket.once('open', () => resolveOpen());
       socket.once('error', rejectOpen);
     });
     await opened;
+    await vi.waitUntil(
+      () => timingLogs.some((entry) =>
+        (entry as { stage?: unknown }).stage === 'initial_sync.emitted'
+      ),
+      { timeout: 1_000 }
+    );
+
+    expect(timingLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'websocket.accepted' }),
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'document_session.attached' }),
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'markdown.read' }),
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'initial_sync.emitted' })
+    ]));
+    expect(JSON.stringify(timingLogs)).not.toContain('doc.md');
 
     // An unknown-vault scoped socket is refused: the upgrade is destroyed, so the
     // client sees an error/close rather than an open.
@@ -762,6 +783,7 @@ describe('daemon vault management API', () => {
       badSocket.once('close', () => resolveBad('refused'));
     });
     expect(badResult).toBe('refused');
+    logSpy.mockRestore();
   });
 });
 

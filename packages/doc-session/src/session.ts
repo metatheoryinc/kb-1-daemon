@@ -21,6 +21,7 @@ const DOCUMENT_SESSION_STATE_VERSION = 1;
 const EXTERNAL_CHANGE_ORIGIN = Symbol('kb1.external-change');
 const WATCH_DEBOUNCE_MS = 150;
 const WATCH_POLL_MS = 2000;
+const TIMING_REPLAY_EVENT_LIMIT = 32;
 const WINDOWS_WATCH_DIRECTORY_CACHE = new Map<string, string>();
 
 export function resolveWatchDirectory(
@@ -68,6 +69,35 @@ export interface OneFileDocumentSessionOptions {
   warn?: (warning: DocumentSessionWarning) => void;
   watchDebounceMs?: number;
   watchPollMs?: number;
+}
+
+export type DocumentSessionTimingStage =
+  | 'markdown.read'
+  | 'yjs_state.read'
+  | 'yjs_state.restore'
+  | 'yjs_state.atomic_write_fsync'
+  | 'markdown.atomic_write_fsync';
+
+export interface DocumentSessionTimingEvent {
+  stage: DocumentSessionTimingStage;
+  durationMs: number;
+  outcome?: 'disabled' | 'missing' | 'valid' | 'stale' | 'invalid' | 'repaired' | 'written';
+}
+
+export type DocumentSessionTimingHandler = (event: DocumentSessionTimingEvent) => void;
+
+interface DocumentSessionOpenOptions {
+  createIfMissing?: boolean;
+  onTiming?: DocumentSessionTimingHandler;
+}
+
+interface DocumentSessionFlushOptions {
+  onTiming?: DocumentSessionTimingHandler;
+}
+
+interface TimingCycle {
+  events: DocumentSessionTimingEvent[];
+  handlerReferences: Map<DocumentSessionTimingHandler, number>;
 }
 
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
@@ -170,6 +200,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   private readonly eventHandlers = new Set<DocumentSessionEventHandler>();
   private opened = false;
   private openPromise: Promise<void> | undefined;
+  private openTimingCycle: TimingCycle | undefined;
   private lastWrittenHash: string | undefined;
   private lastWrittenContent: string | undefined;
   private nonEmptyMaterializedContent = false;
@@ -178,6 +209,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   private pendingPersistAttribution: DocumentUpdateAttribution | undefined;
   private persistRequested = false;
   private persistPromise: Promise<void> | undefined;
+  private persistTimingCycle: TimingCycle | undefined;
   private persistFailed = false;
   private persistFailureError: PersistFailedError | undefined;
   private activePersistFailureEvent: DocumentSessionEvent | undefined;
@@ -213,31 +245,58 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     return this.nonEmptyMaterializedContent;
   }
 
-  async open(options: { createIfMissing?: boolean } = {}): Promise<void> {
+  async open(options: DocumentSessionOpenOptions = {}): Promise<void> {
     if (this.opened) {
       return;
     }
 
     if (!this.openPromise) {
-      this.openPromise = this.loadFromFile(options.createIfMissing ?? this.createMissingOnOpen).finally(() => {
+      const timingCycle = createTimingCycle();
+      this.openTimingCycle = timingCycle;
+      this.openPromise = this.loadFromFile(
+        options.createIfMissing ?? this.createMissingOnOpen,
+      ).finally(() => {
         this.openPromise = undefined;
+        if (this.openTimingCycle === timingCycle) {
+          this.openTimingCycle = undefined;
+        }
       });
     }
 
-    await this.openPromise;
+    await observeTimingCycle(
+      this.openPromise,
+      this.openTimingCycle,
+      options.onTiming,
+    );
   }
 
-  private async loadFromFile(createIfMissing: boolean): Promise<void> {
+  private async loadFromFile(
+    createIfMissing: boolean,
+  ): Promise<void> {
+    const onTiming = (event: DocumentSessionTimingEvent): void => {
+      recordTimingEvent(this.openTimingCycle, event);
+    };
+    const markdownReadStartedAt = performance.now();
     const content = await this.readFile({ createIfMissing });
+    emitTiming(onTiming, {
+      stage: 'markdown.read',
+      durationMs: elapsedMs(markdownReadStartedAt),
+    });
     const contentHash = hashContent(content);
-    const restoredFromState = await this.tryRestoreStateSnapshot(content, contentHash);
-    if (!restoredFromState) {
+    const restoreOutcome = await this.tryRestoreStateSnapshot(
+      content,
+      contentHash,
+      onTiming,
+    );
+    if (restoreOutcome !== 'valid' && restoreOutcome !== 'repaired') {
       this.text.insert(0, content);
     }
     this.nonEmptyMaterializedContent = content.length > 0;
     this.lastWrittenHash = contentHash;
     this.lastWrittenContent = content;
-    await this.writeStateSnapshot(contentHash);
+    if (restoreOutcome !== 'valid') {
+      await this.writeStateSnapshot(contentHash, onTiming);
+    }
     this.doc.on('update', this.handleDocumentUpdate);
     this.opened = true;
     this.startWatching();
@@ -348,12 +407,12 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     return this.applyPositionedContent(edit(this.currentContentAfterOpen()), options);
   }
 
-  async flush(): Promise<void> {
+  async flush(options: DocumentSessionFlushOptions = {}): Promise<void> {
     if (this.persistPromise) {
-      await this.persistPromise;
+      await this.observePersist(this.persistPromise, options.onTiming);
     }
     if (this.persistFailureError) {
-      await this.requestPersist();
+      await this.observePersist(this.requestPersist(), options.onTiming);
     }
   }
 
@@ -480,8 +539,13 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     this.persistRequested = true;
 
     if (!this.persistPromise) {
+      const timingCycle = createTimingCycle();
+      this.persistTimingCycle = timingCycle;
       this.persistPromise = this.persistLoop().finally(() => {
         this.persistPromise = undefined;
+        if (this.persistTimingCycle === timingCycle) {
+          this.persistTimingCycle = undefined;
+        }
       });
     }
 
@@ -515,7 +579,12 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     const content = this.currentContent();
     const attribution = this.pendingPersistAttribution;
     this.pendingPersistAttribution = undefined;
+    const markdownReadStartedAt = performance.now();
     const diskContent = await readOptionalFile(this.filePath);
+    this.recordPersistTiming({
+      stage: 'markdown.read',
+      durationMs: elapsedMs(markdownReadStartedAt),
+    });
     const diskHash = diskContent === undefined ? undefined : hashContent(diskContent);
 
     // Re-check disk immediately before writing so external edits observed between debounce and persist are merged first.
@@ -533,8 +602,16 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     const contentHash = hashContent(content);
     this.pendingWriteHash = contentHash;
     try {
+      const markdownWriteStartedAt = performance.now();
       await atomicWriteFile(this.filePath, content);
-      await this.writeStateSnapshot(contentHash);
+      this.recordPersistTiming({
+        stage: 'markdown.atomic_write_fsync',
+        durationMs: elapsedMs(markdownWriteStartedAt),
+        outcome: 'written',
+      });
+      await this.writeStateSnapshot(contentHash, (event) => {
+        this.recordPersistTiming(event);
+      });
       this.lastWrittenHash = contentHash;
       this.lastWrittenContent = content;
       this.nonEmptyMaterializedContent = content.length > 0;
@@ -752,11 +829,35 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     this.emitEvent(eventKind);
   }
 
-  private async tryRestoreStateSnapshot(content: string, contentHash: string): Promise<boolean> {
-    if (!this.stateFilePath) return false;
+  private async tryRestoreStateSnapshot(
+    content: string,
+    contentHash: string,
+    onTiming?: DocumentSessionTimingHandler,
+  ): Promise<'disabled' | 'missing' | 'valid' | 'stale' | 'invalid' | 'repaired'> {
+    if (!this.stateFilePath) {
+      emitTiming(onTiming, {
+        stage: 'yjs_state.read',
+        durationMs: 0,
+        outcome: 'disabled',
+      });
+      return 'disabled';
+    }
+    const stateReadStartedAt = performance.now();
     const raw = await readOptionalFile(this.stateFilePath);
-    if (raw === undefined) return false;
+    if (raw === undefined) {
+      emitTiming(onTiming, {
+        stage: 'yjs_state.read',
+        durationMs: elapsedMs(stateReadStartedAt),
+        outcome: 'missing',
+      });
+      return 'missing';
+    }
+    emitTiming(onTiming, {
+      stage: 'yjs_state.read',
+      durationMs: elapsedMs(stateReadStartedAt),
+    });
 
+    const restoreStartedAt = performance.now();
     try {
       const parsed = JSON.parse(raw) as Partial<DocumentSessionStateFile>;
       if (
@@ -764,33 +865,73 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
         parsed.contentHash !== contentHash ||
         typeof parsed.updateBase64 !== 'string'
       ) {
-        return false;
+        emitTiming(onTiming, {
+          stage: 'yjs_state.restore',
+          durationMs: elapsedMs(restoreStartedAt),
+          outcome: 'stale',
+        });
+        return 'stale';
       }
 
       Y.applyUpdate(this.doc, decodeBase64Bytes(parsed.updateBase64), this);
       if (this.text.toString() === content) {
-        return true;
+        emitTiming(onTiming, {
+          stage: 'yjs_state.restore',
+          durationMs: elapsedMs(restoreStartedAt),
+          outcome: 'valid',
+        });
+        return 'valid';
       }
 
       this.doc.transact(() => {
         this.text.delete(0, this.text.length);
         this.text.insert(0, content);
       }, this);
-      return true;
+      emitTiming(onTiming, {
+        stage: 'yjs_state.restore',
+        durationMs: elapsedMs(restoreStartedAt),
+        outcome: 'repaired',
+      });
+      return 'repaired';
     } catch (error) {
       console.warn(`KB-1 ignored invalid Yjs state snapshot for ${this.filePath}.`, error);
-      return false;
+      emitTiming(onTiming, {
+        stage: 'yjs_state.restore',
+        durationMs: elapsedMs(restoreStartedAt),
+        outcome: 'invalid',
+      });
+      return 'invalid';
     }
   }
 
-  private async writeStateSnapshot(contentHash = hashContent(this.currentContent())): Promise<void> {
+  private async writeStateSnapshot(
+    contentHash = hashContent(this.currentContent()),
+    onTiming?: DocumentSessionTimingHandler,
+  ): Promise<void> {
     if (!this.stateFilePath) return;
     const snapshot: DocumentSessionStateFile = {
       version: DOCUMENT_SESSION_STATE_VERSION,
       contentHash,
       updateBase64: encodeBase64Bytes(Y.encodeStateAsUpdate(this.doc))
     };
+    const stateWriteStartedAt = performance.now();
     await atomicWriteFile(this.stateFilePath, `${JSON.stringify(snapshot)}\n`);
+    emitTiming(onTiming, {
+      stage: 'yjs_state.atomic_write_fsync',
+      durationMs: elapsedMs(stateWriteStartedAt),
+      outcome: 'written',
+    });
+  }
+
+  private async observePersist(
+    persist: Promise<void>,
+    onTiming?: DocumentSessionTimingHandler,
+  ): Promise<void> {
+    await observeTimingCycle(persist, this.persistTimingCycle, onTiming);
+  }
+
+  private recordPersistTiming(event: DocumentSessionTimingEvent): void {
+    recordTimingEvent(this.persistTimingCycle, event);
   }
 
   private async deleteStateSnapshot(): Promise<void> {
@@ -907,6 +1048,70 @@ async function readOptionalFile(filePath: string): Promise<string | undefined> {
 
 function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+}
+
+function createTimingCycle(): TimingCycle {
+  return {
+    events: [],
+    handlerReferences: new Map(),
+  };
+}
+
+async function observeTimingCycle(
+  operation: Promise<void>,
+  timingCycle: TimingCycle | undefined,
+  handler: DocumentSessionTimingHandler | undefined,
+): Promise<void> {
+  if (!handler || !timingCycle) {
+    await operation;
+    return;
+  }
+
+  const referenceCount = timingCycle.handlerReferences.get(handler) ?? 0;
+  if (referenceCount === 0) {
+    for (const event of timingCycle.events) emitTiming(handler, event);
+  }
+  timingCycle.handlerReferences.set(handler, referenceCount + 1);
+  try {
+    await operation;
+  } finally {
+    const remainingReferences = (timingCycle.handlerReferences.get(handler) ?? 1) - 1;
+    if (remainingReferences === 0) {
+      timingCycle.handlerReferences.delete(handler);
+    } else {
+      timingCycle.handlerReferences.set(handler, remainingReferences);
+    }
+  }
+}
+
+function recordTimingEvent(
+  timingCycle: TimingCycle | undefined,
+  event: DocumentSessionTimingEvent,
+): void {
+  if (!timingCycle) return;
+  if (timingCycle.events.length === TIMING_REPLAY_EVENT_LIMIT) {
+    timingCycle.events.shift();
+  }
+  timingCycle.events.push(event);
+  for (const handler of timingCycle.handlerReferences.keys()) {
+    emitTiming(handler, event);
+  }
+}
+
+function emitTiming(
+  handler: DocumentSessionTimingHandler | undefined,
+  event: DocumentSessionTimingEvent,
+): void {
+  if (!handler) return;
+  try {
+    handler(event);
+  } catch {
+    // Diagnostic observers must never affect document availability or durability.
+  }
 }
 
 function encodeBase64Bytes(bytes: Uint8Array): string {

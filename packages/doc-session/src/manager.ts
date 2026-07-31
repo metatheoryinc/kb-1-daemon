@@ -44,6 +44,7 @@ export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurf
   private readonly sessions = new Map<string, OneFileDocumentSession>();
   private readonly clientCounts = new Map<string, number>();
   private readonly idleCloseTimers = new Map<string, NodeJS.Timeout>();
+  private readonly closingSessions = new Set<Promise<void>>();
   private readonly eventHandlers = new Set<DocumentSessionEventHandler>();
 
   constructor(options: DocumentSessionManagerOptions) {
@@ -129,7 +130,7 @@ export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurf
   }
 
   getOpenSessionCount(): number {
-    return this.sessions.size;
+    return this.sessions.size + this.closingSessions.size;
   }
 
   async flushDirtySessions(): Promise<FlushDocumentSessionsResult> {
@@ -219,6 +220,7 @@ export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurf
       clearTimeout(timer);
     }
     this.idleCloseTimers.clear();
+    await Promise.allSettled([...this.closingSessions]);
     await Promise.all([...this.sessions.values()].map((session) => session.close()));
     this.sessions.clear();
     this.clientCounts.clear();
@@ -261,9 +263,15 @@ export class DocumentSessionManager implements DocumentSessionManagerRuntimeSurf
       return;
     }
     const timer = setTimeout(() => {
-      void this.closeSession(vaultPath).catch((error: unknown) => {
-        console.warn(`KB-1 failed to close idle document session for ${vaultPath}.`, error);
-      });
+      const closing = this.closeSession(vaultPath);
+      this.closingSessions.add(closing);
+      void closing
+        .catch((error: unknown) => {
+          console.warn(`KB-1 failed to close idle document session for ${vaultPath}.`, error);
+        })
+        .finally(() => {
+          this.closingSessions.delete(closing);
+        });
     }, this.idleSessionGraceMs);
     timer.unref?.();
     this.idleCloseTimers.set(vaultPath, timer);
