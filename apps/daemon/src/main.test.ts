@@ -1,4 +1,5 @@
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,8 +9,16 @@ import { WebSocket } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
-import { isDaemonCliEntrypoint, startDaemon } from './main.js';
+import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  type ClientDocumentSession
+} from '@kb-1/doc-session';
+import {
+  bindDocumentWebSocketAfterAttach,
+  isDaemonCliEntrypoint,
+  startDaemon,
+  type AwaitedDocumentWebSocket
+} from './main.js';
 import * as statusModule from './status.js';
 
 describe('daemon startup', () => {
@@ -42,6 +51,36 @@ describe('daemon startup', () => {
     await expect(access(join(kb1Home, 'daemon', 'status.json'))).rejects.toBeTruthy();
 
     await close(blocker);
+  });
+
+  it('releases a delayed document lease when its socket closes before attachment', async () => {
+    let resolveLease: ((lease: ClientDocumentSession) => void) | undefined;
+    const leasePromise = new Promise<ClientDocumentSession>((resolve) => {
+      resolveLease = resolve;
+    });
+    const release = vi.fn();
+    const socketEvents = new EventEmitter();
+    const socket = Object.assign(socketEvents, {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    }) as unknown as AwaitedDocumentWebSocket;
+    const bind = vi.fn(async () => ({ closed: Promise.resolve() }));
+
+    const lifecycle = bindDocumentWebSocketAfterAttach(
+      () => leasePromise,
+      socket,
+      {},
+      () => {},
+      bind as never
+    );
+    socketEvents.emit('close');
+    (socket as { readyState: number }).readyState = 3;
+    resolveLease?.({ session: {} as ClientDocumentSession['session'], release });
+
+    await expect(lifecycle).resolves.toBeUndefined();
+    expect(bind).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it('ignores KB2_* env vars during startup', async () => {

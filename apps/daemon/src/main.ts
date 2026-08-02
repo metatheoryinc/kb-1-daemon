@@ -2,8 +2,11 @@
 import { serve } from '@hono/node-server';
 import {
   bindYjsWebSocket,
+  type ClientDocumentSession,
   type DocumentSessionManager,
   type DocumentUpdateAttribution,
+  type YjsWebSocketBindingOptions,
+  type YjsWebSocketLike,
   type YjsWebSocketTimingEvent
 } from '@kb-1/doc-session';
 import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
@@ -282,29 +285,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
         // set synchronously, before any await. Shutdown must wait for a connection
         // that is still opening, or its in-flight state write can outlive teardown.
         const lifecycle = (async () => {
-          const bindingLease = target.manager.attachClientSession(target.documentPath);
-          if (documentTraceId) {
-            logDocumentTiming(documentTraceId, documentTimingStartedAt, {
-              stage: 'document_session.attached',
-              durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
-            });
-          }
           try {
-            const binding = await bindYjsWebSocket(
-              bindingLease.session,
+            await bindDocumentWebSocketAfterAttach(
+              () => target.manager.attachClientSession(target.documentPath),
               webSocket,
               {
                 ...(attribution.attribution ? { attribution: attribution.attribution } : {}),
                 ...(onDocumentTiming ? { onTiming: onDocumentTiming } : {})
+              },
+              () => {
+                if (documentTraceId) {
+                  logDocumentTiming(documentTraceId, documentTimingStartedAt, {
+                    stage: 'document_session.attached',
+                    durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
+                  });
+                }
               }
             );
-            try {
-              await binding.closed;
-            } finally {
-              bindingLease.release();
-            }
           } catch (error) {
-            bindingLease.release();
             console.error(error);
             webSocket.close(1011, 'Document session failed to open');
           }
@@ -318,6 +316,50 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
 
     server.once('error', fail);
   });
+}
+
+export interface AwaitedDocumentWebSocket extends YjsWebSocketLike {
+  once(event: 'close' | 'error', listener: () => void): this;
+  off(event: 'close' | 'error', listener: () => void): this;
+}
+
+export async function bindDocumentWebSocketAfterAttach(
+  attach: () => Promise<ClientDocumentSession>,
+  socket: AwaitedDocumentWebSocket,
+  options: YjsWebSocketBindingOptions = {},
+  onAttached: () => void = () => {},
+  bind: typeof bindYjsWebSocket = bindYjsWebSocket
+): Promise<void> {
+  let lease: ClientDocumentSession | undefined;
+  let closedBeforeBinding = socket.readyState !== 1;
+  let observingEarlyClose = true;
+  const observeEarlyClose = (): void => {
+    closedBeforeBinding = true;
+  };
+  socket.once('close', observeEarlyClose);
+  socket.once('error', observeEarlyClose);
+
+  try {
+    lease = await attach();
+    onAttached();
+    if (closedBeforeBinding || socket.readyState !== 1) {
+      return;
+    }
+
+    // bindYjsWebSocket installs its own close/error listeners synchronously
+    // before its first await, so transferring observation here has no event gap.
+    socket.off('close', observeEarlyClose);
+    socket.off('error', observeEarlyClose);
+    observingEarlyClose = false;
+    const binding = await bind(lease.session, socket, options);
+    await binding.closed;
+  } finally {
+    if (observingEarlyClose) {
+      socket.off('close', observeEarlyClose);
+      socket.off('error', observeEarlyClose);
+    }
+    lease?.release();
+  }
 }
 
 async function migrateLegacyDaemonHome(kb1Home: string): Promise<void> {

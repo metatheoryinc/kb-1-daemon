@@ -4,11 +4,15 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { DocumentSessionManager } from "@kb-1/doc-session";
+import {
+  DocumentSessionManager,
+  DocumentSessionNotFoundError,
+} from "@kb-1/doc-session";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -290,6 +294,248 @@ describe("vault service failure mapping", () => {
     });
     if (!flushed.ok) throw new Error("expected flushed history");
     expect(flushed.entries[0]).not.toHaveProperty("pending");
+  });
+
+  it("waits for a live path transition before overwriting the source path", async () => {
+    await writeFileWithParents(join(root, "notes", "moving.md"), "live content\n");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const session = sessions.getSession("notes/moving.md");
+    await session.open();
+
+    let announceMoveStarted: (() => void) | undefined;
+    const moveStarted = new Promise<void>((resolve) => {
+      announceMoveStarted = resolve;
+    });
+    let releaseMove: (() => void) | undefined;
+    const moveReleased = new Promise<void>((resolve) => {
+      releaseMove = resolve;
+    });
+    const move = sessions.moveSession(
+      "notes/moving.md",
+      "notes/moved.md",
+      async () => {
+        announceMoveStarted?.();
+        await moveReleased;
+        await rename(
+          join(root, "notes", "moving.md"),
+          join(root, "notes", "moved.md"),
+        );
+      },
+    );
+    await moveStarted;
+
+    let overwriteSettled = false;
+    const overwrite = service.createNote({
+      path: "notes/moving.md",
+      content: "replacement content\n",
+      overwrite: true,
+      actor: { kind: "user" },
+    }).then((result) => {
+      overwriteSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(overwriteSettled).toBe(false);
+
+    releaseMove?.();
+    await expect(move).resolves.toBe(true);
+    await expect(overwrite).resolves.toMatchObject({
+      ok: true,
+      path: "notes/moving.md",
+    });
+    await expect(readFile(join(root, "notes", "moved.md"), "utf8"))
+      .resolves.toBe("live content\n");
+    await expect(readFile(join(root, "notes", "moving.md"), "utf8"))
+      .resolves.toBe("replacement content\n");
+    await sessions.close();
+  });
+
+  it("installs the retained-session open barrier in the same turn as a cold create", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const retainedSession = sessions.getSession("notes/same-turn-create.md");
+
+    const creation = service.createNote({
+      path: "notes/same-turn-create.md",
+      content: "requested content\n",
+      overwrite: false,
+      actor: { kind: "user" },
+    });
+    const opening = retainedSession.open();
+
+    await expect(creation).resolves.toMatchObject({
+      ok: true,
+      path: "notes/same-turn-create.md",
+    });
+    await opening;
+    await expect(retainedSession.getContent()).resolves.toBe("requested content\n");
+    await expect(readFile(join(root, "notes", "same-turn-create.md"), "utf8"))
+      .resolves.toBe("requested content\n");
+    await sessions.close();
+  });
+
+  it("maps an active destination-session move conflict to already_exists", async () => {
+    await writeFileWithParents(join(root, "notes", "source.md"), "source content\n");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const source = sessions.getSession("notes/source.md");
+    await source.open();
+    const destinationLease = await sessions.attachClientSession("notes/destination.md");
+
+    await expect(service.moveNote({
+      fromPath: "notes/source.md",
+      toPath: "notes/destination.md",
+      actor: { kind: "user" },
+    })).resolves.toEqual({
+      ok: false,
+      error: "already_exists",
+      message: "destination already has an active document session",
+    });
+    await expect(readFile(join(root, "notes", "source.md"), "utf8"))
+      .resolves.toBe("source content\n");
+    expect(sessions.getSession("notes/source.md")).toBe(source);
+    expect(sessions.getSession("notes/destination.md")).toBe(destinationLease.session);
+
+    destinationLease.release();
+    await sessions.close();
+  });
+
+  it("reports a missing file source before an active destination-session conflict", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const destinationLease = await sessions.attachClientSession("notes/destination.md");
+
+    await expect(service.moveNote({
+      fromPath: "notes/missing.md",
+      toPath: "notes/destination.md",
+      actor: { kind: "user" },
+    })).resolves.toEqual({
+      ok: false,
+      error: "not_found",
+      message: "file not found",
+    });
+    expect(sessions.getSession("notes/destination.md")).toBe(destinationLease.session);
+
+    destinationLease.release();
+    await sessions.close();
+  });
+
+  it("reports a missing folder source before an active destination-subtree conflict", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const destinationLease = await sessions.attachClientSession("moved/folder/occupied.md");
+
+    await expect(service.moveFolder({
+      fromPath: "folder",
+      toPath: "moved/folder",
+      actor: { kind: "user" },
+    })).resolves.toEqual({
+      ok: false,
+      error: "not_found",
+      message: "folder not found",
+    });
+    expect(sessions.getSession("moved/folder/occupied.md")).toBe(destinationLease.session);
+
+    destinationLease.release();
+    await sessions.close();
+  });
+
+  it("maps a document deleted while preparing a move to not_found", async () => {
+    await writeFileWithParents(join(root, "notes", "deleted-during-move.md"), "source\n");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const move = vi.spyOn(sessions, "moveSession").mockRejectedValue(
+      new DocumentSessionNotFoundError(join(root, "notes", "deleted-during-move.md")),
+    );
+
+    await expect(service.moveNote({
+      fromPath: "notes/deleted-during-move.md",
+      toPath: "notes/destination.md",
+      actor: { kind: "user" },
+    })).resolves.toEqual({
+      ok: false,
+      error: "not_found",
+      message: "file not found",
+    });
+
+    move.mockRestore();
+    await sessions.close();
+  });
+
+  it("holds a live overwrite path stable through audit and history before a move", async () => {
+    await writeFileWithParents(join(root, "notes", "stable.md"), "initial content\n");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const session = sessions.getSession("notes/stable.md");
+    await session.open();
+    const originalApplyContent = session.applyContent.bind(session);
+    let announceOverwriteStarted: (() => void) | undefined;
+    const overwriteStarted = new Promise<void>((resolve) => {
+      announceOverwriteStarted = resolve;
+    });
+    let releaseOverwrite: (() => void) | undefined;
+    const overwriteReleased = new Promise<void>((resolve) => {
+      releaseOverwrite = resolve;
+    });
+    session.applyContent = async (...args) => {
+      announceOverwriteStarted?.();
+      await overwriteReleased;
+      return originalApplyContent(...args);
+    };
+
+    const overwrite = service.createNote({
+      path: "notes/stable.md",
+      content: "replacement content\n",
+      overwrite: true,
+      actor: { kind: "user" },
+    });
+    await overwriteStarted;
+    let moveSettled = false;
+    const move = service.moveNote({
+      fromPath: "notes/stable.md",
+      toPath: "notes/moved-stable.md",
+      actor: { kind: "user" },
+    }).then((result) => {
+      moveSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(moveSettled).toBe(false);
+
+    releaseOverwrite?.();
+    await expect(overwrite).resolves.toMatchObject({
+      ok: true,
+      path: "notes/stable.md",
+      content: "replacement content\n",
+      live: true,
+      audit: { operation: "write", path: "notes/stable.md" },
+    });
+    await expect(move).resolves.toMatchObject({
+      ok: true,
+      fromPath: "notes/stable.md",
+      toPath: "notes/moved-stable.md",
+      live: true,
+    });
+    await expect(readFile(join(root, "notes", "moved-stable.md"), "utf8"))
+      .resolves.toBe("replacement content\n");
+    await expect(readFile(join(root, "notes", "stable.md"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await sessions.close();
   });
 
   it("carries note history across cold and live note moves", async () => {
