@@ -84,15 +84,18 @@ describe('TunnelClient control heartbeat', () => {
     });
     firstControl.open();
 
-    expect(sentText(firstControl, 0)).toBe(encodeTunnelMessage({
-      type: 'control.hello',
-      version: 2,
-      token: 'token-1',
-      features: [
-        TUNNEL_FEATURES.RELAY_FRAMES_V1,
-        TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
-      ],
-    }));
+    expect(sentText(firstControl, 0)).toBe(
+      encodeTunnelMessage({
+        type: 'control.hello',
+        version: 2,
+        token: 'token-1',
+        features: [
+          TUNNEL_FEATURES.RELAY_FRAMES_V1,
+          TUNNEL_FEATURES.WEBSOCKET_STREAMS_V1,
+          TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
+        ],
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_INTERVAL_MS);
     expect(sentText(firstControl, 1)).toBe(encodeTunnelMessage({ type: 'control.ping' }));
@@ -194,17 +197,20 @@ describe('TunnelClient control heartbeat', () => {
     const firstControl = MockWebSocket.instances[0];
     firstControl.open();
 
-    expect(sentText(firstControl, 0)).toBe(encodeTunnelMessage({
-      type: 'control.hello',
-      version: 2,
-      token: 'token-1',
-      daemonVersion: '0.1.0',
-      daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
-      features: [
-        TUNNEL_FEATURES.RELAY_FRAMES_V1,
-        TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
-      ],
-    }));
+    expect(sentText(firstControl, 0)).toBe(
+      encodeTunnelMessage({
+        type: 'control.hello',
+        version: 2,
+        token: 'token-1',
+        daemonVersion: '0.1.0',
+        daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+        features: [
+          TUNNEL_FEATURES.RELAY_FRAMES_V1,
+          TUNNEL_FEATURES.WEBSOCKET_STREAMS_V1,
+          TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
+        ],
+      }),
+    );
   });
 
   it('keeps connect and disconnect idempotent for lifecycle callers', async () => {

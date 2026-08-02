@@ -11,6 +11,7 @@ import {
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
   TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS,
+  TUNNEL_WEBSOCKET_STREAM_CAPABILITY,
   decodeTunnelMessage,
   encodeTunnelMessage,
   parseRelayFrame,
@@ -19,6 +20,8 @@ import {
   type RelayJsonValue,
   type RelayRpcRequestFrame,
   type RelayRpcResponseFrame,
+  type RelayStreamDataFrame,
+  type RelayStreamOpenFrame,
   type TunnelControlServerMessage,
   type TunnelHttpCancelEnvelope,
   type TunnelHttpRequestChunkEnvelope,
@@ -129,6 +132,7 @@ export class TunnelClient {
   private readonly httpAssembler = new ChunkedHttpRequestAssembler();
   private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
   private readonly pendingRelayRpcRequests = new Map<string, AbortController>();
+  private readonly controlWebSocketStreams = new Map<string, ControlWebSocketBridge>();
   private stopped = true;
   private reconnectAttempt = 0;
 
@@ -155,6 +159,7 @@ export class TunnelClient {
     this.clearControlHeartbeat();
     this.abortPendingHttpRequests();
     this.abortPendingRelayRpcRequests('Tunnel client stopping');
+    this.abortControlWebSocketStreams(undefined, 'Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
   }
@@ -210,17 +215,20 @@ export class TunnelClient {
     this.control = control;
 
     control.on('open', () => {
-      control.send(encodeJsonBytes({
-        type: 'control.hello',
-        version: TUNNEL_PROTOCOL_VERSION,
-        token: this.config.token,
-        ...(this.config.daemonVersion ? { daemonVersion: this.config.daemonVersion } : {}),
-        ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
-        features: [
-          TUNNEL_FEATURES.RELAY_FRAMES_V1,
-          TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
-        ],
-      }));
+      control.send(
+        encodeJsonBytes({
+          type: 'control.hello',
+          version: TUNNEL_PROTOCOL_VERSION,
+          token: this.config.token,
+          ...(this.config.daemonVersion ? { daemonVersion: this.config.daemonVersion } : {}),
+          ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
+          features: [
+            TUNNEL_FEATURES.RELAY_FRAMES_V1,
+            TUNNEL_FEATURES.WEBSOCKET_STREAMS_V1,
+            TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
+          ],
+        }),
+      );
       this.startControlHeartbeat(control);
       this.logger.log('info', 'relay control connected', {
         relayHost: controlUrl.host,
@@ -240,6 +248,7 @@ export class TunnelClient {
         this.clearControlHeartbeat();
         this.abortPendingHttpRequests();
         this.abortPendingRelayRpcRequests('Relay control disconnected');
+        this.abortControlWebSocketStreams(control, 'Relay control disconnected');
       }
 
       if (this.stopped) return;
@@ -318,10 +327,23 @@ export class TunnelClient {
       case 'ws.open':
         this.openDialback(message);
         return;
+      case 'ws.close':
+        this.controlWebSocketStreams.get(message.streamId)?.closeFromControl(message.code, message.reason);
+        return;
     }
   }
 
   private async handleRelayFrame(control: WebSocket, frame: RelayFrame): Promise<void> {
+    if (frame.type === 'stream.open' && frame.capability === TUNNEL_WEBSOCKET_STREAM_CAPABILITY) {
+      this.openControlWebSocketStream(control, frame);
+      return;
+    }
+
+    if (frame.type === 'stream.data') {
+      this.handleControlWebSocketData(control, frame);
+      return;
+    }
+
     if (frame.type === 'cancel' && frame.target.kind === 'rpc') {
       this.pendingRelayRpcRequests
         .get(frame.target.id)
@@ -789,6 +811,76 @@ export class TunnelClient {
     bridge.start();
   }
 
+  private openControlWebSocketStream(control: WebSocket, frame: RelayStreamOpenFrame): void {
+    const open = controlWebSocketOpenPayload(frame);
+    if (!open) {
+      this.sendControlStreamClose({
+        type: 'ws.close',
+        streamId: frame.streamId,
+        code: TUNNEL_CLOSE_CODES.BAD_PROTOCOL,
+        reason: 'Invalid multiplexed websocket open request',
+      });
+      return;
+    }
+    if (this.controlWebSocketStreams.has(frame.streamId)) {
+      this.sendControlStreamClose({
+        type: 'ws.close',
+        streamId: frame.streamId,
+        code: TUNNEL_CLOSE_CODES.BAD_PROTOCOL,
+        reason: 'Multiplexed websocket stream already exists',
+      });
+      return;
+    }
+    if (this.controlWebSocketStreams.size >= RELAY_PENDING_REQUEST_LIMIT) {
+      this.sendControlStreamClose({
+        type: 'ws.close',
+        streamId: frame.streamId,
+        code: TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
+        reason: 'Multiplexed websocket stream limit reached',
+      });
+      return;
+    }
+
+    const daemonWsUrl = new URL(open.path, this.config.daemonUrl);
+    daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const daemonSocket = new WebSocket(daemonWsUrl, {
+      headers: withoutHopByHop(open.headers),
+    });
+    const bridge = new ControlWebSocketBridge({
+      streamId: frame.streamId,
+      controlSocket: control,
+      daemonSocket,
+      logger: this.logger,
+      onClosed: () => {
+        if (this.controlWebSocketStreams.get(frame.streamId) === bridge) {
+          this.controlWebSocketStreams.delete(frame.streamId);
+        }
+      },
+    });
+    this.controlWebSocketStreams.set(frame.streamId, bridge);
+    bridge.start();
+  }
+
+  private handleControlWebSocketData(control: WebSocket, frame: RelayStreamDataFrame): void {
+    const bridge = this.controlWebSocketStreams.get(frame.streamId);
+    if (!bridge || !bridge.belongsTo(control)) {
+      this.sendControlStreamClose({
+        type: 'ws.close',
+        streamId: frame.streamId,
+        code: TUNNEL_CLOSE_CODES.UNKNOWN_STREAM,
+        reason: 'Unknown multiplexed websocket stream',
+      });
+      return;
+    }
+    bridge.receive(frame);
+  }
+
+  private abortControlWebSocketStreams(control: WebSocket | undefined, reason: string): void {
+    for (const bridge of this.controlWebSocketStreams.values()) {
+      if (!control || bridge.belongsTo(control)) bridge.abort(reason);
+    }
+  }
+
   private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
     if (!this.control || this.control.readyState !== WebSocket.OPEN) {
       this.logger.log('warn', 'cannot notify relay about stale stream because control is not open', {
@@ -801,6 +893,175 @@ export class TunnelClient {
   }
 }
 /* v8 ignore stop */
+
+export type ControlWebSocketBridgeOptions = {
+  streamId: string;
+  controlSocket: BridgeSocket;
+  daemonSocket: BridgeSocket;
+  logger?: TunnelClientLogger;
+  onClosed?: () => void;
+};
+
+export class ControlWebSocketBridge {
+  private readonly logger: TunnelClientLogger;
+  private readonly pairTimeout: ReturnType<typeof setTimeout>;
+  private nextDaemonSequence = 0;
+  private closed = false;
+
+  constructor(private readonly options: ControlWebSocketBridgeOptions) {
+    this.logger = options.logger ?? consoleLogger;
+    this.pairTimeout = setTimeout(() => {
+      this.finish(
+        TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT,
+        'Timed out waiting for daemon websocket',
+        true,
+      );
+    }, TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS);
+  }
+
+  belongsTo(control: unknown): boolean {
+    return this.options.controlSocket === control;
+  }
+
+  start(): void {
+    this.options.daemonSocket.on('open', () => {
+      if (this.closed) return;
+      clearTimeout(this.pairTimeout);
+      this.sendControl({
+        type: 'relay.frame',
+        frame: {
+          type: 'stream.open',
+          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+          streamId: this.options.streamId,
+          capability: TUNNEL_WEBSOCKET_STREAM_CAPABILITY,
+        },
+      });
+    });
+
+    this.options.daemonSocket.on('message', (data) => {
+      if (this.closed) return;
+      const frame = rawDataToBytes(data);
+      if (frame.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
+        this.finish(TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME, 'Daemon websocket frame exceeded tunnel cap', true);
+        return;
+      }
+      this.sendControl({
+        type: 'relay.frame',
+        frame: {
+          type: 'stream.data',
+          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
+          streamId: this.options.streamId,
+          sequence: this.nextDaemonSequence++,
+          payload: {
+            encoding: 'base64',
+            dataB64: Buffer.from(frame).toString('base64'),
+          },
+        },
+      });
+    });
+
+    this.options.daemonSocket.on('close', (code, reason) => {
+      this.finish(sendableCloseCode(code), reason.toString(), true, false);
+    });
+
+    this.options.daemonSocket.on('error', (error) => {
+      this.logger.log('warn', 'multiplexed daemon websocket error', {
+        streamId: this.options.streamId,
+        error: String(error),
+      });
+      this.finish(1011, 'Daemon websocket failed', true);
+    });
+  }
+
+  receive(frame: RelayStreamDataFrame): void {
+    if (this.closed) return;
+    if (frame.payload.encoding !== 'base64') {
+      this.finish(TUNNEL_CLOSE_CODES.BAD_PROTOCOL, 'Websocket stream payload was not binary', true);
+      return;
+    }
+    const data = Buffer.from(frame.payload.dataB64, 'base64');
+    if (data.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
+      this.finish(TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME, 'Relay websocket frame exceeded tunnel cap', true);
+      return;
+    }
+    if (this.options.daemonSocket.readyState !== WebSocket.OPEN) {
+      this.finish(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, 'Daemon websocket was not open for relay frame', true);
+      return;
+    }
+    try {
+      this.options.daemonSocket.send(data, { binary: true });
+    } catch (error) {
+      this.logger.log('warn', 'multiplexed daemon websocket send failed', {
+        streamId: this.options.streamId,
+        error: String(error),
+      });
+      this.finish(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, 'Daemon websocket send failed', true);
+    }
+  }
+
+  closeFromControl(code: number, reason: string): void {
+    this.finish(sendableCloseCode(code), reason, false);
+  }
+
+  abort(reason: string): void {
+    this.finish(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, reason, false);
+  }
+
+  private sendControl(message: Parameters<typeof encodeTunnelMessage>[0]): void {
+    try {
+      this.options.controlSocket.send(encodeJsonBytes(message), {
+        binary: true,
+      });
+    } catch (error) {
+      this.logger.log('warn', 'multiplexed websocket control send failed', {
+        streamId: this.options.streamId,
+        error: String(error),
+      });
+      this.finish(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, 'Relay control send failed', false);
+    }
+  }
+
+  private finish(code: number, reason: string, notifyControl: boolean, closeDaemon = true): void {
+    if (this.closed) return;
+    this.closed = true;
+    clearTimeout(this.pairTimeout);
+    const closeCode = sendableCloseCode(code);
+    const closeReason = sendableCloseReason(reason);
+    try {
+      if (notifyControl && this.options.controlSocket.readyState === WebSocket.OPEN) {
+        try {
+          this.options.controlSocket.send(
+            encodeJsonBytes({
+              type: 'ws.close',
+              streamId: this.options.streamId,
+              code: closeCode,
+              reason: closeReason,
+            }),
+            { binary: true },
+          );
+        } catch {
+          // The control disconnect path is already authoritative for cleanup.
+        }
+      }
+      if (
+        closeDaemon &&
+        (this.options.daemonSocket.readyState === WebSocket.OPEN ||
+          this.options.daemonSocket.readyState === WebSocket.CONNECTING)
+      ) {
+        try {
+          this.options.daemonSocket.close(closeCode, closeReason);
+        } catch (error) {
+          this.logger.log('warn', 'multiplexed websocket close failed', {
+            streamId: this.options.streamId,
+            error: String(error),
+          });
+        }
+      }
+    } finally {
+      this.options.onClosed?.();
+    }
+  }
+}
 
 export type BridgeSocket = {
   readonly readyState: number;
@@ -1101,9 +1362,22 @@ export function createBackoffDelay(
 }
 
 export function sendableCloseCode(code: number): number {
-  return code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006
+  return ((code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) ||
+    (code >= 3000 && code <= 4999))
     ? code
     : 1011;
+}
+
+export function sendableCloseReason(reason: string): string {
+  let result = '';
+  let byteLength = 0;
+  for (const character of reason) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (byteLength + characterBytes > 123) break;
+    result += character;
+    byteLength += characterBytes;
+  }
+  return result;
 }
 
 function relayRpcError(
@@ -1195,6 +1469,26 @@ function parseMcpToolCallRpcRequest(
 function isRelayJsonObject(value: unknown): value is RelayJsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+
+/* v8 ignore start -- Valid opens construct the live daemon WebSocket inside TunnelClient; the bridge wire behavior is covered directly above. */
+function controlWebSocketOpenPayload(
+  frame: RelayStreamOpenFrame,
+): { path: string; headers: Record<string, string> } | null {
+  if (frame.payload?.encoding !== 'json' || !isRelayJsonObject(frame.payload.value)) {
+    return null;
+  }
+  const { path, headers } = frame.payload.value;
+  if (typeof path !== 'string' || !path.startsWith('/') || !isRelayJsonObject(headers)) {
+    return null;
+  }
+  const serializedHeaders: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value !== 'string') return null;
+    serializedHeaders[name] = value;
+  }
+  return { path, headers: serializedHeaders };
+}
+/* v8 ignore stop */
 
 export function relayInternalUrl(relayUrl: URL, internalPath: string): URL {
   const url = new URL(relayUrl.href);
