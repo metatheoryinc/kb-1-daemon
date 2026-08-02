@@ -6,6 +6,9 @@ settings:
 
 catalogs:
   default:
+    '@noble/hashes':
+      specifier: 2.2.0
+      version: 2.2.0
     '@storybook/addon-docs':
       specifier: 10.4.6
       version: 10.4.6
@@ -234,6 +237,9 @@ importers:
       '@kb-1/vault-core':
         specifier: workspace:*
         version: link:../vault-core
+      '@noble/hashes':
+        specifier: 'catalog:'
+        version: 2.2.0
       fast-diff:
         specifier: 1.3.0
         version: 1.3.0
@@ -836,6 +842,10 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
 
   '@nx/nx-darwin-arm64@22.7.6':
     resolution: {integrity: sha512-FBKG9Tqrl8H0A4oIekVTJNNq+tRMrkyF0fLBV4Cpi9Hm1ejA8dl5gpEG/o5V7MwiClVddDwtXp1ymdCa2qSoyg==}
@@ -3599,6 +3609,8 @@ snapshots:
       '@emnapi/runtime': 1.11.1
       '@tybys/wasm-util': 0.10.3
     optional: true
+
+  '@noble/hashes@2.2.0': {}
 
   '@nx/nx-darwin-arm64@22.7.6':
     optional: true

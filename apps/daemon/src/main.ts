@@ -524,23 +524,37 @@ function logDocumentTiming(
   event: {
     stage: string;
     durationMs: number;
+    observedAtMs?: number;
     outcome?: string;
     ackId?: string;
+    documentChars?: number;
+    stateVectorBytes?: number;
+    stateVectorFingerprint?: string;
+    updateBytes?: number;
+    updateFingerprint?: string;
   }
 ): void {
   console.log('[document timing]', {
     component: 'daemon',
     traceId,
     stage: event.stage,
-    elapsedMs: elapsedDocumentTimingMs(startedAt),
+    elapsedMs:
+      event.observedAtMs === undefined
+        ? elapsedDocumentTimingMs(startedAt)
+        : elapsedDocumentTimingMs(startedAt, event.observedAtMs),
     durationMs: event.durationMs,
     ...(event.outcome ? { outcome: event.outcome } : {}),
-    ...(event.ackId ? { ackId: event.ackId } : {})
+    ...(event.ackId ? { ackId: event.ackId } : {}),
+    ...(event.documentChars !== undefined ? { documentChars: event.documentChars } : {}),
+    ...(event.stateVectorBytes !== undefined ? { stateVectorBytes: event.stateVectorBytes } : {}),
+    ...(event.stateVectorFingerprint ? { stateVectorFingerprint: event.stateVectorFingerprint } : {}),
+    ...(event.updateBytes !== undefined ? { updateBytes: event.updateBytes } : {}),
+    ...(event.updateFingerprint ? { updateFingerprint: event.updateFingerprint } : {})
   });
 }
 
-function elapsedDocumentTimingMs(startedAt: number): number {
-  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+function elapsedDocumentTimingMs(startedAt: number, observedAtMs = performance.now()): number {
+  return Math.max(0, Math.round((observedAtMs - startedAt) * 100) / 100);
 }
 
 /** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */
