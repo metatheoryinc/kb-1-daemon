@@ -1,0 +1,48 @@
+name: Windows lifecycle smoke
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-smoke.yml
+      - scripts/windows-smoke.mjs
+      - scripts/windows-task-smoke.ps1
+      - skills/kb-1-daemon-setup/scripts/install_kb1_daemon_user_task.ps1
+      - skills/kb-1-daemon-setup/scripts/run_kb1_daemon_user_task.ps1
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable package manager
+        run: |
+          corepack enable
+          corepack install
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Windows source support
+        run: |
+          pnpm test:scripts
+          pnpm typecheck
+          pnpm build
+          pnpm smoke:windows
+
+      - name: Verify Windows background task lifecycle
+        shell: powershell
+        run: .\scripts\windows-task-smoke.ps1
