@@ -16,7 +16,12 @@ import { setPageUrl } from "./page-state.svelte";
 const mocks = vi.hoisted(() => ({
   goto: vi.fn(),
   destroyProvider: vi.fn(),
-  providers: [] as Array<{ path: string; doc: Y.Doc; text: Y.Text }>,
+  providers: [] as Array<{
+    path: string;
+    doc: Y.Doc;
+    text: Y.Text;
+    retireAndClose: () => void;
+  }>,
   delayedSyncPaths: new Set<string>(),
   pendingSyncs: new Map<string, () => void>(),
 }));
@@ -88,7 +93,20 @@ vi.mock("$lib/yjs/local-document-provider", async () => {
           open();
         }
       }
-      mocks.providers.push({ path, doc, text });
+      mocks.providers.push({
+        path,
+        doc,
+        text,
+        retireAndClose: () => {
+          options.onSessionEvent?.({
+            kind: "doc-deleted",
+            path,
+            ts: Date.now(),
+          });
+          options.onStatus?.("closed");
+          options.onError?.(new TestLocalDocumentProviderOpenError());
+        },
+      });
       return {
         doc,
         text,
@@ -467,6 +485,28 @@ describe("local editor route", () => {
       "content:projects/active/editor-shell.md",
     );
     expect(editor.value).toBe("content:projects/active/editor-shell.md");
+  });
+
+  it("keeps retained edits visible and read-only when terminal deletion is followed by not_found", async () => {
+    render(AppStateHarness);
+
+    const editor = await waitForBoundEditor("content:hello-world.md");
+    await fireEvent.input(editor, {
+      target: { value: "retained local edit" },
+    });
+
+    mocks.providers.at(-1)?.retireAndClose();
+
+    await waitFor(() => {
+      const retainedEditor = screen.getByLabelText(
+        "Markdown editor",
+      ) as HTMLTextAreaElement;
+      expect(retainedEditor.value).toBe("retained local edit");
+      expect(retainedEditor.readOnly).toBe(true);
+    });
+    expect(screen.queryByText("Document not found")).toBeNull();
+    expect(await screen.findByText("Document deleted")).toBeTruthy();
+    expect(mocks.destroyProvider).not.toHaveBeenCalled();
   });
 
   it("opens note history from the byline and pages older entries", async () => {
