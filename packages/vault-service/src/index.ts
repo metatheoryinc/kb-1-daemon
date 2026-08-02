@@ -1,4 +1,6 @@
 import {
+  DocumentSessionNotFoundError,
+  DocumentSessionPathConflictError,
   PersistFailedError,
   type DocumentSessionEvent,
   type DocumentSessionManager,
@@ -455,44 +457,45 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       invalidateTreeReads();
       const validPath = validateServiceFilePath(input.path);
       if (!validPath.ok) return validPath;
-      const liveSession = options.documentSessions.getOpenSession(input.path);
-      if (liveSession) {
-        if (!input.overwrite) {
-          return failure('already_exists', 'file already exists');
+      return options.documentSessions.withStablePath(input.path, async (liveSession) => {
+        if (liveSession) {
+          if (!input.overwrite) {
+            return failure('already_exists', 'file already exists');
+          }
+          const applied = await mapWriteFailure(() => liveSession.applyContent(
+            input.content,
+            { attribution: documentUpdateAttribution(input.actor, 'write', input.path) }
+          ));
+          if (!applied.ok) return applied;
+          const audit = await emitVaultAudit({
+            root: options.vaultRoot,
+            actor: input.actor,
+            operation: 'write',
+            entityKind: 'file',
+            path: input.path,
+            summary: `Wrote ${input.path}`,
+            changeEvent: { skipContentPersisted: true }
+          });
+          await recordServiceHistoryFromAudit(audit, applied.value);
+          return finishTreeMutation({
+            ok: true,
+            path: input.path,
+            content: applied.value,
+            live: true,
+            audit
+          });
         }
-        const applied = await mapWriteFailure(() => liveSession.applyContent(
-          input.content,
-          { attribution: documentUpdateAttribution(input.actor, 'write', input.path) }
-        ));
-        if (!applied.ok) return applied;
-        const audit = await emitVaultAudit({
-          root: options.vaultRoot,
-          actor: input.actor,
-          operation: 'write',
-          entityKind: 'file',
-          path: input.path,
-          summary: `Wrote ${input.path}`,
-          changeEvent: { skipContentPersisted: true }
-        });
-        await recordServiceHistoryFromAudit(audit, applied.value);
-        return finishTreeMutation({
-          ok: true,
-          path: input.path,
-          content: applied.value,
-          live: true,
-          audit
-        });
-      }
 
-      const result = serviceResult(await writeVaultFile(ctx(input.actor), {
-        path: input.path,
-        content: input.content,
-        overwrite: input.overwrite
-      }));
-      if (result.ok) {
-        await recordServiceHistoryFromAudit(result.audit, input.content);
-      }
-      return finishTreeMutation(result);
+        const result = serviceResult(await writeVaultFile(ctx(input.actor), {
+          path: input.path,
+          content: input.content,
+          overwrite: input.overwrite
+        }));
+        if (result.ok) {
+          await recordServiceHistoryFromAudit(result.audit, input.content);
+        }
+        return finishTreeMutation(result);
+      });
     },
 
     async editNote(input) {
@@ -608,14 +611,11 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const deletedLive = await mapVaultFailure(() => options.documentSessions.deleteSession(input.path, deleteOnDisk));
       if (!deletedLive.ok) return finishTreeMutation(deletedLive);
-      if (deletedLive.value) {
-        return finishTreeMutation({ ok: true, ...deleted!, live: true });
-      }
-      const result = serviceResult(await deleteVaultFile(ctx(input.actor), {
-        path: input.path,
-        permanent: input.permanent
-      }));
-      return finishTreeMutation(result);
+      return finishTreeMutation({
+        ok: true,
+        ...deleted!,
+        ...(deletedLive.value ? { live: true } : {})
+      });
     },
 
     async moveNote(input) {
@@ -631,19 +631,12 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       };
       const movedLive = await mapVaultFailure(() => options.documentSessions.moveSession(input.fromPath, input.toPath, moveOnDisk));
       if (!movedLive.ok) return finishTreeMutation(movedLive);
-      if (movedLive.value) {
-        await carryHistoryAfterFileMove(moved!);
-        return finishTreeMutation({ ok: true, ...moved!, live: true });
-      }
-      const result = serviceResult(await moveVaultPath(ctx(input.actor), {
-        kind: 'file',
-        fromPath: input.fromPath,
-        toPath: input.toPath
-      }));
-      if (result.ok) {
-        await carryHistoryAfterFileMove(result);
-      }
-      return finishTreeMutation(result);
+      await carryHistoryAfterFileMove(moved!);
+      return finishTreeMutation({
+        ok: true,
+        ...moved!,
+        ...(movedLive.value ? { live: true } : {})
+      });
     },
 
     async createFolder(input) {
@@ -884,6 +877,12 @@ async function mapVaultFailure<T>(operation: () => T | Promise<T>): Promise<{ ok
   } catch (error) {
     if (error instanceof VaultResultFailure) {
       return vaultFailureResult(error.result);
+    }
+    if (error instanceof DocumentSessionPathConflictError) {
+      return failure('already_exists', 'destination already has an active document session');
+    }
+    if (error instanceof DocumentSessionNotFoundError) {
+      return failure('not_found', 'file not found');
     }
     /* v8 ignore next -- Non-vault exceptions must propagate; callers only synthesize VaultResultFailure in tests and live disk callbacks. */
     throw error;

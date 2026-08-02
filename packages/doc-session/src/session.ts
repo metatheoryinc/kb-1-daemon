@@ -100,6 +100,11 @@ interface TimingCycle {
   handlerReferences: Map<DocumentSessionTimingHandler, number>;
 }
 
+interface StableOpenStateReservation {
+  run<T>(operation: (opened: boolean) => Promise<T>): Promise<T>;
+  release(): void;
+}
+
 export type DocumentSessionEventHandler = (event: DocumentSessionEvent) => void;
 
 export interface DocumentSessionMutationOptions {
@@ -200,6 +205,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   private readonly eventHandlers = new Set<DocumentSessionEventHandler>();
   private opened = false;
   private openPromise: Promise<void> | undefined;
+  private stableOpenTail: Promise<void> = Promise.resolve();
   private openTimingCycle: TimingCycle | undefined;
   private lastWrittenHash: string | undefined;
   private lastWrittenContent: string | undefined;
@@ -218,6 +224,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   private watchPollTimer: NodeJS.Timeout | undefined;
   private externalCheckPromise: Promise<void> | undefined;
   private pathTransitionPromise: Promise<void> | undefined;
+  private pathMutationTail: Promise<void> = Promise.resolve();
   private deleted = false;
 
   constructor(filePath: string, options: OneFileDocumentSessionOptions = {}) {
@@ -234,6 +241,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   }
 
   get ydoc(): Y.Doc {
+    this.assertNotDeleted();
     return this.doc;
   }
 
@@ -242,10 +250,20 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   }
 
   hasNonEmptyMaterializedContent(): boolean {
-    return this.nonEmptyMaterializedContent;
+    return !this.deleted && this.nonEmptyMaterializedContent;
   }
 
   async open(options: DocumentSessionOpenOptions = {}): Promise<void> {
+    this.assertNotDeleted();
+    if (this.opened) {
+      return;
+    }
+
+    // Stable-path operations install a barrier before inspecting the current
+    // open attempt. Opens that start afterward must observe the filesystem only
+    // once that operation has finished.
+    await this.stableOpenTail;
+    this.assertNotDeleted();
     if (this.opened) {
       return;
     }
@@ -268,6 +286,56 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
       this.openTimingCycle,
       options.onTiming,
     );
+  }
+
+  async withStableOpenState<T>(operation: (opened: boolean) => Promise<T>): Promise<T> {
+    return this.reserveStableOpenState().run(operation);
+  }
+
+  reserveStableOpenState(): StableOpenStateReservation {
+    let releaseBarrier: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const previous = this.stableOpenTail;
+    this.stableOpenTail = previous.then(() => barrier);
+    let released = false;
+    let consumed = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      releaseBarrier?.();
+    };
+
+    return {
+      run: async <T>(operation: (opened: boolean) => Promise<T>): Promise<T> => {
+        if (consumed) throw new Error('Stable open-state reservation has already been consumed.');
+        consumed = true;
+        await previous;
+        try {
+          const pendingOpen = this.openPromise;
+          if (pendingOpen) {
+            try {
+              await pendingOpen;
+            } catch (error) {
+              // A client may be probing a missing path while a create is queued.
+              // Once that attempt settles, the stable operation may safely take the
+              // cold path while later opens remain behind this barrier.
+              if (!(error instanceof DocumentSessionNotFoundError)) {
+                throw error;
+              }
+            }
+          }
+          return await operation(this.isOpened());
+        } finally {
+          release();
+        }
+      },
+      release: () => {
+        consumed = true;
+        release();
+      }
+    };
   }
 
   private async loadFromFile(
@@ -336,9 +404,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
 
   async reset(content = this.defaultContent): Promise<string> {
     await this.open();
-    if (this.deleted) {
-      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
-    }
+    this.assertNotDeleted();
 
     this.doc.transact(() => {
       this.text.delete(0, this.text.length);
@@ -351,9 +417,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
 
   async applyContent(content: string, options: DocumentSessionMutationOptions = {}): Promise<string> {
     await this.open();
-    if (this.deleted) {
-      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
-    }
+    this.assertNotDeleted();
 
     const current = this.currentContent();
     if (current !== content) {
@@ -372,9 +436,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     options: DocumentSessionMutationOptions = {},
   ): Promise<SessionSpliceResult> {
     await this.open();
-    if (this.deleted) {
-      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
-    }
+    this.assertNotDeleted();
 
     const currentBaseline = this.currentBaseline();
     if (baseline !== currentBaseline) {
@@ -422,24 +484,48 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     this.stopWatching();
   }
 
+  resumeAfterCloseFailure(): void {
+    if (!this.opened || this.deleted) return;
+    this.doc.off('update', this.handleDocumentUpdate);
+    this.doc.on('update', this.handleDocumentUpdate);
+    this.startWatching();
+  }
+
   async moveTo(
     filePath: string,
     eventPath: string,
     moveOnDisk: () => Promise<void>,
     stateFilePath = this.stateFilePath
   ): Promise<void> {
-    await this.prepareForPathTransition();
-    await this.completeMoveAfterTransition(filePath, eventPath, Promise.resolve().then(moveOnDisk), stateFilePath);
+    await this.runPathMutation(async () => {
+      await this.prepareForPathTransition();
+      await this.completeMoveAfterTransitionInternal(
+        filePath,
+        eventPath,
+        Promise.resolve().then(moveOnDisk),
+        stateFilePath
+      );
+    });
   }
 
   // Path transitions are two-phase: flush and stop watching first, then every caller awaits the same disk move before rebinding paths.
   async prepareForPathTransition(): Promise<void> {
     await this.open();
-    if (this.deleted) {
-      throw new Error(`Document session for ${this.eventPath} has been deleted.`);
-    }
-    await this.flush();
+    this.assertNotDeleted();
     this.stopWatching();
+    try {
+      const externalCheck = this.externalCheckPromise;
+      if (externalCheck) {
+        await externalCheck;
+      }
+      this.assertNotDeleted();
+      await this.flush();
+    } catch (error) {
+      if (!this.deleted) {
+        this.startWatching();
+      }
+      throw error;
+    }
   }
 
   async completeMoveAfterTransition(
@@ -448,11 +534,24 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
     transition: Promise<void>,
     stateFilePath = this.stateFilePath
   ): Promise<void> {
+    await this.runPathMutation(() => (
+      this.completeMoveAfterTransitionInternal(filePath, eventPath, transition, stateFilePath)
+    ));
+  }
+
+  private async completeMoveAfterTransitionInternal(
+    filePath: string,
+    eventPath: string,
+    transition: Promise<void>,
+    stateFilePath = this.stateFilePath
+  ): Promise<void> {
+    this.assertNotDeleted();
     const fromPath = this.eventPath;
     const previousStateFilePath = this.stateFilePath;
     let moved = false;
     const completion = (async () => {
       await transition;
+      this.assertNotDeleted();
       moved = true;
       this.filePath = filePath;
       this.eventPath = eventPath;
@@ -493,14 +592,16 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
   }
 
   async deleteWith(deleteOnDisk: () => Promise<void>): Promise<void> {
-    await this.open();
+    await this.runPathMutation(() => this.deleteWithInternal(deleteOnDisk));
+  }
+
+  private async deleteWithInternal(deleteOnDisk: () => Promise<void>): Promise<void> {
     if (this.deleted) {
       return;
     }
-    await this.flush();
+    await this.prepareForPathTransition();
 
     const transition = (async () => {
-      this.stopWatching();
       await deleteOnDisk();
       await this.deleteStateSnapshot();
       this.markDeleted();
@@ -519,6 +620,15 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
         this.pathTransitionPromise = undefined;
       }
     }
+  }
+
+  private async runPathMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.pathMutationTail.then(mutation);
+    this.pathMutationTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   private readonly handleDocumentUpdate = (_update: Uint8Array, origin: unknown): void => {
@@ -654,6 +764,12 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
       throw new Error(`Document session for ${this.eventPath} is not open.`);
     }
     return this.currentContent();
+  }
+
+  private assertNotDeleted(): void {
+    if (this.deleted) {
+      throw new DocumentSessionNotFoundError(this.filePath);
+    }
   }
 
   private async applyPositionedContent(

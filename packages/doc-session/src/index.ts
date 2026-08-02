@@ -21,6 +21,7 @@ export {
 export {
   DEFAULT_IDLE_SESSION_GRACE_MS,
   DocumentSessionManager,
+  DocumentSessionPathConflictError,
   type ClientDocumentSession,
   type FlushDocumentSessionsResult,
   type DocumentSessionManagerOptions

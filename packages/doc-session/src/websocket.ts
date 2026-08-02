@@ -5,6 +5,7 @@ import * as Y from 'yjs';
 
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DOCUMENT_SESSION_NOT_FOUND_FAILURE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   DocumentSessionNotFoundError,
   PersistFailedError,
@@ -71,6 +72,7 @@ export async function bindYjsWebSocket(
   const bindingStartedAt = performance.now();
   let cleanupStarted = false;
   let sessionReady = false;
+  let sessionDoc: Y.Doc | undefined;
   const pendingMessages: unknown[] = [];
   let syncedMessageSent = false;
   let resolveClosed!: () => void;
@@ -106,7 +108,7 @@ export async function bindYjsWebSocket(
 
     cleanupStarted = true;
     unsubscribeSessionEvents();
-    session.ydoc.off('update', updateHandler);
+    sessionDoc?.off('update', updateHandler);
     session.flush().then(resolveClosed, (error: unknown) => {
       if (error instanceof PersistFailedError) {
         resolveClosed();
@@ -147,17 +149,22 @@ export async function bindYjsWebSocket(
       const decoder = decoding.createDecoder(message);
       const encoder = encoding.createEncoder();
       const messageType = decoding.readVarUint(decoder);
+      const activeDoc = sessionDoc;
+      if (!activeDoc || !session.isOpened()) {
+        closeDeletedDocument(socket);
+        return;
+      }
 
       if (messageType === MESSAGE_ACKED_SYNC_UPDATE) {
         const ackedUpdate = decodeAckedSyncUpdate(decoder);
         if (!ackedUpdate) {
           return;
         }
-        if (hasUnsafeIndependentUpdate(session, ackedUpdate.update)) {
+        if (hasUnsafeIndependentUpdate(session, activeDoc, ackedUpdate.update)) {
           closeUnsafeDivergence(socket);
           return;
         }
-        Y.applyUpdate(session.ydoc, ackedUpdate.update, socketUpdateOrigin);
+        Y.applyUpdate(activeDoc, ackedUpdate.update, socketUpdateOrigin);
         const saveStartedAt = performance.now();
         void session.flush({ onTiming: options.onTiming as DocumentSessionTimingHandler | undefined }).then(() => {
           sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
@@ -181,7 +188,14 @@ export async function bindYjsWebSocket(
       }
 
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      const syncResult = processYjsSyncPayload(session, socket, socketUpdateOrigin, decoder, encoder);
+      const syncResult = processYjsSyncPayload(
+        session,
+        activeDoc,
+        socket,
+        socketUpdateOrigin,
+        decoder,
+        encoder,
+      );
       if (syncResult === 'closed') {
         return;
       }
@@ -219,11 +233,22 @@ export async function bindYjsWebSocket(
     }
     throw error;
   }
+  if (cleanupStarted || socket.readyState !== socketOpen) {
+    cleanup();
+    return { closed };
+  }
   sessionReady = true;
+  const openedDoc = session.ydoc;
+  sessionDoc = openedDoc;
 
-  session.ydoc.on('update', updateHandler);
+  openedDoc.on('update', updateHandler);
   unsubscribeSessionEvents = session.onEvent((event) => {
     sendBytes(socket, encodeSessionEvent(event));
+    if (event.kind === 'doc-deleted') {
+      deferredPersistedAckIds.clear();
+      closeDeletedDocument(socket);
+      return;
+    }
     if (event.kind === 'content-persisted' && deferredPersistedAckIds.size > 0) {
       for (const ackId of deferredPersistedAckIds) {
         sendBytes(socket, encodeSyncUpdateAck({ ackId, ts: event.ts }));
@@ -242,7 +267,7 @@ export async function bindYjsWebSocket(
   }
 
   sendSync(socket, (encoder) => {
-    syncProtocol.writeSyncStep1(encoder, session.ydoc);
+    syncProtocol.writeSyncStep1(encoder, openedDoc);
   });
   emitTiming(options.onTiming, {
     stage: 'initial_sync.emitted',
@@ -275,6 +300,7 @@ type SyncMessageResult = 'answered-sync-step1' | 'processed' | 'closed';
 
 function processYjsSyncPayload(
   session: OneFileDocumentSession,
+  doc: Y.Doc,
   socket: YjsWebSocketLike,
   origin: unknown,
   decoder: decoding.Decoder,
@@ -283,29 +309,32 @@ function processYjsSyncPayload(
   const syncMessageType = decoding.readVarUint(decoder);
   if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
     const remoteStateVector = decoding.readVarUint8Array(decoder);
-    syncProtocol.writeSyncStep2(encoder, session.ydoc, remoteStateVector);
+    syncProtocol.writeSyncStep2(encoder, doc, remoteStateVector);
     return 'answered-sync-step1';
   }
 
   if (syncMessageType === syncProtocol.messageYjsSyncStep2 || syncMessageType === syncProtocol.messageYjsUpdate) {
     const update = decoding.readVarUint8Array(decoder);
-    if (hasUnsafeIndependentUpdate(session, update)) {
+    if (hasUnsafeIndependentUpdate(session, doc, update)) {
       closeUnsafeDivergence(socket);
       return 'closed';
     }
-    Y.applyUpdate(session.ydoc, update, origin);
+    Y.applyUpdate(doc, update, origin);
     return 'processed';
   }
 
   throw new Error('Unknown Yjs sync message type');
 }
 
-function hasUnsafeIndependentUpdate(session: OneFileDocumentSession, update: Uint8Array): boolean {
+function hasUnsafeIndependentUpdate(
+  session: OneFileDocumentSession,
+  localDoc: Y.Doc,
+  update: Uint8Array,
+): boolean {
   if (!session.hasNonEmptyMaterializedContent()) {
     return false;
   }
 
-  const localDoc = session.ydoc;
   const localText = localDoc.getText(Y_TEXT_NAME).toString();
   if (localText.length === 0) {
     return false;
@@ -340,6 +369,13 @@ function stateVectorsShareClient(left: Map<number, number>, right: Map<number, n
 
 function closeUnsafeDivergence(socket: YjsWebSocketLike): void {
   socket.close(DOCUMENT_SESSION_FAILURE_CLOSE_CODE, JSON.stringify(DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE));
+}
+
+function closeDeletedDocument(socket: YjsWebSocketLike): void {
+  socket.close(
+    DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+    JSON.stringify(DOCUMENT_SESSION_NOT_FOUND_FAILURE),
+  );
 }
 
 function elapsedMs(startedAt: number): number {

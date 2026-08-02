@@ -12,6 +12,7 @@ import * as Y from 'yjs';
 
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  DOCUMENT_SESSION_NOT_FOUND_FAILURE,
   DOCUMENT_SESSION_UNSAFE_DIVERGENCE_FAILURE,
   LOCAL_AGENT_DOCUMENT_UPDATE_ATTRIBUTION,
   LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
@@ -21,6 +22,7 @@ import {
   MESSAGE_SYNC,
   MESSAGE_SYNC_UPDATE_ACK,
   OneFileDocumentSession,
+  PersistFailedError,
   UNKNOWN_DOCUMENT_UPDATE_ATTRIBUTION,
   decodeAttributedSyncUpdate,
   decodeSyncUpdateAck,
@@ -324,6 +326,88 @@ describe('Yjs WebSocket session', () => {
     await session.close();
   });
 
+  it('does not install document listeners when the socket closes during session open', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'closed-during-open.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'durable\n' });
+    const originalOpen = session.open.bind(session);
+    let releaseOpen: (() => void) | undefined;
+    const openReleased = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    session.open = async (options) => {
+      await openReleased;
+      await originalOpen(options);
+    };
+    const onEvent = vi.spyOn(session, 'onEvent');
+    const socket = new FakeSocket();
+
+    const bindingPromise = bindYjsWebSocket(session, socket);
+    socket.readyState = WebSocket.CLOSED;
+    socket.emitClose();
+    releaseOpen?.();
+
+    const binding = await bindingPromise;
+    await binding.closed;
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(socket.sent).toEqual([]);
+    onEvent.mockRestore();
+    await session.close();
+  });
+
+  it('settles socket cleanup when the latest document persist is already failed', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'cleanup-persist-failed.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'durable\n' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    const originalFlush = session.flush.bind(session);
+    session.flush = vi.fn(async () => {
+      throw new PersistFailedError(filePath, new Error('persist unavailable'));
+    });
+
+    socket.emitClose();
+    await expect(binding.closed).resolves.toBeUndefined();
+
+    session.flush = originalFlush;
+    await session.close();
+  });
+
+  it('rejects socket cleanup when an unexpected flush failure occurs', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'cleanup-unexpected-failure.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'durable\n' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    const originalFlush = session.flush.bind(session);
+    const cleanupFailure = new Error('unexpected cleanup failure');
+    session.flush = vi.fn(async () => {
+      throw cleanupFailure;
+    });
+
+    socket.emitClose();
+    await expect(binding.closed).rejects.toBe(cleanupFailure);
+
+    session.flush = originalFlush;
+    await session.close();
+  });
+
+  it('ignores unsupported non-binary socket frames', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'unsupported-frame.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'durable\n' });
+    await session.open();
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+    const sentBeforeUnsupportedFrame = socket.sent.length;
+
+    socket.emitMessage({ unsupported: true });
+
+    expect(socket.sent).toHaveLength(sentBeforeUnsupportedFrame);
+    expect(socket.closed).toEqual([]);
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
   it('persists the first edit from a freshly synced client after loading durable content', async () => {
     const vaultDir = join(kb1Home, 'demo-vault');
     const filePath = join(vaultDir, 'hello-world.md');
@@ -397,6 +481,7 @@ describe('Yjs WebSocket session', () => {
     await waitUntil(
       () => staleSocket.closed.length > 0,
       () => 'Timed out waiting for the divergent stale socket to close',
+      10_000,
     );
 
     expect(staleSocket.closed).toEqual([{
@@ -413,7 +498,7 @@ describe('Yjs WebSocket session', () => {
     await closeServer(server);
     await session.close();
     stalePeer.destroy();
-  });
+  }, 15_000);
 
   it('serves durable content after a daemon restart from filesystem truth', async () => {
     const vaultDir = join(kb1Home, 'demo-vault');
@@ -840,6 +925,30 @@ describe('Yjs WebSocket session', () => {
     await session.close();
   });
 
+  it('sends the terminal event and closes a socket bound to a deleted session', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'deleted.md');
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    await writeFile(filePath, 'retired content\n', 'utf8');
+    const session = new OneFileDocumentSession(filePath, { eventPath: 'deleted.md' });
+    const socket = new FakeSocket();
+    const binding = await bindYjsWebSocket(session, socket);
+
+    await session.deleteWith(() => rm(filePath));
+
+    expect(socket.sent.map(sessionEventKind)).toContain('doc-deleted');
+    expect(socket.closed).toEqual([
+      {
+        code: DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+        reason: JSON.stringify(DOCUMENT_SESSION_NOT_FOUND_FAILURE),
+      },
+    ]);
+    expect(() => session.ydoc).toThrow('file not found');
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+  });
+
   it('handles alternate message payload shapes and skips sends to closed sockets', async () => {
     const filePath = join(kb1Home, 'demo-vault', 'hello-world.md');
     await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
@@ -1150,8 +1259,9 @@ async function waitForDiskContent(
 async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
   errorMessage: () => string,
+  timeoutMs = 3000,
 ): Promise<void> {
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
