@@ -33,7 +33,8 @@ import {
   type YjsWebSocketTimingEvent,
   type YjsWebSocketLike
 } from './index.js';
-import { bindYjsWebSocket } from './websocket.js';
+import { bindYjsWebSocket, documentStateVectorTimingFields } from './websocket.js';
+import { fingerprintDocumentBytes } from './fingerprint.js';
 
 const DEMO_DOCUMENT_YJS_PATH = '/api/demo-document/yjs';
 
@@ -103,6 +104,10 @@ describe('Yjs WebSocket session', () => {
     const binding = await bindYjsWebSocket(session, socket, {
       onTiming: (event) => timings.push(event)
     });
+    const delayStartedAt = performance.now();
+    while (performance.now() - delayStartedAt < 15) {
+      // Keep deferred fingerprint work waiting so timestamp drift is observable.
+    }
     const clientDoc = new Y.Doc();
     clientDoc.getText('markdown').insert(0, 'acked browser edit\n');
 
@@ -123,6 +128,7 @@ describe('Yjs WebSocket session', () => {
     expect(timings.map((event) => event.stage)).toEqual(expect.arrayContaining([
       'document_session.open',
       'initial_sync.emitted',
+      'initial_state_vector.observed',
       'markdown.read',
       'markdown.atomic_write_fsync',
       'yjs_state.atomic_write_fsync',
@@ -132,11 +138,225 @@ describe('Yjs WebSocket session', () => {
     expect(timingStages.lastIndexOf('save_ack.emitted')).toBeGreaterThan(
       timingStages.lastIndexOf('yjs_state.atomic_write_fsync')
     );
+    const initialStateVector = findInitialStateVector(socket.sent);
+    expect(initialStateVector).toBeDefined();
+    const initialSyncTiming = timings.find((event) => event.stage === 'initial_sync.emitted');
+    const initialStateVectorTiming = timings.find(
+      (event) => event.stage === 'initial_state_vector.observed'
+    );
+    expect(initialStateVectorTiming).toMatchObject({
+      documentChars: expect.any(Number),
+      observedAtMs: expect.any(Number),
+      stateVectorBytes: initialStateVector?.byteLength,
+      stateVectorFingerprint: fingerprintDocumentBytes(initialStateVector ?? new Uint8Array()),
+    });
+    expect(initialStateVectorTiming?.durationMs).toBe(initialSyncTiming?.durationMs);
+    const initialStateVectorObservedAtMs = initialStateVectorTiming
+      && 'observedAtMs' in initialStateVectorTiming
+      ? initialStateVectorTiming.observedAtMs
+      : undefined;
+    const initialSyncObservedAtMs = initialSyncTiming
+      && 'observedAtMs' in initialSyncTiming
+      ? initialSyncTiming.observedAtMs
+      : undefined;
+    expect(initialStateVectorObservedAtMs).toBe(initialSyncObservedAtMs);
+    expect(timings.find((event) => event.stage === 'save_ack.emitted')).toMatchObject({
+      ackId: 'update-1',
+      observedAtMs: expect.any(Number),
+      updateBytes: expect.any(Number),
+      updateFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
 
     socket.emitClose();
     await binding.closed;
     await session.close();
     clientDoc.destroy();
+  });
+
+  it('dispatches burst save acknowledgements before collecting their shared state timing', async () => {
+    await mkdir(join(kb1Home, 'demo-vault'), { recursive: true });
+    const filePath = join(kb1Home, 'demo-vault', 'burst-acked.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const ackCountsAtSaveTiming: number[] = [];
+    const timings: YjsWebSocketTimingEvent[] = [];
+    const binding = await bindYjsWebSocket(session, socket, {
+      onTiming: (event) => {
+        timings.push(event);
+        if (event.stage === 'save_ack.emitted') {
+          ackCountsAtSaveTiming.push([
+            findSyncUpdateAck(socket.sent, 'burst-1'),
+            findSyncUpdateAck(socket.sent, 'burst-2'),
+          ].filter(Boolean).length);
+        }
+      }
+    });
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'first');
+    const firstUpdate = Y.encodeStateAsUpdate(clientDoc);
+    clientDoc.getText('markdown').insert(clientDoc.getText('markdown').length, ' second');
+    const secondUpdate = Y.encodeStateAsUpdate(clientDoc);
+
+    socket.emitMessage(encodeAckedSyncUpdate({ ackId: 'burst-1', update: firstUpdate }));
+    socket.emitMessage(encodeAckedSyncUpdate({ ackId: 'burst-2', update: secondUpdate }));
+
+    await waitUntil(
+      () => timings.filter((event) => event.stage === 'save_ack.emitted').length === 2,
+      () => `Timed out waiting for burst save timings; sent=${describeMessages(socket.sent)}`
+    );
+    expect(ackCountsAtSaveTiming).toEqual([2, 2]);
+    const saveTimings = timings.filter((event) => event.stage === 'save_ack.emitted');
+    expect(saveTimings.map((event) => 'ackId' in event ? event.ackId : undefined).sort())
+      .toEqual(['burst-1', 'burst-2']);
+    expect(saveTimings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ackId: 'burst-1',
+        updateBytes: firstUpdate.byteLength,
+        updateFingerprint: fingerprintDocumentBytes(firstUpdate),
+      }),
+      expect.objectContaining({
+        ackId: 'burst-2',
+        updateBytes: secondUpdate.byteLength,
+        updateFingerprint: fingerprintDocumentBytes(secondUpdate),
+      }),
+    ]));
+    expect(saveTimings.every((event) => (
+      'observedAtMs' in event && typeof event.observedAtMs === 'number'
+    ))).toBe(true);
+    expect(new Set(saveTimings.map((event) => (
+      'stateVectorFingerprint' in event ? event.stateVectorFingerprint : undefined
+    ))).size).toBe(1);
+
+    socket.emitClose();
+    await binding.closed;
+    await session.close();
+    clientDoc.destroy();
+  });
+
+  it('emits save acknowledgement telemetry when the session becomes terminal after the ack', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'terminal-after-ack.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const activeDoc = session.ydoc;
+    let sessionTerminal = false;
+    Object.defineProperty(session, 'ydoc', {
+      configurable: true,
+      get: () => {
+        if (sessionTerminal) throw new Error('file not found');
+        return activeDoc;
+      },
+    });
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data: Uint8Array) => {
+      originalSend(data);
+      if (messageType(data) === MESSAGE_SYNC_UPDATE_ACK) sessionTerminal = true;
+    };
+    const timings: YjsWebSocketTimingEvent[] = [];
+    const binding = await bindYjsWebSocket(session, socket, {
+      onTiming: (event) => timings.push(event)
+    });
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'durable before terminal state\n');
+
+    socket.emitMessage(encodeAckedSyncUpdate({
+      ackId: 'terminal-after-ack',
+      update: Y.encodeStateAsUpdate(clientDoc)
+    }));
+
+    await waitUntil(
+      () => timings.some((event) => (
+        event.stage === 'save_ack.emitted' && event.ackId === 'terminal-after-ack'
+      )),
+      () => `Timed out waiting for terminal save timing; sent=${describeMessages(socket.sent)}`
+    );
+    expect(timings.find((event) => (
+      event.stage === 'save_ack.emitted' && event.ackId === 'terminal-after-ack'
+    ))).toMatchObject({
+      stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+
+    socket.emitClose();
+    await binding.closed;
+    delete (session as unknown as Record<string, unknown>).ydoc;
+    await session.close();
+    clientDoc.destroy();
+  });
+
+  it('emits save acknowledgement telemetry after persistence recovers', async () => {
+    const vaultDir = join(kb1Home, 'demo-vault');
+    const filePath = join(vaultDir, 'recovered-ack.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const socket = new FakeSocket();
+    const timings: YjsWebSocketTimingEvent[] = [];
+    const binding = await bindYjsWebSocket(session, socket, {
+      onTiming: (event) => timings.push(event)
+    });
+    const clientDoc = new Y.Doc();
+    clientDoc.getText('markdown').insert(0, 'persist after recovery\n');
+    const update = Y.encodeStateAsUpdate(clientDoc);
+
+    try {
+      await chmod(vaultDir, 0o500);
+      socket.emitMessage(encodeAckedSyncUpdate({ ackId: 'recovered-1', update }));
+      await waitUntil(
+        () => socket.sent.some((message) => sessionEventKind(message) === 'persist-failure'),
+        () => `Timed out waiting for persist failure; sent=${describeMessages(socket.sent)}`
+      );
+      expect(findSyncUpdateAck(socket.sent, 'recovered-1')).toBeUndefined();
+
+      await chmod(vaultDir, 0o700);
+      await session.flush();
+      await waitUntil(
+        () => timings.some((event) => (
+          event.stage === 'save_ack.emitted' && event.ackId === 'recovered-1'
+        )),
+        () => `Timed out waiting for recovered save timing; sent=${describeMessages(socket.sent)}`
+      );
+
+      expect(findSyncUpdateAck(socket.sent, 'recovered-1')).toBeDefined();
+      expect(timings.find((event) => (
+        event.stage === 'save_ack.emitted' && event.ackId === 'recovered-1'
+      ))).toMatchObject({
+        observedAtMs: expect.any(Number),
+        updateBytes: update.byteLength,
+        updateFingerprint: fingerprintDocumentBytes(update),
+        stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      });
+    } finally {
+      await chmod(vaultDir, 0o700).catch(() => undefined);
+      socket.emitClose();
+      await binding.closed;
+      await session.close();
+      clientDoc.destroy();
+    }
+  });
+
+  it('emits captured initial state telemetry after a fast socket close', async () => {
+    const filePath = join(kb1Home, 'demo-vault', 'fast-close.md');
+    const session = new OneFileDocumentSession(filePath, { defaultContent: 'durable\n' });
+    await session.open();
+    const socket = new FakeSocket();
+    const timings: YjsWebSocketTimingEvent[] = [];
+    const binding = await bindYjsWebSocket(session, socket, {
+      onTiming: (event) => timings.push(event)
+    });
+
+    socket.readyState = WebSocket.CLOSED;
+    socket.emitClose();
+    await binding.closed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(timings.find((event) => event.stage === 'initial_state_vector.observed')).toMatchObject({
+      documentChars: 'durable\n'.length,
+      observedAtMs: expect.any(Number),
+      stateVectorBytes: expect.any(Number),
+      stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+    await session.close();
   });
 
   it('sends opaque attribution sidecars for attributed session mutations', async () => {
@@ -208,6 +428,16 @@ describe('Yjs WebSocket session', () => {
     socket.emitClose();
     await binding.closed;
     await session.close();
+  });
+
+  it('does not inspect Yjs state when no timing observer is configured', () => {
+    const inaccessibleDoc = {
+      getText: () => {
+        throw new Error('timing fields must stay lazy');
+      },
+    } as unknown as Y.Doc;
+
+    expect(documentStateVectorTimingFields(undefined, inaccessibleDoc)).toEqual({});
   });
 
   it('labels socket-origin Yjs updates with the socket binding attribution', async () => {
@@ -1165,6 +1395,16 @@ function describeMessages(messages: Uint8Array[]): string {
 function messageType(message: Uint8Array): number {
   const decoder = decoding.createDecoder(message);
   return decoding.readVarUint(decoder);
+}
+
+function findInitialStateVector(messages: Uint8Array[]): Uint8Array | undefined {
+  for (const message of messages) {
+    const decoder = decoding.createDecoder(message);
+    if (decoding.readVarUint(decoder) !== MESSAGE_SYNC) continue;
+    if (decoding.readVarUint(decoder) !== syncProtocol.messageYjsSyncStep1) continue;
+    return decoding.readVarUint8Array(decoder);
+  }
+  return undefined;
 }
 
 function receiveSyncMessage(doc: Y.Doc, message: Uint8Array): Uint8Array | undefined {

@@ -800,7 +800,7 @@ describe('daemon vault management API', () => {
     await opened;
     await vi.waitUntil(
       () => timingLogs.some((entry) =>
-        (entry as { stage?: unknown }).stage === 'initial_sync.emitted'
+        (entry as { stage?: unknown }).stage === 'initial_state_vector.observed'
       ),
       { timeout: 1_000 }
     );
@@ -809,7 +809,14 @@ describe('daemon vault management API', () => {
       expect.objectContaining({ component: 'daemon', traceId, stage: 'websocket.accepted' }),
       expect.objectContaining({ component: 'daemon', traceId, stage: 'document_session.attached' }),
       expect.objectContaining({ component: 'daemon', traceId, stage: 'markdown.read' }),
-      expect.objectContaining({ component: 'daemon', traceId, stage: 'initial_sync.emitted' })
+      expect.objectContaining({
+        component: 'daemon',
+        traceId,
+        stage: 'initial_state_vector.observed',
+        documentChars: expect.any(Number),
+        stateVectorBytes: expect.any(Number),
+        stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+      })
     ]));
     expect(JSON.stringify(timingLogs)).not.toContain('doc.md');
 

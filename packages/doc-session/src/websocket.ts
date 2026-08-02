@@ -3,6 +3,8 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
+import { fingerprintDocumentBytes } from './fingerprint.js';
+
 import {
   DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
   DOCUMENT_SESSION_NOT_FOUND_FAILURE,
@@ -56,13 +58,34 @@ export type YjsWebSocketTimingEvent =
       stage:
         | 'document_session.open'
         | 'initial_sync.emitted'
+        | 'initial_state_vector.observed'
         | 'synced_marker.emitted'
         | 'save_ack.emitted';
       durationMs: number;
+      observedAtMs?: number;
       ackId?: string;
+      documentChars?: number;
+      stateVectorBytes?: number;
+      stateVectorFingerprint?: string;
+      updateBytes?: number;
+      updateFingerprint?: string;
     };
 
 export type YjsWebSocketTimingHandler = (event: YjsWebSocketTimingEvent) => void;
+
+interface PendingSaveAckTiming {
+  durationMs: number;
+  observedAtMs: number;
+  ackId: string;
+  updateBytes: number;
+  updateFingerprint: string;
+}
+
+interface DeferredPersistedAck {
+  saveStartedAt: number;
+  updateBytes: number;
+  updateFingerprint: string;
+}
 
 export async function bindYjsWebSocket(
   session: OneFileDocumentSession,
@@ -82,7 +105,9 @@ export async function bindYjsWebSocket(
     rejectClosed = reject;
   });
   let unsubscribeSessionEvents: () => void = () => {};
-  const deferredPersistedAckIds = new Set<string>();
+  const deferredPersistedAcks = new Map<string, DeferredPersistedAck | undefined>();
+  const pendingSaveAckTimings: PendingSaveAckTiming[] = [];
+  let saveAckTimingScheduled = false;
   const socketUpdateOrigin = createDocumentUpdateAttributionOrigin(
     options.attribution ?? LOCAL_USER_DOCUMENT_UPDATE_ATTRIBUTION,
     socket
@@ -109,6 +134,7 @@ export async function bindYjsWebSocket(
     cleanupStarted = true;
     unsubscribeSessionEvents();
     sessionDoc?.off('update', updateHandler);
+    deferredPersistedAcks.clear();
     session.flush().then(resolveClosed, (error: unknown) => {
       if (error instanceof PersistFailedError) {
         resolveClosed();
@@ -136,6 +162,31 @@ export async function bindYjsWebSocket(
     emitTiming(options.onTiming, {
       stage: 'synced_marker.emitted',
       durationMs: elapsedMs(bindingStartedAt),
+    });
+  };
+
+  const queueSaveAckTiming = (timing: PendingSaveAckTiming) => {
+    pendingSaveAckTimings.push(timing);
+    if (saveAckTimingScheduled) return;
+    saveAckTimingScheduled = true;
+    queueMicrotask(() => {
+      saveAckTimingScheduled = false;
+      const batch = pendingSaveAckTimings.splice(0);
+      const activeDoc = sessionDoc;
+      const stateFields = activeDoc
+        ? documentStateVectorTimingFields(options.onTiming, activeDoc)
+        : {};
+      for (const event of batch) {
+        emitTiming(options.onTiming, {
+          stage: 'save_ack.emitted',
+          durationMs: event.durationMs,
+          observedAtMs: event.observedAtMs,
+          ackId: event.ackId,
+          updateBytes: event.updateBytes,
+          updateFingerprint: event.updateFingerprint,
+          ...stateFields,
+        });
+      }
     });
   };
 
@@ -168,14 +219,28 @@ export async function bindYjsWebSocket(
         const saveStartedAt = performance.now();
         void session.flush({ onTiming: options.onTiming as DocumentSessionTimingHandler | undefined }).then(() => {
           sendBytes(socket, encodeSyncUpdateAck({ ackId: ackedUpdate.ackId, ts: Date.now() }));
-          emitTiming(options.onTiming, {
-            stage: 'save_ack.emitted',
-            durationMs: elapsedMs(saveStartedAt),
-            ackId: ackedUpdate.ackId,
-          });
+          const observedAtMs = performance.now();
+          if (options.onTiming) {
+            queueSaveAckTiming({
+              durationMs: elapsedMs(saveStartedAt, observedAtMs),
+              observedAtMs,
+              ackId: ackedUpdate.ackId,
+              updateBytes: ackedUpdate.update.byteLength,
+              updateFingerprint: fingerprintDocumentBytes(ackedUpdate.update),
+            });
+          }
         }, (error: unknown) => {
           if (error instanceof PersistFailedError) {
-            deferredPersistedAckIds.add(ackedUpdate.ackId);
+            deferredPersistedAcks.set(
+              ackedUpdate.ackId,
+              options.onTiming
+                ? {
+                    saveStartedAt,
+                    updateBytes: ackedUpdate.update.byteLength,
+                    updateFingerprint: fingerprintDocumentBytes(ackedUpdate.update),
+                  }
+                : undefined,
+            );
             return;
           }
           console.warn('KB-1 failed to acknowledge persisted Yjs update.', error);
@@ -245,15 +310,25 @@ export async function bindYjsWebSocket(
   unsubscribeSessionEvents = session.onEvent((event) => {
     sendBytes(socket, encodeSessionEvent(event));
     if (event.kind === 'doc-deleted') {
-      deferredPersistedAckIds.clear();
+      deferredPersistedAcks.clear();
       closeDeletedDocument(socket);
       return;
     }
-    if (event.kind === 'content-persisted' && deferredPersistedAckIds.size > 0) {
-      for (const ackId of deferredPersistedAckIds) {
+    if (event.kind === 'content-persisted' && deferredPersistedAcks.size > 0) {
+      for (const [ackId, deferredAck] of deferredPersistedAcks) {
         sendBytes(socket, encodeSyncUpdateAck({ ackId, ts: event.ts }));
+        const observedAtMs = performance.now();
+        if (options.onTiming && deferredAck) {
+          queueSaveAckTiming({
+            durationMs: elapsedMs(deferredAck.saveStartedAt, observedAtMs),
+            observedAtMs,
+            ackId,
+            updateBytes: deferredAck.updateBytes,
+            updateFingerprint: deferredAck.updateFingerprint,
+          });
+        }
       }
-      deferredPersistedAckIds.clear();
+      deferredPersistedAcks.clear();
     }
   });
 
@@ -266,15 +341,53 @@ export async function bindYjsWebSocket(
     processSyncMessage(data);
   }
 
+  const initialStateVector = options.onTiming ? Y.encodeStateVector(openedDoc) : undefined;
+  const initialDocumentChars = options.onTiming ? openedDoc.getText(Y_TEXT_NAME).length : undefined;
   sendSync(socket, (encoder) => {
+    if (initialStateVector) {
+      encoding.writeVarUint(encoder, syncProtocol.messageYjsSyncStep1);
+      encoding.writeVarUint8Array(encoder, initialStateVector);
+      return;
+    }
     syncProtocol.writeSyncStep1(encoder, openedDoc);
   });
+  const initialSyncObservedAtMs = performance.now();
   emitTiming(options.onTiming, {
     stage: 'initial_sync.emitted',
-    durationMs: elapsedMs(bindingStartedAt),
+    durationMs: elapsedMs(bindingStartedAt, initialSyncObservedAtMs),
+    observedAtMs: initialSyncObservedAtMs,
   });
+  if (options.onTiming && initialStateVector) {
+    setImmediate(() => {
+      emitTiming(options.onTiming, {
+        stage: 'initial_state_vector.observed',
+        durationMs: elapsedMs(bindingStartedAt, initialSyncObservedAtMs),
+        observedAtMs: initialSyncObservedAtMs,
+        documentChars: initialDocumentChars,
+        stateVectorBytes: initialStateVector.byteLength,
+        stateVectorFingerprint: fingerprintDocumentBytes(initialStateVector),
+      });
+    });
+  }
 
   return { closed };
+}
+
+export function documentStateVectorTimingFields(
+  handler: YjsWebSocketTimingHandler | undefined,
+  doc: Y.Doc,
+): Partial<{
+  documentChars: number;
+  stateVectorBytes: number;
+  stateVectorFingerprint: string;
+}> {
+  if (!handler) return {};
+  const stateVector = Y.encodeStateVector(doc);
+  return {
+    documentChars: doc.getText(Y_TEXT_NAME).length,
+    stateVectorBytes: stateVector.byteLength,
+    stateVectorFingerprint: fingerprintDocumentBytes(stateVector),
+  };
 }
 
 function sendSync(socket: YjsWebSocketLike, write: (encoder: encoding.Encoder) => void): void {
@@ -378,8 +491,8 @@ function closeDeletedDocument(socket: YjsWebSocketLike): void {
   );
 }
 
-function elapsedMs(startedAt: number): number {
-  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+function elapsedMs(startedAt: number, observedAtMs = performance.now()): number {
+  return Math.max(0, Math.round((observedAtMs - startedAt) * 100) / 100);
 }
 
 function emitTiming(

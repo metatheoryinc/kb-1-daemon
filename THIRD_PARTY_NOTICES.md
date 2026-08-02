@@ -7,7 +7,7 @@ regenerated and reviewed for every release.
 Platform-specific optional native build bindings are excluded because they are not
 copied into the shipped runtime; their platform-neutral parent packages remain listed.
 
-Inventory count: **196 packages**.
+Inventory count: **197 packages**.
 
 | Package | Declared license | Source | Included notice files |
 | --- | --- | --- | --- |
@@ -46,6 +46,7 @@ Inventory count: **196 packages**.
 | @lezer/python 1.1.19 | MIT | [source](https://code.haverbeke.berlin/lezer/python) | LICENSE (fc70f93929c5) |
 | @marijn/find-cluster-break 1.0.2 | MIT | [source](https://github.com/marijnh/find-cluster-break) | LICENSE (081220319c27) |
 | @modelcontextprotocol/sdk 1.29.0 | MIT | [source](https://github.com/modelcontextprotocol/typescript-sdk) | LICENSE (8694aa57bec3) |
+| @noble/hashes 2.2.0 | MIT | [source](https://github.com/paulmillr/noble-hashes) | LICENSE (4f221aee6e07) |
 | @oxc-project/types 0.133.0 | MIT | [source](https://github.com/oxc-project/oxc) | LICENSE (5b0650b07830) |
 | @polka/url 1.0.0-next.29 | MIT | [source](https://github.com/lukeed/polka) | None included |
 | @rolldown/pluginutils 1.0.1 | MIT | [source](https://github.com/rolldown/plugins) | LICENSE (3a2bf91a2d98) |
@@ -882,6 +883,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### 4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec
+
+Packages: @noble/hashes@2.2.0
+
+Files: @noble/hashes@2.2.0/LICENSE
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ### 5b0650b078309ba2772569bb419e40e6883874af64d21bd9c27b44cc1a8e46ff
