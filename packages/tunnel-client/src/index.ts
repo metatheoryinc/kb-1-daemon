@@ -218,6 +218,7 @@ export class TunnelClient {
         ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
         features: [
           TUNNEL_FEATURES.RELAY_FRAMES_V1,
+          TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
           TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
         ],
       }));

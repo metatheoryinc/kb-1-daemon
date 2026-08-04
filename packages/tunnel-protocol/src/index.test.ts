@@ -50,6 +50,7 @@ it("round-trips control hello feature advertisement", () => {
     daemonBuild: "registry.example/kb1d@sha256:abc123",
     features: [
       TUNNEL_FEATURES.RELAY_FRAMES_V1,
+      TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
       TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1
     ]
   } as const;
