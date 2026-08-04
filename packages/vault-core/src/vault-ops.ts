@@ -54,6 +54,10 @@ export interface VaultEntry {
   mtimeMs: number;
   artifact?: ArtifactInfo;
   metadata?: FolderMetadata;
+  /** Internal watcher identity; deliberately non-enumerable in tree responses. */
+  watchCtimeMs?: number;
+  /** Internal watcher identity; deliberately non-enumerable in tree responses. */
+  watchIno?: number;
 }
 
 export interface VaultInfo {
@@ -354,13 +358,18 @@ async function walkEntries(
           entries,
         );
       } else if (row.dirent.isFile()) {
-        entries.push({
+        const entry: VaultEntry = {
           path: row.rel,
           kind: "file",
           size: row.stat.size,
           mtimeMs: row.stat.mtimeMs,
           artifact: classifyArtifactPath(row.rel),
+        };
+        Object.defineProperties(entry, {
+          watchCtimeMs: { value: row.stat.ctimeMs },
+          watchIno: { value: row.stat.ino },
         });
+        entries.push(entry);
         if (entries.length >= cap) throw new EntryCapExceededError();
       }
     }

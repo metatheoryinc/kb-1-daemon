@@ -410,6 +410,23 @@ describe('relay vault change events', () => {
       }
     ]);
   });
+
+  it('uses the vault-scoped tree event when the cold watcher cannot name a path', () => {
+    expect(relayEventsForVaultChange({
+      vaultSlug: 'demo',
+      event: {
+        kind: 'external_change_detected',
+        path: '',
+        actor,
+        ts: '2026-08-04T00:00:00.000Z'
+      }
+    })).toEqual([
+      {
+        topic: 'vault.tree.changed',
+        resource: { vaultSlug: 'demo', cause: 'external_change_detected' }
+      }
+    ]);
+  });
 });
 
 describe('daemon boot migration', () => {
