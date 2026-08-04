@@ -90,6 +90,7 @@ describe('TunnelClient control heartbeat', () => {
       token: 'token-1',
       features: [
         TUNNEL_FEATURES.RELAY_FRAMES_V1,
+        TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
       ],
     }));
@@ -202,6 +203,7 @@ describe('TunnelClient control heartbeat', () => {
       daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
       features: [
         TUNNEL_FEATURES.RELAY_FRAMES_V1,
+        TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
       ],
     }));

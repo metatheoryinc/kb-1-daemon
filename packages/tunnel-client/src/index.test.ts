@@ -842,6 +842,12 @@ describe('TunnelClient typed relay RPC', () => {
     );
   });
 
+  it('advertises vault content invalidation support as a control feature', () => {
+    expect(TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1).toBe(
+      'relay.vault-content-events.v1',
+    );
+  });
+
   it('rejects unknown typed relay RPC capabilities without proxying arbitrary paths', async () => {
     const fetchImpl = vi.fn();
     const client = new TunnelClient({

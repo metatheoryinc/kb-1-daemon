@@ -23,6 +23,7 @@ export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
 
 export const TUNNEL_FEATURES = {
   RELAY_FRAMES_V1: "relay.frame.v1",
+  VAULT_CONTENT_EVENTS_V1: "relay.vault-content-events.v1",
   MCP_TOOL_CALL_BOUNDED_RESULTS_V1:
     "relay.mcp-tool-call.bounded-results.v1"
 } as const;
