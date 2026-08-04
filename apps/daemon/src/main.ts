@@ -38,6 +38,7 @@ import {
 } from './vault-registry.js';
 
 const VAULT_TREE_CHANGED_TOPIC = 'vault.tree.changed';
+const VAULT_CONTENT_CHANGED_TOPIC = 'vault.content.changed';
 const TREE_DIRTY_EVENT_KINDS = new Set<VaultChangeEventKind>([
   'file_created',
   'folder_created',
@@ -334,12 +335,9 @@ function createRelayLifecycleController(
   const ensureVaultEventSubscription = () => {
     if (unsubscribeVaultEvents) return;
     unsubscribeVaultEvents = registry.onVaultEvent((event) => {
-      if (!isTreeDirtyVaultEvent(event)) return;
-
-      client.sendRelayEvent({
-        topic: VAULT_TREE_CHANGED_TOPIC,
-        resource: { vaultSlug: event.vaultSlug, cause: event.event.kind },
-      });
+      for (const relayEvent of relayEventsForVaultChange(event)) {
+        client.sendRelayEvent(relayEvent);
+      }
     });
   };
   const releaseVaultEventSubscription = () => {
@@ -366,6 +364,32 @@ function createRelayLifecycleController(
 function isTreeDirtyVaultEvent(event: VaultRegistryChangeEvent): boolean {
   return TREE_DIRTY_EVENT_KINDS.has(event.event.kind)
     && (event.event.kind !== 'external_change_detected' || event.event.path === '');
+}
+
+export function relayEventsForVaultChange(event: VaultRegistryChangeEvent): Array<{
+  topic: string;
+  resource: Record<string, string>;
+}> {
+  if (isTreeDirtyVaultEvent(event)) {
+    return [
+      {
+        topic: VAULT_TREE_CHANGED_TOPIC,
+        resource: { vaultSlug: event.vaultSlug, cause: event.event.kind }
+      }
+    ];
+  }
+  if (
+    event.event.kind === 'content_persisted'
+    || (event.event.kind === 'external_change_detected' && event.event.path !== '')
+  ) {
+    return [
+      {
+        topic: VAULT_CONTENT_CHANGED_TOPIC,
+        resource: { vaultSlug: event.vaultSlug, path: event.event.path }
+      }
+    ];
+  }
+  return [];
 }
 
 const daemonRelayLogger: TunnelClientLogger = {

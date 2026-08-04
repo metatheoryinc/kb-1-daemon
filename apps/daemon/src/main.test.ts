@@ -9,7 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
-import { isDaemonCliEntrypoint, startDaemon } from './main.js';
+import { isDaemonCliEntrypoint, relayEventsForVaultChange, startDaemon } from './main.js';
 import * as statusModule from './status.js';
 
 describe('daemon startup', () => {
@@ -314,6 +314,61 @@ describe('daemon startup', () => {
       releaseStatusWrite?.();
       statusSpy.mockRestore();
     }
+  });
+});
+
+describe('relay vault change events', () => {
+  const actor = { kind: 'system' as const, client: 'test' };
+
+  it('separates path-specific content invalidation from tree invalidation', () => {
+    expect(relayEventsForVaultChange({
+      vaultSlug: 'demo',
+      event: {
+        kind: 'content_persisted',
+        path: 'attachments/photo.png',
+        actor,
+        ts: '2026-08-04T00:00:00.000Z'
+      }
+    })).toEqual([
+      {
+        topic: 'vault.content.changed',
+        resource: { vaultSlug: 'demo', path: 'attachments/photo.png' }
+      }
+    ]);
+
+    expect(relayEventsForVaultChange({
+      vaultSlug: 'demo',
+      event: {
+        kind: 'file_moved',
+        path: 'attachments/photo-renamed.png',
+        fromPath: 'attachments/photo.png',
+        toPath: 'attachments/photo-renamed.png',
+        actor,
+        ts: '2026-08-04T00:00:00.000Z'
+      }
+    })).toEqual([
+      {
+        topic: 'vault.tree.changed',
+        resource: { vaultSlug: 'demo', cause: 'file_moved' }
+      }
+    ]);
+  });
+
+  it('invalidates a changed external path without turning it into a tree refresh', () => {
+    expect(relayEventsForVaultChange({
+      vaultSlug: 'demo',
+      event: {
+        kind: 'external_change_detected',
+        path: 'attachments/photo.png',
+        actor,
+        ts: '2026-08-04T00:00:00.000Z'
+      }
+    })).toEqual([
+      {
+        topic: 'vault.content.changed',
+        resource: { vaultSlug: 'demo', path: 'attachments/photo.png' }
+      }
+    ]);
   });
 });
 
