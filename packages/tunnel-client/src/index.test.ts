@@ -64,6 +64,10 @@ describe('tunnel-client helpers', () => {
     expect(sendableCloseCode(TUNNEL_CLOSE_CODES.CONTROL_REPLACED)).toBe(TUNNEL_CLOSE_CODES.CONTROL_REPLACED);
     expect(sendableCloseCode(1005)).toBe(1011);
     expect(sendableCloseCode(1006)).toBe(1011);
+    expect(sendableCloseCode(1004)).toBe(1011);
+    expect(sendableCloseCode(1015)).toBe(1011);
+    expect(sendableCloseCode(2999)).toBe(1011);
+    expect(sendableCloseCode(3000)).toBe(3000);
     expect(sendableCloseCode(999)).toBe(1011);
     expect(sendableCloseCode(5000)).toBe(1011);
   });

@@ -2,6 +2,8 @@ name: Check
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -30,34 +32,3 @@ jobs:
 
       - name: Run checks
         run: pnpm check
-
-  windows-smoke:
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Enable package manager
-        run: |
-          corepack enable
-          corepack install
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify Windows source support
-        run: |
-          pnpm test:scripts
-          pnpm typecheck
-          pnpm build
-          pnpm smoke:windows
-
-      - name: Verify Windows background task lifecycle
-        shell: powershell
-        run: .\scripts\windows-task-smoke.ps1

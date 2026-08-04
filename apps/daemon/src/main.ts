@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { bindYjsWebSocket, type DocumentSessionManager, type DocumentUpdateAttribution } from '@kb-1/doc-session';
+import {
+  bindYjsWebSocket,
+  type ClientDocumentSession,
+  type DocumentSessionManager,
+  type DocumentUpdateAttribution,
+  type YjsWebSocketBindingOptions,
+  type YjsWebSocketLike,
+  type YjsWebSocketTimingEvent
+} from '@kb-1/doc-session';
 import { createLocalMcpEndpoint } from '@kb-1/local-mcp';
 import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
 import type { VaultChangeEventKind } from '@kb-1/vault-service';
@@ -39,6 +47,7 @@ import {
 
 const VAULT_TREE_CHANGED_TOPIC = 'vault.tree.changed';
 const VAULT_CONTENT_CHANGED_TOPIC = 'vault.content.changed';
+const DOCUMENT_TRACE_HEADER = 'x-kb1-document-trace-id';
 const TREE_DIRTY_EVENT_KINDS = new Set<VaultChangeEventKind>([
   'file_created',
   'folder_created',
@@ -238,6 +247,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
     }
 
     server.on('upgrade', (request, socket, head) => {
+      const documentTraceId = traceIdFromDocumentRequest(request);
+      const documentTimingStartedAt = performance.now();
+      const onDocumentTiming = documentTraceId
+        ? (event: YjsWebSocketTimingEvent) => {
+            logDocumentTiming(documentTraceId, documentTimingStartedAt, event);
+          }
+        : undefined;
       if (shutdownRequested) {
         socket.destroy();
         return;
@@ -259,25 +275,35 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
       }
 
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        if (documentTraceId) {
+          logDocumentTiming(documentTraceId, documentTimingStartedAt, {
+            stage: 'websocket.accepted',
+            durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
+          });
+        }
         // Track the connection's whole lifecycle — handshake, session open (which
-        // writes the session-state snapshot), and the bound stream — in the drain
+        // may repair the session-state snapshot), and the bound stream — in the drain
         // set synchronously, before any await. Shutdown must wait for a connection
         // that is still opening, or its in-flight state write can outlive teardown.
         const lifecycle = (async () => {
-          const bindingLease = target.manager.attachClientSession(target.documentPath);
           try {
-            const binding = await bindYjsWebSocket(
-              bindingLease.session,
+            await bindDocumentWebSocketAfterAttach(
+              () => target.manager.attachClientSession(target.documentPath),
               webSocket,
-              attribution.attribution ? { attribution: attribution.attribution } : {}
+              {
+                ...(attribution.attribution ? { attribution: attribution.attribution } : {}),
+                ...(onDocumentTiming ? { onTiming: onDocumentTiming } : {})
+              },
+              () => {
+                if (documentTraceId) {
+                  logDocumentTiming(documentTraceId, documentTimingStartedAt, {
+                    stage: 'document_session.attached',
+                    durationMs: elapsedDocumentTimingMs(documentTimingStartedAt)
+                  });
+                }
+              }
             );
-            try {
-              await binding.closed;
-            } finally {
-              bindingLease.release();
-            }
           } catch (error) {
-            bindingLease.release();
             console.error(error);
             webSocket.close(1011, 'Document session failed to open');
           }
@@ -291,6 +317,50 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
 
     server.once('error', fail);
   });
+}
+
+export interface AwaitedDocumentWebSocket extends YjsWebSocketLike {
+  once(event: 'close' | 'error', listener: () => void): this;
+  off(event: 'close' | 'error', listener: () => void): this;
+}
+
+export async function bindDocumentWebSocketAfterAttach(
+  attach: () => Promise<ClientDocumentSession>,
+  socket: AwaitedDocumentWebSocket,
+  options: YjsWebSocketBindingOptions = {},
+  onAttached: () => void = () => {},
+  bind: typeof bindYjsWebSocket = bindYjsWebSocket
+): Promise<void> {
+  let lease: ClientDocumentSession | undefined;
+  let closedBeforeBinding = socket.readyState !== 1;
+  let observingEarlyClose = true;
+  const observeEarlyClose = (): void => {
+    closedBeforeBinding = true;
+  };
+  socket.once('close', observeEarlyClose);
+  socket.once('error', observeEarlyClose);
+
+  try {
+    lease = await attach();
+    onAttached();
+    if (closedBeforeBinding || socket.readyState !== 1) {
+      return;
+    }
+
+    // bindYjsWebSocket installs its own close/error listeners synchronously
+    // before its first await, so transferring observation here has no event gap.
+    socket.off('close', observeEarlyClose);
+    socket.off('error', observeEarlyClose);
+    observingEarlyClose = false;
+    const binding = await bind(lease.session, socket, options);
+    await binding.closed;
+  } finally {
+    if (observingEarlyClose) {
+      socket.off('close', observeEarlyClose);
+      socket.off('error', observeEarlyClose);
+    }
+    lease?.release();
+  }
 }
 
 async function migrateLegacyDaemonHome(kb1Home: string): Promise<void> {
@@ -463,6 +533,52 @@ function documentUpdateAttributionForActor(actor: VaultActor): DocumentUpdateAtt
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function traceIdFromDocumentRequest(request: IncomingMessage): string | undefined {
+  const value = firstHeaderValue(request.headers[DOCUMENT_TRACE_HEADER]);
+  return value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : undefined;
+}
+
+function logDocumentTiming(
+  traceId: string,
+  startedAt: number,
+  event: {
+    stage: string;
+    durationMs: number;
+    observedAtMs?: number;
+    outcome?: string;
+    ackId?: string;
+    documentChars?: number;
+    stateVectorBytes?: number;
+    stateVectorFingerprint?: string;
+    updateBytes?: number;
+    updateFingerprint?: string;
+  }
+): void {
+  console.log('[document timing]', {
+    component: 'daemon',
+    traceId,
+    stage: event.stage,
+    elapsedMs:
+      event.observedAtMs === undefined
+        ? elapsedDocumentTimingMs(startedAt)
+        : elapsedDocumentTimingMs(startedAt, event.observedAtMs),
+    durationMs: event.durationMs,
+    ...(event.outcome ? { outcome: event.outcome } : {}),
+    ...(event.ackId ? { ackId: event.ackId } : {}),
+    ...(event.documentChars !== undefined ? { documentChars: event.documentChars } : {}),
+    ...(event.stateVectorBytes !== undefined ? { stateVectorBytes: event.stateVectorBytes } : {}),
+    ...(event.stateVectorFingerprint ? { stateVectorFingerprint: event.stateVectorFingerprint } : {}),
+    ...(event.updateBytes !== undefined ? { updateBytes: event.updateBytes } : {}),
+    ...(event.updateFingerprint ? { updateFingerprint: event.updateFingerprint } : {})
+  });
+}
+
+function elapsedDocumentTimingMs(startedAt: number, observedAtMs = performance.now()): number {
+  return Math.max(0, Math.round((observedAtMs - startedAt) * 100) / 100);
 }
 
 /** Parse `/api/vaults/<id>/files/<rawPath>` into its id and raw file path. */

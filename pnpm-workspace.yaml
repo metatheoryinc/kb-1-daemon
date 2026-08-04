@@ -14,6 +14,7 @@ overrides:
   form-data: 4.0.6
 
 catalog:
+  '@noble/hashes': 2.2.0
   '@storybook/addon-docs': 10.4.6
   '@storybook/addon-svelte-csf': 5.1.2
   '@storybook/svelte': 10.4.6

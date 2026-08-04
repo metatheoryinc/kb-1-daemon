@@ -7,9 +7,11 @@ import * as Y from 'yjs';
 
 import { createFastDiffYTextDelta, resolveWatchDirectory } from './session.js';
 import {
+  DocumentSessionNotFoundError,
   OneFileDocumentSession,
   DocumentSessionManager,
   type DocumentSessionEvent,
+  type DocumentSessionTimingEvent,
   type DocumentSessionWarning
 } from './index.js';
 
@@ -176,6 +178,56 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('reports cold-open timings to every concurrent opener', async () => {
+    await writeFileWithParents(filePath, 'from disk\n');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'concurrent.json');
+    const session = new OneFileDocumentSession(filePath, { stateFilePath });
+    const firstTimings: DocumentSessionTimingEvent[] = [];
+    const secondTimings: DocumentSessionTimingEvent[] = [];
+
+    await Promise.all([
+      session.open({ onTiming: (event) => firstTimings.push(event) }),
+      session.open({ onTiming: (event) => secondTimings.push(event) }),
+    ]);
+
+    expect(firstTimings).toEqual(secondTimings);
+    expect(firstTimings.map((event) => event.stage)).toEqual([
+      'markdown.read',
+      'yjs_state.read',
+      'yjs_state.atomic_write_fsync',
+    ]);
+    await session.close();
+  });
+
+  it('does not rewrite a valid Yjs state snapshot during a cold reopen', async () => {
+    await writeFileWithParents(filePath, 'from disk\n');
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'valid.json');
+    const firstTimings: DocumentSessionTimingEvent[] = [];
+    const first = new OneFileDocumentSession(filePath, { stateFilePath });
+
+    await first.open({ onTiming: (event) => firstTimings.push(event) });
+    await first.close();
+
+    expect(firstTimings).toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.atomic_write_fsync',
+      outcome: 'written'
+    }));
+
+    const secondTimings: DocumentSessionTimingEvent[] = [];
+    const second = new OneFileDocumentSession(filePath, { stateFilePath });
+    await second.open({ onTiming: (event) => secondTimings.push(event) });
+
+    expect(second.ydoc.getText('markdown').toString()).toBe('from disk\n');
+    expect(secondTimings).toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.restore',
+      outcome: 'valid'
+    }));
+    expect(secondTimings).not.toContainEqual(expect.objectContaining({
+      stage: 'yjs_state.atomic_write_fsync'
+    }));
+    await second.close();
+  });
+
   it('materializes Yjs edits to the filesystem', async () => {
     const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
     await session.open();
@@ -186,6 +238,32 @@ describe('OneFileDocumentSession', () => {
     await session.flush();
 
     await expect(readFile(filePath, 'utf8')).resolves.toBe('written through Yjs\n');
+    await session.close();
+  });
+
+  it('does not replay persist timings when one observer flushes the same cycle twice', async () => {
+    const stateFilePath = join(kb1Home, '.kb1', 'doc-session-state', 'flush.json');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: '',
+      stateFilePath,
+    });
+    await session.open();
+
+    session.ydoc.getText('markdown').insert(0, 'written through Yjs\n');
+    const timings: DocumentSessionTimingEvent[] = [];
+    const onTiming = (event: DocumentSessionTimingEvent): void => {
+      timings.push(event);
+    };
+    await Promise.all([
+      session.flush({ onTiming }),
+      session.flush({ onTiming }),
+    ]);
+
+    expect(timings.map((event) => event.stage)).toEqual([
+      'markdown.read',
+      'markdown.atomic_write_fsync',
+      'yjs_state.atomic_write_fsync',
+    ]);
     await session.close();
   });
 
@@ -399,7 +477,9 @@ describe('OneFileDocumentSession', () => {
     await writeFileWithParents(filePath, 'start\n');
     const session = new OneFileDocumentSession(filePath, {
       watchDebounceMs: 50,
-      watchPollMs: 10_000
+      // Keep the test valid when the host cannot allocate another native
+      // watcher; the production fallback must preserve the same coalescing.
+      watchPollMs: 250
     });
     session.onEvent((event) => events.push(event));
     await session.open();
@@ -455,7 +535,7 @@ describe('OneFileDocumentSession', () => {
     );
 
     expect(eventKinds(events)).toEqual(['doc-deleted']);
-    await expect(session.getContent()).resolves.toBe('do not silently empty me\n');
+    await expect(session.getContent()).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
     await session.close();
   });
 
@@ -599,6 +679,531 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
+  it('serializes deletion behind an in-flight move transition', async () => {
+    const events: DocumentSessionEvent[] = [];
+    const targetPath = join(kb1Home, 'demo-vault', 'renamed-after-delete.md');
+    const session = new OneFileDocumentSession(filePath, {
+      defaultContent: 'base\n',
+      eventPath: 'hello-world.md'
+    });
+    session.onEvent((event) => events.push(event));
+    await session.open();
+
+    let resolveTransition: (() => void) | undefined;
+    const transition = new Promise<void>((resolve) => {
+      resolveTransition = resolve;
+    });
+    const move = session.completeMoveAfterTransition(
+      targetPath,
+      'renamed-after-delete.md',
+      transition
+    );
+    const deletion = session.deleteWith(async () => {
+      await rm(targetPath, { force: true });
+    });
+    resolveTransition?.();
+
+    await expect(move).resolves.toBeUndefined();
+    await expect(deletion).resolves.toBeUndefined();
+    await expect(readFile(targetPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'doc-deleted' }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'doc-moved' }));
+    expect(events.findIndex((event) => event.kind === 'doc-moved'))
+      .toBeLessThan(events.findIndex((event) => event.kind === 'doc-deleted'));
+    await session.close();
+  });
+
+  it('serializes manager structural mutations before resolving a session path', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'renamed-before-delete.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+
+    let announceMoveStarted: (() => void) | undefined;
+    const moveStarted = new Promise<void>((resolve) => {
+      announceMoveStarted = resolve;
+    });
+    let releaseDiskMove: (() => void) | undefined;
+    const diskMoveReleased = new Promise<void>((resolve) => {
+      releaseDiskMove = resolve;
+    });
+    const move = manager.moveSession('hello-world.md', 'renamed-before-delete.md', async () => {
+      announceMoveStarted?.();
+      await diskMoveReleased;
+      await rename(filePath, targetPath);
+    });
+    await moveStarted;
+
+    const deleteOnDisk = vi.fn(async () => {
+      await rm(filePath, { force: true });
+    });
+    const deletion = manager.deleteSession('hello-world.md', deleteOnDisk);
+    releaseDiskMove?.();
+
+    await expect(move).resolves.toBe(true);
+    await expect(deletion).resolves.toBe(false);
+    expect(deleteOnDisk).toHaveBeenCalledOnce();
+    await expect(readFile(targetPath, 'utf8')).resolves.toBe('base\n');
+    await expect(session.getContent()).resolves.toBe('base\n');
+    await manager.close();
+  });
+
+  it('reserves both session paths while a move is in flight and attaches to the rekeyed session', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'reserved-target.md');
+    const manager = new DocumentSessionManager({
+      root,
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 1
+    });
+    const originalLease = await manager.attachClientSession('hello-world.md');
+    await originalLease.session.open();
+
+    let announceMoveStarted: (() => void) | undefined;
+    const moveStarted = new Promise<void>((resolve) => {
+      announceMoveStarted = resolve;
+    });
+    let releaseDiskMove: (() => void) | undefined;
+    const diskMoveReleased = new Promise<void>((resolve) => {
+      releaseDiskMove = resolve;
+    });
+    const move = manager.moveSession('hello-world.md', 'reserved-target.md', async () => {
+      announceMoveStarted?.();
+      await diskMoveReleased;
+      await rename(filePath, targetPath);
+    });
+    await moveStarted;
+
+    expect(() => manager.getSession('hello-world.md')).toThrow('path is transitioning');
+    expect(() => manager.getSession('reserved-target.md')).toThrow('path is transitioning');
+    let attached = false;
+    const destinationLeasePromise = manager.attachClientSession('reserved-target.md').then((lease) => {
+      attached = true;
+      return lease;
+    });
+    await Promise.resolve();
+    expect(attached).toBe(false);
+
+    releaseDiskMove?.();
+    await expect(move).resolves.toBe(true);
+    const destinationLease = await destinationLeasePromise;
+    expect(destinationLease.session).toBe(originalLease.session);
+
+    originalLease.release();
+    destinationLease.release();
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for rekeyed client leases to close; count=${manager.getOpenSessionCount()}`
+    );
+    await manager.close();
+  });
+
+  it('drains an in-flight external check before starting the disk move', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'after-external-check.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+    let releaseExternalCheck: (() => void) | undefined;
+    const externalCheck = new Promise<void>((resolve) => {
+      releaseExternalCheck = resolve;
+    });
+    (session as unknown as { externalCheckPromise: Promise<void> | undefined })
+      .externalCheckPromise = externalCheck;
+    let diskMoveStarted = false;
+
+    const move = manager.moveSession('hello-world.md', 'after-external-check.md', async () => {
+      diskMoveStarted = true;
+      await rename(filePath, targetPath);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const diskMoveStartedBeforeDrain = diskMoveStarted;
+
+    releaseExternalCheck?.();
+    await expect(move).resolves.toBe(true);
+    expect(diskMoveStartedBeforeDrain).toBe(false);
+    await expect(readFile(targetPath, 'utf8')).resolves.toBe('base\n');
+    await manager.close();
+  });
+
+  it('drains an in-flight external check before starting disk deletion', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    const events: DocumentSessionEvent[] = [];
+    session.onEvent((event) => events.push(event));
+    await session.open();
+    let releaseExternalCheck: (() => void) | undefined;
+    const externalCheck = new Promise<void>((resolve) => {
+      releaseExternalCheck = resolve;
+    });
+    (session as unknown as { externalCheckPromise: Promise<void> | undefined })
+      .externalCheckPromise = externalCheck;
+    let diskDeleteStarted = false;
+
+    const deletion = manager.deleteSession('hello-world.md', async () => {
+      diskDeleteStarted = true;
+      await rm(filePath);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const diskDeleteStartedBeforeDrain = diskDeleteStarted;
+
+    releaseExternalCheck?.();
+    await expect(deletion).resolves.toBe(true);
+    expect(diskDeleteStartedBeforeDrain).toBe(false);
+    await expect(readFile(filePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(eventKinds(events)).toEqual(['doc-deleted']);
+    await manager.close();
+  });
+
+  it('retries acquisition when a structural reservation wins the availability microtask', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'atomic-target.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+
+    const destinationLeasePromise = manager.attachClientSession('atomic-target.md');
+    const move = manager.moveSession('hello-world.md', 'atomic-target.md', async () => {
+      await rename(filePath, targetPath);
+    });
+
+    await expect(move).resolves.toBe(true);
+    const destinationLease = await destinationLeasePromise;
+    expect(destinationLease.session).toBe(session);
+    destinationLease.release();
+    await manager.close();
+  });
+
+  it('holds a stable cold path until its write completes before allowing attachment', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const stableFilePath = join(root, 'stable-cold.md');
+    await mkdir(root, { recursive: true });
+    const manager = new DocumentSessionManager({ root });
+    let announceStableOperation: (() => void) | undefined;
+    const stableOperationStarted = new Promise<void>((resolve) => {
+      announceStableOperation = resolve;
+    });
+    let releaseStableOperation: (() => void) | undefined;
+    const stableOperationReleased = new Promise<void>((resolve) => {
+      releaseStableOperation = resolve;
+    });
+    const stableWrite = manager.withStablePath('stable-cold.md', async (liveSession) => {
+      expect(liveSession).toBeUndefined();
+      announceStableOperation?.();
+      await stableOperationReleased;
+      await writeFile(stableFilePath, 'stable content\n', 'utf8');
+    });
+    await stableOperationStarted;
+
+    let attached = false;
+    const leasePromise = manager.attachClientSession('stable-cold.md').then((lease) => {
+      attached = true;
+      return lease;
+    });
+    await Promise.resolve();
+    expect(attached).toBe(false);
+
+    releaseStableOperation?.();
+    await stableWrite;
+    const lease = await leasePromise;
+    await expect(lease.session.getContent()).resolves.toBe('stable content\n');
+    lease.release();
+    await manager.close();
+  });
+
+  it('waits for an in-progress open before choosing the live stable-path branch', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    const openSurface = session as unknown as {
+      readFile(options: { createIfMissing: boolean }): Promise<string>;
+    };
+    const originalReadFile = openSurface.readFile.bind(session);
+    let announceReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      announceReadStarted = resolve;
+    });
+    let releaseRead: (() => void) | undefined;
+    const readReleased = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    openSurface.readFile = async (options) => {
+      announceReadStarted?.();
+      await readReleased;
+      return originalReadFile(options);
+    };
+
+    const opening = session.open();
+    await readStarted;
+    let stableOperationSettled = false;
+    const stableOperation = manager.withStablePath('hello-world.md', async (liveSession) => {
+      expect(liveSession).toBe(session);
+      if (!liveSession) throw new Error('expected the opening session to become live');
+      return liveSession.applyContent('replacement\n');
+    }).then((content) => {
+      stableOperationSettled = true;
+      return content;
+    });
+    await Promise.resolve();
+    expect(stableOperationSettled).toBe(false);
+
+    releaseRead?.();
+    await opening;
+    await expect(stableOperation).resolves.toBe('replacement\n');
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('replacement\n');
+    await manager.close();
+  });
+
+  it('holds a retained unopened session behind an active cold stable-path operation', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const stableFilePath = join(root, 'retained-cold.md');
+    await mkdir(root, { recursive: true });
+    const manager = new DocumentSessionManager({ root });
+    const session = manager.getSession('retained-cold.md');
+    let announceStableOperation: (() => void) | undefined;
+    const stableOperationStarted = new Promise<void>((resolve) => {
+      announceStableOperation = resolve;
+    });
+    let releaseStableOperation: (() => void) | undefined;
+    const stableOperationReleased = new Promise<void>((resolve) => {
+      releaseStableOperation = resolve;
+    });
+    const stableWrite = manager.withStablePath('retained-cold.md', async (liveSession) => {
+      expect(liveSession).toBeUndefined();
+      announceStableOperation?.();
+      await stableOperationReleased;
+      await writeFile(stableFilePath, 'created while stable\n', 'utf8');
+    });
+    await stableOperationStarted;
+
+    let openSettled = false;
+    const opening = session.open({ createIfMissing: false }).then(() => {
+      openSettled = true;
+    });
+    await Promise.resolve();
+    expect(openSettled).toBe(false);
+
+    releaseStableOperation?.();
+    await stableWrite;
+    await opening;
+    await expect(session.getContent()).resolves.toBe('created while stable\n');
+    await manager.close();
+  });
+
+  it('keeps cold file moves and deletes reserved until their disk callbacks finish', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const sourcePath = join(root, 'cold-source.md');
+    const targetPath = join(root, 'cold-target.md');
+    const deletePath = join(root, 'cold-delete.md');
+    await mkdir(root, { recursive: true });
+    await writeFile(sourcePath, 'move content\n', 'utf8');
+    await writeFile(deletePath, 'delete content\n', 'utf8');
+    const manager = new DocumentSessionManager({ root });
+
+    let announceMoveStarted: (() => void) | undefined;
+    const moveStarted = new Promise<void>((resolve) => {
+      announceMoveStarted = resolve;
+    });
+    let releaseMove: (() => void) | undefined;
+    const moveReleased = new Promise<void>((resolve) => {
+      releaseMove = resolve;
+    });
+    const move = manager.moveSession('cold-source.md', 'cold-target.md', async () => {
+      announceMoveStarted?.();
+      await moveReleased;
+      await rename(sourcePath, targetPath);
+    });
+    await moveStarted;
+    let moveAttachSettled = false;
+    const movedLeasePromise = manager.attachClientSession('cold-target.md').then((lease) => {
+      moveAttachSettled = true;
+      return lease;
+    });
+    await Promise.resolve();
+    expect(moveAttachSettled).toBe(false);
+
+    releaseMove?.();
+    await expect(move).resolves.toBe(false);
+    const movedLease = await movedLeasePromise;
+    await expect(movedLease.session.open({ createIfMissing: false })).resolves.toBeUndefined();
+    await expect(movedLease.session.getContent()).resolves.toBe('move content\n');
+    movedLease.release();
+
+    let announceDeleteStarted: (() => void) | undefined;
+    const deleteStarted = new Promise<void>((resolve) => {
+      announceDeleteStarted = resolve;
+    });
+    let releaseDelete: (() => void) | undefined;
+    const deleteReleased = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const deletion = manager.deleteSession('cold-delete.md', async () => {
+      announceDeleteStarted?.();
+      await deleteReleased;
+      await rm(deletePath);
+    });
+    await deleteStarted;
+    let deleteAttachSettled = false;
+    const deletedLeasePromise = manager.attachClientSession('cold-delete.md').then((lease) => {
+      deleteAttachSettled = true;
+      return lease;
+    });
+    await Promise.resolve();
+    expect(deleteAttachSettled).toBe(false);
+
+    releaseDelete?.();
+    await expect(deletion).resolves.toBe(false);
+    const deletedLease = await deletedLeasePromise;
+    await expect(deletedLease.session.open({ createIfMissing: false }))
+      .rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    deletedLease.release();
+    await manager.close();
+  });
+
+  it('retries withSession acquisition when a move reserves the target in the same turn', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'async-target.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+
+    const acquiredSession = manager.withSession('async-target.md', async (active) => active);
+    const move = manager.moveSession('hello-world.md', 'async-target.md', async () => {
+      await rename(filePath, targetPath);
+    });
+
+    await expect(move).resolves.toBe(true);
+    await expect(acquiredSession).resolves.toBe(session);
+    await manager.close();
+  });
+
+  it('does not retain a ghost client count when a moved leased session is deleted', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'deleted-after-move.md');
+    const manager = new DocumentSessionManager({
+      root,
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 1
+    });
+    const originalLease = await manager.attachClientSession('hello-world.md');
+    await originalLease.session.open();
+
+    await expect(manager.moveSession('hello-world.md', 'deleted-after-move.md', async () => {
+      await rename(filePath, targetPath);
+    })).resolves.toBe(true);
+    await expect(manager.deleteSession('deleted-after-move.md', () => rm(targetPath))).resolves.toBe(true);
+    originalLease.release();
+
+    const replacementLease = await manager.attachClientSession('deleted-after-move.md');
+    await replacementLease.session.open();
+    replacementLease.release();
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for replacement session to close; count=${manager.getOpenSessionCount()}`
+    );
+    await manager.close();
+  });
+
+  it('drains an in-flight structural transition before closing and rejects new acquisitions', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'moved-before-close.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+
+    let announceMoveStarted: (() => void) | undefined;
+    const moveStarted = new Promise<void>((resolve) => {
+      announceMoveStarted = resolve;
+    });
+    let releaseDiskMove: (() => void) | undefined;
+    const diskMoveReleased = new Promise<void>((resolve) => {
+      releaseDiskMove = resolve;
+    });
+    const move = manager.moveSession('hello-world.md', 'moved-before-close.md', async () => {
+      announceMoveStarted?.();
+      await diskMoveReleased;
+      await rename(filePath, targetPath);
+    });
+    await moveStarted;
+
+    let closed = false;
+    const close = manager.close().then(() => {
+      closed = true;
+    });
+    await expect(manager.attachClientSession('moved-before-close.md')).rejects.toThrow('manager is closed');
+    await Promise.resolve();
+    expect(closed).toBe(false);
+
+    releaseDiskMove?.();
+    await expect(move).resolves.toBe(true);
+    await expect(close).resolves.toBeUndefined();
+    expect(manager.getOpenSessionCount()).toBe(0);
+    await expect(readFile(targetPath, 'utf8')).resolves.toBe('base\n');
+    expect(() => manager.getSession('moved-before-close.md')).toThrow('manager is closed');
+  });
+
+  it('restores detached sessions after a failed manager close and allows retry', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const retryPath = join(root, 'retry-close.md');
+    const slowPath = join(root, 'slow-close.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'base\n' });
+    const session = manager.getSession('retry-close.md');
+    const slowSession = manager.getSession('slow-close.md');
+    await session.open();
+    await slowSession.open();
+    const originalClose = session.close.bind(session);
+    const originalSlowClose = slowSession.close.bind(slowSession);
+    let closeAttempts = 0;
+    let announceSlowCloseStarted: (() => void) | undefined;
+    const slowCloseStarted = new Promise<void>((resolve) => {
+      announceSlowCloseStarted = resolve;
+    });
+    let releaseSlowClose: (() => void) | undefined;
+    const slowCloseReleased = new Promise<void>((resolve) => {
+      releaseSlowClose = resolve;
+    });
+    session.close = async () => {
+      closeAttempts += 1;
+      await originalClose();
+      if (closeAttempts === 1) {
+        throw new Error('transient close failure');
+      }
+    };
+    slowSession.close = async () => {
+      announceSlowCloseStarted?.();
+      await slowCloseReleased;
+      await originalSlowClose();
+    };
+
+    let closeSettled = false;
+    const close = manager.close().then(
+      () => {
+        closeSettled = true;
+      },
+      (error: unknown) => {
+        closeSettled = true;
+        throw error;
+      }
+    );
+    await slowCloseStarted;
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    releaseSlowClose?.();
+    await expect(close).rejects.toThrow('transient close failure');
+    expect(manager.getOpenSession('retry-close.md')).toBe(session);
+    expect(manager.getOpenSession('slow-close.md')).toBe(slowSession);
+    session.ydoc.getText('markdown').insert(session.ydoc.getText('markdown').length, 'after retry\n');
+    slowSession.ydoc.getText('markdown').insert(slowSession.ydoc.getText('markdown').length, 'also recovered\n');
+    await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 2 });
+    await expect(readFile(retryPath, 'utf8')).resolves.toBe('base\nafter retry\n');
+    await expect(readFile(slowPath, 'utf8')).resolves.toBe('base\nalso recovered\n');
+
+    await expect(manager.close()).resolves.toBeUndefined();
+    expect(closeAttempts).toBe(2);
+  });
+
   it('rekeys every live session under a moved folder subtree', async () => {
     const manager = new DocumentSessionManager({ root: join(kb1Home, 'demo-vault'), defaultContent: '' });
     const first = manager.getSession('folder/a.md');
@@ -632,7 +1237,8 @@ describe('OneFileDocumentSession', () => {
     await expect(manager.moveSession('missing.md', 'renamed.md', async () => {
       moved = true;
     })).resolves.toBe(false);
-    expect(moved).toBe(false);
+    expect(moved).toBe(true);
+    moved = false;
     await expect(manager.moveSessionSubtree('folder', 'moved/folder', async () => {
       moved = true;
     })).resolves.toEqual([]);
@@ -641,7 +1247,8 @@ describe('OneFileDocumentSession', () => {
     await expect(manager.deleteSession('missing.md', async () => {
       deleted = true;
     })).resolves.toBe(false);
-    expect(deleted).toBe(false);
+    expect(deleted).toBe(true);
+    deleted = false;
     await expect(manager.deleteSessionSubtree('folder', async () => {
       deleted = true;
     })).resolves.toEqual([]);
@@ -655,11 +1262,11 @@ describe('OneFileDocumentSession', () => {
       defaultContent: 'base\n',
       idleSessionGraceMs: 80
     });
-    const first = manager.attachClientSession('idle.md');
+    const first = await manager.attachClientSession('idle.md');
     await first.session.open();
     first.release();
 
-    const second = manager.attachClientSession('idle.md');
+    const second = await manager.attachClientSession('idle.md');
     expect(second.session).toBe(first.session);
     second.release();
 
@@ -674,7 +1281,7 @@ describe('OneFileDocumentSession', () => {
       root: join(kb1Home, 'demo-vault'),
       idleSessionGraceMs: 80
     });
-    const lease = manager.attachClientSession('typo/missing.md');
+    const lease = await manager.attachClientSession('typo/missing.md');
 
     await expect(lease.session.open({ createIfMissing: false })).rejects.toMatchObject({
       failure: {
@@ -699,8 +1306,8 @@ describe('OneFileDocumentSession', () => {
       defaultContent: '',
       idleSessionGraceMs: 30
     });
-    const first = manager.attachClientSession('leased.md');
-    const second = manager.attachClientSession('leased.md');
+    const first = await manager.attachClientSession('leased.md');
+    const second = await manager.attachClientSession('leased.md');
     await first.session.open();
 
     try {
@@ -724,7 +1331,7 @@ describe('OneFileDocumentSession', () => {
       defaultContent: '',
       idleSessionGraceMs: 1
     });
-    const lease = manager.attachClientSession('flush-before-close.md');
+    const lease = await manager.attachClientSession('flush-before-close.md');
     await lease.session.open();
     lease.session.ydoc.getText('markdown').insert(0, 'pending before close\n');
     lease.release();
@@ -743,7 +1350,7 @@ describe('OneFileDocumentSession', () => {
       defaultContent: 'base\n',
       idleSessionGraceMs: 20
     });
-    const lease = manager.attachClientSession('readonly.md');
+    const lease = await manager.attachClientSession('readonly.md');
     await lease.session.open();
     const vaultDir = join(kb1Home, 'demo-vault');
 
@@ -824,7 +1431,7 @@ describe('OneFileDocumentSession', () => {
       defaultContent: 'client\n',
       idleSessionGraceMs: 10
     });
-    const lease = manager.attachClientSession('client-held.md');
+    const lease = await manager.attachClientSession('client-held.md');
     await lease.session.open();
 
     await manager.withSession('client-held.md', async (session) => {
@@ -840,7 +1447,7 @@ describe('OneFileDocumentSession', () => {
     await manager.close();
   });
 
-  it('hydrates a fresh session when a client attaches while idle close is in flight', async () => {
+  it('keeps the path reserved while idle close drains before hydrating a fresh session', async () => {
     const manager = new DocumentSessionManager({
       root: join(kb1Home, 'demo-vault'),
       defaultContent: 'base\n',
@@ -868,13 +1475,20 @@ describe('OneFileDocumentSession', () => {
     });
     await closeStartedPromise;
 
-    const attachedDuringClose = manager.attachClientSession('closing.md');
+    let attachSettled = false;
+    const attachedDuringClosePromise = manager.attachClientSession('closing.md').then((lease) => {
+      attachSettled = true;
+      return lease;
+    });
+    await Promise.resolve();
+    expect(attachSettled).toBe(false);
+    allowClose();
+    const attachedDuringClose = await attachedDuringClosePromise;
     try {
       expect(attachedDuringClose.session).not.toBe(original);
       await attachedDuringClose.session.open();
       expect(manager.getOpenSession('closing.md')).toBe(attachedDuringClose.session);
     } finally {
-      allowClose();
       attachedDuringClose.release();
       await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
         `Timed out waiting for fresh attached session to close; count=${manager.getOpenSessionCount()}`
@@ -970,6 +1584,68 @@ describe('OneFileDocumentSession', () => {
     await manager.close();
   });
 
+  it('keeps a rekeyed session open until its active manager operation finishes', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const targetPath = join(root, 'active-operation-moved.md');
+    const manager = new DocumentSessionManager({
+      root,
+      defaultContent: 'base\n',
+      idleSessionGraceMs: 1
+    });
+    const session = manager.getSession('hello-world.md');
+    await session.open();
+    let announceOperationStarted: (() => void) | undefined;
+    const operationStarted = new Promise<void>((resolve) => {
+      announceOperationStarted = resolve;
+    });
+    let releaseOperation: (() => void) | undefined;
+    const operationReleased = new Promise<void>((resolve) => {
+      releaseOperation = resolve;
+    });
+    const operation = manager.withSession('hello-world.md', async (active) => {
+      announceOperationStarted?.();
+      await operationReleased;
+      await active.applyContent('late operation content\n');
+    });
+    await operationStarted;
+
+    await expect(manager.moveSession('hello-world.md', 'active-operation-moved.md', async () => {
+      await rename(filePath, targetPath);
+    })).resolves.toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(manager.getOpenSession('active-operation-moved.md')).toBe(session);
+
+    releaseOperation?.();
+    await operation;
+    await waitUntil(() => manager.getOpenSessionCount() === 0, () =>
+      `Timed out waiting for completed operation session to close; count=${manager.getOpenSessionCount()}`
+    );
+    await expect(readFile(targetPath, 'utf8')).resolves.toBe('late operation content\n');
+    await manager.close();
+  });
+
+  it('rejects a move whose destination is owned by another registered session', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const manager = new DocumentSessionManager({ root, defaultContent: '' });
+    const source = manager.getSession('hello-world.md');
+    await source.open();
+    const originalDiskContent = await readFile(filePath, 'utf8');
+    const destinationLease = await manager.attachClientSession('occupied.md');
+    const moveOnDisk = vi.fn(async () => {
+      await rename(filePath, join(root, 'occupied.md'));
+    });
+
+    await expect(manager.moveSession('hello-world.md', 'occupied.md', moveOnDisk))
+      .rejects.toThrow('destination is already active');
+    expect(moveOnDisk).not.toHaveBeenCalled();
+    expect(manager.getSession('hello-world.md')).toBe(source);
+    expect(manager.getSession('occupied.md')).toBe(destinationLease.session);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(originalDiskContent);
+
+    destinationLease.release();
+    await manager.close();
+  });
+
   it('clears pending idle timers when the manager closes', async () => {
     const manager = new DocumentSessionManager({
       root: join(kb1Home, 'demo-vault'),
@@ -1005,6 +1681,82 @@ describe('OneFileDocumentSession', () => {
     expect(deleteCalls).toBe(1);
     expect(manager.getOpenSession('folder/a.md')).toBeUndefined();
     expect(manager.getOpenSession('folder/deep/b.md')).toBeUndefined();
+    await manager.close();
+  });
+
+  it('rejects a folder move when its destination subtree contains another session', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const manager = new DocumentSessionManager({ root, defaultContent: '' });
+    const source = manager.getSession('folder/a.md');
+    await source.open();
+    const destinationLease = await manager.attachClientSession('moved/folder/occupied.md');
+    const moveOnDisk = vi.fn(async () => {
+      await rename(join(root, 'folder'), join(root, 'moved', 'folder'));
+    });
+
+    await expect(manager.moveSessionSubtree('folder', 'moved/folder', moveOnDisk))
+      .rejects.toThrow('destination is already active');
+    expect(moveOnDisk).not.toHaveBeenCalled();
+    expect(manager.getSession('folder/a.md')).toBe(source);
+    expect(manager.getSession('moved/folder/occupied.md')).toBe(destinationLease.session);
+
+    destinationLease.release();
+    await manager.close();
+  });
+
+  it('fences content-bearing operations on a retained deleted session', async () => {
+    const root = join(kb1Home, 'demo-vault');
+    const originalPath = join(root, 'retired.md');
+    const movedPath = join(root, 'must-not-exist.md');
+    const manager = new DocumentSessionManager({ root, defaultContent: 'retired content\n' });
+    const session = manager.getSession('retired.md');
+    await session.open();
+    const baseline = (await session.readWithBaseline()).baseline;
+
+    await expect(manager.deleteSession('retired.md', () => rm(originalPath))).resolves.toBe(true);
+    await writeFile(originalPath, 'replacement content\n', 'utf8');
+
+    const baselineEdit = vi.fn(() => ({ ok: true as const, content: 'must not escape\n' }));
+    const contentEdit = vi.fn(() => 'must not escape\n');
+    const moveOnDisk = vi.fn(async () => undefined);
+    const deleteOnDisk = vi.fn(async () => undefined);
+
+    expect(() => session.ydoc).toThrow(DocumentSessionNotFoundError);
+    expect(session.isOpened()).toBe(false);
+    expect(session.hasNonEmptyMaterializedContent()).toBe(false);
+    expect(session.getActivePersistFailureEvent()).toBeUndefined();
+    expect(session.hasActivePersistFailure()).toBe(false);
+    expect(session.hasUnsettledPersist()).toBe(false);
+    await expect(session.open()).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.getContent()).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.readWithBaseline()).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.reset('must not escape\n')).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.applyContent('must not escape\n')).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.applyBaselineEdit(baseline, baselineEdit)).rejects.toBeInstanceOf(
+      DocumentSessionNotFoundError,
+    );
+    await expect(session.applyContentEdit(contentEdit)).rejects.toBeInstanceOf(
+      DocumentSessionNotFoundError,
+    );
+    await expect(session.moveTo(movedPath, 'must-not-exist.md', moveOnDisk)).rejects.toBeInstanceOf(
+      DocumentSessionNotFoundError,
+    );
+    await expect(session.prepareForPathTransition()).rejects.toBeInstanceOf(
+      DocumentSessionNotFoundError,
+    );
+    await expect(
+      session.completeMoveAfterTransition(movedPath, 'must-not-exist.md', Promise.resolve()),
+    ).rejects.toBeInstanceOf(DocumentSessionNotFoundError);
+    await expect(session.flush()).resolves.toBeUndefined();
+    await expect(session.deleteWith(deleteOnDisk)).resolves.toBeUndefined();
+    await expect(session.close()).resolves.toBeUndefined();
+
+    expect(baselineEdit).not.toHaveBeenCalled();
+    expect(contentEdit).not.toHaveBeenCalled();
+    expect(moveOnDisk).not.toHaveBeenCalled();
+    expect(deleteOnDisk).not.toHaveBeenCalled();
+    await expect(readFile(originalPath, 'utf8')).resolves.toBe('replacement content\n');
+    await expect(readFile(movedPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await manager.close();
   });
 });

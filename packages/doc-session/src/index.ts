@@ -7,6 +7,9 @@ export {
   PersistFailedError,
   type DocumentSessionFailure,
   type DocumentSessionEventHandler,
+  type DocumentSessionTimingEvent,
+  type DocumentSessionTimingHandler,
+  type DocumentSessionTimingStage,
   type DocumentSessionMutationOptions,
   type DocumentSessionWarning,
   type OneFileDocumentSessionOptions,
@@ -18,6 +21,7 @@ export {
 export {
   DEFAULT_IDLE_SESSION_GRACE_MS,
   DocumentSessionManager,
+  DocumentSessionPathConflictError,
   type ClientDocumentSession,
   type FlushDocumentSessionsResult,
   type DocumentSessionManagerOptions
@@ -26,6 +30,8 @@ export {
   bindYjsWebSocket,
   type BoundYjsWebSocket,
   type YjsWebSocketBindingOptions,
+  type YjsWebSocketTimingEvent,
+  type YjsWebSocketTimingHandler,
   type YjsWebSocketLike
 } from './websocket.js';
 export {

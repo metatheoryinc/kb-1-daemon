@@ -417,6 +417,16 @@
     status = 'closed';
   }
 
+  function markDocumentRetired(path = documentPath): void {
+    if (!path) return;
+    notFoundPath = null;
+    docDeleted = true;
+    persistFailureActive = false;
+    externalChangeVisible = false;
+    externalMergeVisible = false;
+    status = 'closed';
+  }
+
   // The node the URL currently points at, resolved against the live
   // tree. Mirrors KB-1's selector resolution: the tree decides whether
   // a path is a folder or a note, and the route renders the matching
@@ -777,7 +787,7 @@
     }
 
     if (event.kind === 'doc-deleted') {
-      markDocumentNotFound(event.path);
+      markDocumentRetired(event.path);
       void refreshTree();
       return;
     }
@@ -846,6 +856,10 @@
       onError: (caught) => {
         if (generation !== providerGeneration) return;
         if (isLocalDocumentProviderOpenError(caught)) {
+          if (docDeleted && path === documentPath) {
+            error = null;
+            return;
+          }
           notFoundPath = path;
           providerSynced = false;
           error = null;

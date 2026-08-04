@@ -1,4 +1,5 @@
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,8 +9,17 @@ import { WebSocket } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-import { DOCUMENT_SESSION_FAILURE_CLOSE_CODE } from '@kb-1/doc-session';
-import { isDaemonCliEntrypoint, relayEventsForVaultChange, startDaemon } from './main.js';
+import {
+  DOCUMENT_SESSION_FAILURE_CLOSE_CODE,
+  type ClientDocumentSession
+} from '@kb-1/doc-session';
+import {
+  bindDocumentWebSocketAfterAttach,
+  isDaemonCliEntrypoint,
+  relayEventsForVaultChange,
+  startDaemon,
+  type AwaitedDocumentWebSocket
+} from './main.js';
 import * as statusModule from './status.js';
 
 describe('daemon startup', () => {
@@ -42,6 +52,36 @@ describe('daemon startup', () => {
     await expect(access(join(kb1Home, 'daemon', 'status.json'))).rejects.toBeTruthy();
 
     await close(blocker);
+  });
+
+  it('releases a delayed document lease when its socket closes before attachment', async () => {
+    let resolveLease: ((lease: ClientDocumentSession) => void) | undefined;
+    const leasePromise = new Promise<ClientDocumentSession>((resolve) => {
+      resolveLease = resolve;
+    });
+    const release = vi.fn();
+    const socketEvents = new EventEmitter();
+    const socket = Object.assign(socketEvents, {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    }) as unknown as AwaitedDocumentWebSocket;
+    const bind = vi.fn(async () => ({ closed: Promise.resolve() }));
+
+    const lifecycle = bindDocumentWebSocketAfterAttach(
+      () => leasePromise,
+      socket,
+      {},
+      () => {},
+      bind as never
+    );
+    socketEvents.emit('close');
+    (socket as { readyState: number }).readyState = 3;
+    resolveLease?.({ session: {} as ClientDocumentSession['session'], release });
+
+    await expect(lifecycle).resolves.toBeUndefined();
+    expect(bind).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it('ignores KB2_* env vars during startup', async () => {
@@ -787,6 +827,11 @@ describe('daemon vault management API', () => {
   });
 
   it('edits a live document over the scoped Yjs WebSocket and persists to the scoped vault', async () => {
+    const traceId = '123e4567-e89b-42d3-a456-426614174000';
+    const timingLogs: unknown[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((label, fields) => {
+      if (label === '[document timing]') timingLogs.push(fields);
+    });
     await fetch(`${base()}/api/vaults`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -801,12 +846,35 @@ describe('daemon vault management API', () => {
     // A scoped Yjs socket opens against the addressed vault's document manager.
     // The daemon's own shutdown (in afterEach) drains and closes it in order, so
     // the document-session state is flushed before the throwaway home is removed.
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/ws-vault/files/doc.md/yjs`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/vaults/ws-vault/files/doc.md/yjs`, {
+      headers: { 'x-kb1-document-trace-id': traceId }
+    });
     const opened = new Promise<void>((resolveOpen, rejectOpen) => {
       socket.once('open', () => resolveOpen());
       socket.once('error', rejectOpen);
     });
     await opened;
+    await vi.waitUntil(
+      () => timingLogs.some((entry) =>
+        (entry as { stage?: unknown }).stage === 'initial_state_vector.observed'
+      ),
+      { timeout: 1_000 }
+    );
+
+    expect(timingLogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'websocket.accepted' }),
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'document_session.attached' }),
+      expect.objectContaining({ component: 'daemon', traceId, stage: 'markdown.read' }),
+      expect.objectContaining({
+        component: 'daemon',
+        traceId,
+        stage: 'initial_state_vector.observed',
+        documentChars: expect.any(Number),
+        stateVectorBytes: expect.any(Number),
+        stateVectorFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+      })
+    ]));
+    expect(JSON.stringify(timingLogs)).not.toContain('doc.md');
 
     // An unknown-vault scoped socket is refused: the upgrade is destroyed, so the
     // client sees an error/close rather than an open.
@@ -817,6 +885,7 @@ describe('daemon vault management API', () => {
       badSocket.once('close', () => resolveBad('refused'));
     });
     expect(badResult).toBe('refused');
+    logSpy.mockRestore();
   });
 });
 
