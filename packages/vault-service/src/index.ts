@@ -160,10 +160,19 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     invalidateTreeReads();
     return result;
   };
+  const treeWatchKnownPaths = new Set<string>();
   const emitChange = (event: VaultChangeEvent) => {
     invalidateTreeReads();
-    if (event.kind !== 'external_change_detected') {
-      treeWatchSnapshot = undefined;
+    // Known-path reconciliation only has meaning while a tree watcher can
+    // consume it. Document sessions outlive relay subscriptions, so retaining
+    // their paths with no handlers would grow this set until the next connect.
+    if (
+      event.kind !== 'external_change_detected' &&
+      eventHandlers.size > 0
+    ) {
+      for (const path of [event.path, event.fromPath, event.toPath]) {
+        if (path !== undefined) treeWatchKnownPaths.add(path);
+      }
     }
     for (const handler of eventHandlers) {
       try {
@@ -175,7 +184,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   };
   let unsubscribeAudit: (() => void) | undefined;
   let treeWatchTimer: ReturnType<typeof setInterval> | undefined;
-  let treeWatchSnapshot: string | undefined;
+  let treeWatchSnapshot: Map<string, string> | undefined;
   let treeWatchInFlight = false;
   type TreeReadResult = Awaited<ReturnType<typeof listVaultTree>>;
   const treeReadInFlight = new Map<
@@ -212,6 +221,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     if (treeWatchInFlight) return;
 
     treeWatchInFlight = true;
+    const knownPathsAtPollStart = new Set(treeWatchKnownPaths);
     try {
       const result = await listVaultTree(ctx(), {
         depth: Number.MAX_SAFE_INTEGER,
@@ -224,9 +234,31 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         return;
       }
 
-      if (treeWatchSnapshot === nextSnapshot) return;
+      const changedPaths = changedTreeSnapshotPaths(
+        treeWatchSnapshot,
+        nextSnapshot,
+      );
+      if (changedPaths.length === 0) return;
 
       treeWatchSnapshot = nextSnapshot;
+      const unknownPaths = changedPaths.filter(
+        (path) => !knownPathsAtPollStart.has(path),
+      );
+      if (unknownPaths.length === 0) {
+        // Never silently absorb a covered difference: an external overwrite
+        // can overlap the same interval as the known write. Exact-path events
+        // keep reconciliation targeted without turning every save into a
+        // vault-wide invalidation.
+        for (const path of changedPaths) {
+          emitChange({
+            kind: 'external_change_detected',
+            path,
+            actor: { kind: 'system' },
+            ts: new Date().toISOString()
+          });
+        }
+        return;
+      }
       emitChange({
         kind: 'external_change_detected',
         path: '',
@@ -236,6 +268,9 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     } catch (error) {
       console.warn('KB-1 vault tree watch failed.', error);
     } finally {
+      for (const path of knownPathsAtPollStart) {
+        treeWatchKnownPaths.delete(path);
+      }
       treeWatchInFlight = false;
     }
   };
@@ -243,6 +278,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     if (treeWatchTimer) return;
 
     treeWatchSnapshot = undefined;
+    treeWatchKnownPaths.clear();
     void pollTreeWatch();
     treeWatchTimer = setInterval(() => {
       void pollTreeWatch();
@@ -254,6 +290,7 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     clearInterval(treeWatchTimer);
     treeWatchTimer = undefined;
     treeWatchSnapshot = undefined;
+    treeWatchKnownPaths.clear();
     treeWatchInFlight = false;
     invalidateTreeReads();
   };
@@ -829,16 +866,32 @@ function auditChangeEventKind(
   return assertNever(audit.operation);
 }
 
-function treeSnapshot(entries: VaultEntry[]): string {
-  return JSON.stringify(
-    entries
-      .map((entry) => ({
-        path: entry.path,
+function treeSnapshot(entries: VaultEntry[]): Map<string, string> {
+  return new Map(
+    entries.map((entry) => [
+      entry.path,
+      JSON.stringify({
         kind: entry.kind,
+        ...(entry.kind === 'file'
+          ? {
+              size: entry.size,
+              mtimeMs: entry.mtimeMs,
+              ctimeMs: entry.watchCtimeMs,
+              ino: entry.watchIno,
+            }
+          : {}),
         ...(entry.metadata !== undefined ? { metadata: entry.metadata } : {})
-      }))
-      .sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind))
+      })
+    ])
   );
+}
+
+function changedTreeSnapshotPaths(
+  previous: Map<string, string>,
+  next: Map<string, string>,
+): string[] {
+  const paths = new Set([...previous.keys(), ...next.keys()]);
+  return [...paths].filter((path) => previous.get(path) !== next.get(path));
 }
 
 /* v8 ignore next -- Called only by exhaustive guards when a future union member is missing above. */

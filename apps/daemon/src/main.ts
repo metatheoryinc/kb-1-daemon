@@ -440,26 +440,26 @@ export function relayEventsForVaultChange(event: VaultRegistryChangeEvent): Arra
   topic: string;
   resource: Record<string, string>;
 }> {
+  const relayEvents: Array<{
+    topic: string;
+    resource: Record<string, string>;
+  }> = [];
   if (isTreeDirtyVaultEvent(event)) {
-    return [
-      {
-        topic: VAULT_TREE_CHANGED_TOPIC,
-        resource: { vaultSlug: event.vaultSlug, cause: event.event.kind }
-      }
-    ];
+    relayEvents.push({
+      topic: VAULT_TREE_CHANGED_TOPIC,
+      resource: { vaultSlug: event.vaultSlug, cause: event.event.kind }
+    });
   }
   if (
     event.event.kind === 'content_persisted'
     || (event.event.kind === 'external_change_detected' && event.event.path !== '')
   ) {
-    return [
-      {
-        topic: VAULT_CONTENT_CHANGED_TOPIC,
-        resource: { vaultSlug: event.vaultSlug, path: event.event.path }
-      }
-    ];
+    relayEvents.push({
+      topic: VAULT_CONTENT_CHANGED_TOPIC,
+      resource: { vaultSlug: event.vaultSlug, path: event.event.path }
+    });
   }
-  return [];
+  return relayEvents;
 }
 
 const daemonRelayLogger: TunnelClientLogger = {

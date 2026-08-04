@@ -31,6 +31,7 @@ import {
 } from '@kb-1/tunnel-protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { randomUUID } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { WebSocket } from 'ws';
 
@@ -46,6 +47,7 @@ export type TunnelClientConfig = {
   token: string;
   daemonVersion?: string;
   daemonBuild?: string;
+  daemonInstanceId?: string;
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
@@ -130,17 +132,30 @@ export class TunnelClient {
   private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
   private readonly pendingRelayRpcRequests = new Map<string, AbortController>();
   private stopped = true;
+  private hasStarted = false;
   private reconnectAttempt = 0;
+  private readonly daemonInstanceId: string;
+  private vaultMutationEpoch = 0;
 
   constructor(private readonly config: TunnelClientConfig) {
     this.logger = config.logger ?? consoleLogger;
     this.fetchImpl = config.fetch ?? fetch;
     this.random = config.random ?? Math.random;
+    this.daemonInstanceId = config.daemonInstanceId ?? randomUUID();
   }
 
   start(): void {
     if (!this.stopped) return;
 
+    // A deliberate stop releases the vault-event subscription in the daemon.
+    // Fence any cache retained across that unobserved interval before the
+    // client registers again. Transport-level reconnects do not call start(),
+    // so ordinary network churn can still retain cache when no mutation occurs.
+    if (this.hasStarted) {
+      this.vaultMutationEpoch += 1;
+    } else {
+      this.hasStarted = true;
+    }
     this.stopped = false;
     this.reconnectAttempt = 0;
     this.connectControl();
@@ -168,6 +183,17 @@ export class TunnelClient {
   }
 
   sendRelayEvent(event: TunnelRelayEventInput): boolean {
+    const isVaultMutation =
+      event.topic === 'vault.tree.changed' || event.topic === 'vault.content.changed';
+    if (isVaultMutation) {
+      this.vaultMutationEpoch += 1;
+    }
+    const resource = isVaultMutation
+      ? {
+          ...event.resource,
+          vaultMutationEpoch: String(this.vaultMutationEpoch),
+        }
+      : event.resource;
     const control = this.control;
     if (!control || control.readyState !== WebSocket.OPEN) {
       this.logger.log('debug', 'relay event skipped because control is not open', {
@@ -185,7 +211,7 @@ export class TunnelClient {
           topic: event.topic,
           ...(event.id !== undefined ? { id: event.id } : {}),
           ...(event.payload !== undefined ? { payload: { encoding: 'json', value: event.payload } } : {}),
-          ...(event.resource !== undefined ? { resource: event.resource } : {}),
+          ...(resource !== undefined ? { resource } : {}),
         },
       }));
       return true;
@@ -216,9 +242,12 @@ export class TunnelClient {
         token: this.config.token,
         ...(this.config.daemonVersion ? { daemonVersion: this.config.daemonVersion } : {}),
         ...(this.config.daemonBuild ? { daemonBuild: this.config.daemonBuild } : {}),
+        daemonInstanceId: this.daemonInstanceId,
+        vaultMutationEpoch: this.vaultMutationEpoch,
         features: [
           TUNNEL_FEATURES.RELAY_FRAMES_V1,
           TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
+          TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
           TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
         ],
       }));

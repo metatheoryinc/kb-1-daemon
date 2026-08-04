@@ -7,6 +7,7 @@ import {
   rename,
   rm,
   stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -1083,6 +1084,117 @@ describe("vault service failure mapping", () => {
         ),
       () =>
         `Timed out waiting for external tree event; events=${JSON.stringify(events)}`,
+    );
+    unsubscribe();
+  });
+
+  it("emits a root-level external event when a cold file is overwritten in place", async () => {
+    const photoPath = join(root, "attachments", "photo.png");
+    await writeFileWithParents(photoPath, "before");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const events: VaultChangeEvent[] = [];
+    const unsubscribe = service.onEvent((event) => events.push(event));
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const before = await stat(photoPath);
+    await writeFile(photoPath, "after!", "utf8");
+    await utimes(photoPath, before.atime, before.mtime);
+
+    await waitUntil(
+      () =>
+        events.some(
+          (event) =>
+            event.kind === "external_change_detected" && event.path === "",
+        ),
+      () =>
+        `Timed out waiting for overwritten cold file event; events=${JSON.stringify(events)}`,
+    );
+    unsubscribe();
+  });
+
+  it("does not let an unrelated known mutation hide a cold-file overwrite", async () => {
+    await writeFileWithParents(join(root, "attachments", "photo.png"), "before");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const events: VaultChangeEvent[] = [];
+    const unsubscribe = service.onEvent((event) => events.push(event));
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await writeFile(join(root, "attachments", "photo.png"), "after-content", "utf8");
+    await service.createFolder({
+      path: "known-folder",
+      actor: { kind: "user" },
+    });
+
+    await waitUntil(
+      () =>
+        events.some(
+          (event) =>
+            event.kind === "external_change_detected" && event.path === "",
+        ),
+      () =>
+        `Timed out waiting for cold overwrite after known mutation; events=${JSON.stringify(events)}`,
+    );
+    unsubscribe();
+  });
+
+  it("does not absorb an external overwrite of the same known path", async () => {
+    const photoPath = join(root, "attachments", "photo.png");
+    await writeFileWithParents(photoPath, "before");
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const events: VaultChangeEvent[] = [];
+    const unsubscribe = service.onEvent((event) => events.push(event));
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await service.writeRawFile({
+      path: "attachments/photo.png",
+      bytes: new TextEncoder().encode("known!"),
+      overwrite: true,
+      actor: { kind: "user" },
+    });
+    await writeFile(photoPath, "outside", "utf8");
+
+    await waitUntil(
+      () =>
+        events.some(
+          (event) =>
+            event.kind === "external_change_detected" &&
+            event.path === "attachments/photo.png",
+        ),
+      () =>
+        `Timed out waiting for same-path external overwrite; events=${JSON.stringify(events)}`,
+    );
+    unsubscribe();
+  });
+
+  it("reconciles a known tree mutation without a broad external event", async () => {
+    const service = createVaultService({
+      vaultRoot: root,
+      documentSessions: sessions,
+    });
+    const events: VaultChangeEvent[] = [];
+    const unsubscribe = service.onEvent((event) => events.push(event));
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await service.createFolder({
+      path: "known-folder",
+      actor: { kind: "user" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        kind: "external_change_detected",
+        path: "",
+      }),
     );
     unsubscribe();
   });

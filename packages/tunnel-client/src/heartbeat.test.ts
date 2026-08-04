@@ -73,6 +73,7 @@ describe('TunnelClient control heartbeat', () => {
       relayUrl: new URL('http://relay.example/t/dev1'),
       daemonUrl: new URL('http://127.0.0.1:9891'),
       token: 'token-1',
+      daemonInstanceId: 'instance-1',
       logger,
       random: () => 0,
     });
@@ -88,9 +89,12 @@ describe('TunnelClient control heartbeat', () => {
       type: 'control.hello',
       version: 2,
       token: 'token-1',
+      daemonInstanceId: 'instance-1',
+      vaultMutationEpoch: 0,
       features: [
         TUNNEL_FEATURES.RELAY_FRAMES_V1,
         TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
+        TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
       ],
     }));
@@ -188,6 +192,7 @@ describe('TunnelClient control heartbeat', () => {
       token: 'token-1',
       daemonVersion: '0.1.0',
       daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+      daemonInstanceId: 'instance-1',
       logger: { log: vi.fn() },
     });
 
@@ -201,12 +206,89 @@ describe('TunnelClient control heartbeat', () => {
       token: 'token-1',
       daemonVersion: '0.1.0',
       daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+      daemonInstanceId: 'instance-1',
+      vaultMutationEpoch: 0,
       features: [
         TUNNEL_FEATURES.RELAY_FRAMES_V1,
         TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
+        TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
       ],
     }));
+  });
+
+  it('carries vault mutations across a disconnected control as a new epoch', async () => {
+    const { TunnelClient } = await import('./index.js');
+    const client = new TunnelClient({
+      relayUrl: new URL('http://relay.example/t/dev1'),
+      daemonUrl: new URL('http://127.0.0.1:9891'),
+      token: 'token-1',
+      daemonInstanceId: 'instance-1',
+      logger: { log: vi.fn() },
+      random: () => 0,
+    });
+
+    client.start();
+    const firstControl = MockWebSocket.instances[0];
+    firstControl.open();
+    firstControl.close(1006, 'network gap');
+
+    expect(client.sendRelayEvent({
+      topic: 'vault.tree.changed',
+      resource: { vaultSlug: 'demo' },
+    })).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(250);
+    const secondControl = MockWebSocket.instances[1];
+    secondControl.open();
+    expect(JSON.parse(sentText(secondControl, 0))).toMatchObject({
+      type: 'control.hello',
+      daemonInstanceId: 'instance-1',
+      vaultMutationEpoch: 1,
+      features: expect.arrayContaining([
+        TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
+      ]),
+    });
+  });
+
+  it('attaches the mutation epoch to delivered events for reconnect acknowledgement', async () => {
+    const { TunnelClient } = await import('./index.js');
+    const client = new TunnelClient({
+      relayUrl: new URL('http://relay.example/t/dev1'),
+      daemonUrl: new URL('http://127.0.0.1:9891'),
+      token: 'token-1',
+      daemonInstanceId: 'instance-1',
+      logger: { log: vi.fn() },
+      random: () => 0,
+    });
+
+    client.start();
+    const firstControl = MockWebSocket.instances[0];
+    firstControl.open();
+    expect(client.sendRelayEvent({
+      topic: 'vault.content.changed',
+      resource: { vaultSlug: 'demo', path: 'attachments/photo.png' },
+    })).toBe(true);
+    expect(JSON.parse(sentText(firstControl, 1))).toMatchObject({
+      type: 'relay.frame',
+      frame: {
+        topic: 'vault.content.changed',
+        resource: {
+          vaultSlug: 'demo',
+          path: 'attachments/photo.png',
+          vaultMutationEpoch: '1',
+        },
+      },
+    });
+
+    firstControl.close(1006, 'network gap');
+    await vi.advanceTimersByTimeAsync(250);
+    const secondControl = MockWebSocket.instances[1];
+    secondControl.open();
+    expect(JSON.parse(sentText(secondControl, 0))).toMatchObject({
+      type: 'control.hello',
+      vaultMutationEpoch: 1,
+    });
   });
 
   it('keeps connect and disconnect idempotent for lifecycle callers', async () => {
@@ -249,5 +331,13 @@ describe('TunnelClient control heartbeat', () => {
     });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(MockWebSocket.instances).toHaveLength(1);
+
+    client.start();
+    const restartedControl = MockWebSocket.instances[1];
+    restartedControl.open();
+    expect(JSON.parse(sentText(restartedControl, 0))).toMatchObject({
+      type: 'control.hello',
+      vaultMutationEpoch: 1,
+    });
   });
 });

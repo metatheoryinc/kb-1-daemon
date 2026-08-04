@@ -48,9 +48,12 @@ it("round-trips control hello feature advertisement", () => {
     token: "test-token",
     daemonVersion: "0.1.0",
     daemonBuild: "registry.example/kb1d@sha256:abc123",
+    daemonInstanceId: "instance-1",
+    vaultMutationEpoch: 7,
     features: [
       TUNNEL_FEATURES.RELAY_FRAMES_V1,
       TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
+      TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
       TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1
     ]
   } as const;

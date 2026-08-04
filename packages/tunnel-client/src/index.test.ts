@@ -193,7 +193,10 @@ describe('TunnelClient typed relay RPC', () => {
         type: 'event',
         version: RELAY_TRANSPORT_PROTOCOL_VERSION,
         topic: 'vault.tree.changed',
-        resource: { vaultSlug: 'demo-vault' },
+        resource: {
+          vaultSlug: 'demo-vault',
+          vaultMutationEpoch: '1',
+        },
       },
     });
   });
