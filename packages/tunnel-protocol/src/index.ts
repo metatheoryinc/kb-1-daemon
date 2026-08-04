@@ -23,15 +23,11 @@ export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
 
 export const TUNNEL_FEATURES = {
   RELAY_FRAMES_V1: "relay.frame.v1",
-  WEBSOCKET_STREAMS_V1: "relay.websocket-streams.v1",
-  MCP_TOOL_CALL_BOUNDED_RESULTS_V1: "relay.mcp-tool-call.bounded-results.v1"
+  MCP_TOOL_CALL_BOUNDED_RESULTS_V1:
+    "relay.mcp-tool-call.bounded-results.v1"
 } as const;
 
-export const TUNNEL_WEBSOCKET_STREAM_CAPABILITY =
-  "daemon.websocket.v1" as const;
-
-export type TunnelFeature =
-  (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
+export type TunnelFeature = (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
 
 export const RELAY_ERROR_CODES = {
   BAD_MESSAGE: "bad-message",
@@ -465,7 +461,7 @@ export type TunnelWebSocketDialbackHello = {
 export type TunnelWebSocketCloseEnvelope = {
   type: "ws.close";
   streamId: string;
-  code: number;
+  code: TunnelCloseCode;
   reason: string;
 };
 
@@ -489,7 +485,6 @@ export type TunnelControlServerMessage =
   | TunnelControlPong
   | TunnelControlServerError
   | TunnelRelayFrameEnvelope
-  | TunnelWebSocketCloseEnvelope
   | TunnelHttpRequestEnvelope
   | TunnelHttpRequestStartEnvelope
   | TunnelHttpRequestChunkEnvelope

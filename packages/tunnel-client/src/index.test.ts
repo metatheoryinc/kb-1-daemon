@@ -7,15 +7,12 @@ import {
   TUNNEL_CLOSE_CODES,
   TUNNEL_FEATURES,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
-  TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS,
-  TUNNEL_WEBSOCKET_STREAM_CAPABILITY,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   encodeTunnelMessage,
   type RelayFrame,
 } from '@kb-1/tunnel-protocol';
 import {
   ChunkedHttpRequestAssembler,
-  ControlWebSocketBridge,
   DialbackBridge,
   TunnelClient,
   createBackoffDelay,
@@ -23,7 +20,6 @@ import {
   relayInternalUrl,
   serializableResponseHeaders,
   sendableCloseCode,
-  sendableCloseReason,
   withoutHopByHop,
   type BridgeSocket,
 } from './index.js';
@@ -33,7 +29,6 @@ class FakeSocket extends EventEmitter implements BridgeSocket {
   readonly sent: Array<{ data: unknown; options?: { binary?: boolean } }> = [];
   readonly closes: Array<{ code?: number; reason?: string }> = [];
   sendError: Error | undefined;
-  closeError: Error | undefined;
 
   send(data: unknown, options?: { binary?: boolean }): void {
     if (this.sendError) throw this.sendError;
@@ -41,9 +36,8 @@ class FakeSocket extends EventEmitter implements BridgeSocket {
   }
 
   close(code?: number, reason?: string): void {
-    this.closes.push({ code, reason });
-    if (this.closeError) throw this.closeError;
     this.readyState = 3;
+    this.closes.push({ code, reason });
     this.emit('close', code ?? 1000, Buffer.from(reason ?? ''));
   }
 
@@ -76,11 +70,6 @@ describe('tunnel-client helpers', () => {
     expect(sendableCloseCode(3000)).toBe(3000);
     expect(sendableCloseCode(999)).toBe(1011);
     expect(sendableCloseCode(5000)).toBe(1011);
-  });
-
-  it('caps close reasons at the websocket UTF-8 byte limit', () => {
-    expect(Buffer.byteLength(sendableCloseReason('x'.repeat(200)), 'utf8')).toBe(123);
-    expect(sendableCloseReason('🙂'.repeat(31))).toBe('🙂'.repeat(30));
   });
 
   it('preserves the stable tunnel path when building internal relay URLs', () => {
@@ -181,312 +170,6 @@ describe('ChunkedHttpRequestAssembler', () => {
   });
 });
 
-describe('ControlWebSocketBridge', () => {
-  it('carries document websocket frames over the existing control socket', () => {
-    const controlSocket = new FakeSocket();
-    const daemonSocket = new FakeSocket();
-    controlSocket.open();
-    const bridge = new ControlWebSocketBridge({
-      streamId: 'stream-1',
-      controlSocket,
-      daemonSocket,
-    });
-    bridge.start();
-
-    daemonSocket.open();
-    expect(JSON.parse(Buffer.from(controlSocket.sent[0].data as Uint8Array).toString('utf8'))).toEqual({
-      type: 'relay.frame',
-      frame: {
-        type: 'stream.open',
-        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-        streamId: 'stream-1',
-        capability: TUNNEL_WEBSOCKET_STREAM_CAPABILITY,
-      },
-    });
-
-    bridge.receive({
-      type: 'stream.data',
-      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-      streamId: 'stream-1',
-      sequence: 0,
-      payload: {
-        encoding: 'base64',
-        dataB64: Buffer.from([1, 2, 3]).toString('base64'),
-      },
-    });
-    expect(daemonSocket.sent).toEqual([{ data: Buffer.from([1, 2, 3]), options: { binary: true } }]);
-
-    daemonSocket.message(Buffer.from([4, 5, 6]));
-    expect(JSON.parse(Buffer.from(controlSocket.sent[1].data as Uint8Array).toString('utf8'))).toEqual({
-      type: 'relay.frame',
-      frame: {
-        type: 'stream.data',
-        version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-        streamId: 'stream-1',
-        sequence: 0,
-        payload: {
-          encoding: 'base64',
-          dataB64: Buffer.from([4, 5, 6]).toString('base64'),
-        },
-      },
-    });
-
-    bridge.closeFromControl(1000, 'done');
-    expect(daemonSocket.closes[0]).toEqual({ code: 1000, reason: 'done' });
-  });
-
-  it('propagates daemon close and oversized frames to the control stream', () => {
-    const controlSocket = new FakeSocket();
-    const daemonSocket = new FakeSocket();
-    const onClosed = vi.fn();
-    controlSocket.open();
-    const bridge = new ControlWebSocketBridge({
-      streamId: 'stream-close',
-      controlSocket,
-      daemonSocket,
-      logger: { log: vi.fn() },
-      onClosed,
-    });
-    bridge.start();
-    daemonSocket.open();
-    daemonSocket.message(Buffer.alloc(TUNNEL_WS_FRAME_BYTE_LIMIT + 1));
-
-    expect(JSON.parse(Buffer.from(controlSocket.sent[1].data as Uint8Array).toString('utf8'))).toMatchObject({
-      type: 'ws.close',
-      streamId: 'stream-close',
-      code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
-    });
-    expect(daemonSocket.closes[0]?.code).toBe(TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME);
-    expect(onClosed).toHaveBeenCalledOnce();
-
-    const secondControl = new FakeSocket();
-    const secondDaemon = new FakeSocket();
-    secondControl.open();
-    const secondBridge = new ControlWebSocketBridge({
-      streamId: 'stream-daemon-close',
-      controlSocket: secondControl,
-      daemonSocket: secondDaemon,
-      logger: { log: vi.fn() },
-    });
-    secondBridge.start();
-    secondDaemon.open();
-    secondDaemon.close(1000, 'daemon done');
-    expect(JSON.parse(Buffer.from(secondControl.sent[1].data as Uint8Array).toString('utf8'))).toEqual({
-      type: 'ws.close',
-      streamId: 'stream-daemon-close',
-      code: 1000,
-      reason: 'daemon done',
-    });
-  });
-
-  it('fails closed for invalid, oversized, or premature relay frames', () => {
-    const cases: Array<{
-      name: string;
-      prepare?: (daemon: FakeSocket) => void;
-      payload: RelayFrame;
-      code: number;
-    }> = [
-      {
-        name: 'invalid payload',
-        prepare: (daemon) => daemon.open(),
-        payload: {
-          type: 'stream.data',
-          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-          streamId: 'stream-invalid',
-          sequence: 0,
-          payload: { encoding: 'json', value: null },
-        },
-        code: TUNNEL_CLOSE_CODES.BAD_PROTOCOL,
-      },
-      {
-        name: 'oversized payload',
-        prepare: (daemon) => daemon.open(),
-        payload: {
-          type: 'stream.data',
-          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-          streamId: 'stream-invalid',
-          sequence: 0,
-          payload: {
-            encoding: 'base64',
-            dataB64: Buffer.alloc(TUNNEL_WS_FRAME_BYTE_LIMIT + 1).toString('base64'),
-          },
-        },
-        code: TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
-      },
-      {
-        name: 'premature payload',
-        payload: {
-          type: 'stream.data',
-          version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-          streamId: 'stream-invalid',
-          sequence: 0,
-          payload: { encoding: 'base64', dataB64: 'AQ==' },
-        },
-        code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-      },
-    ];
-
-    for (const testCase of cases) {
-      const controlSocket = new FakeSocket();
-      const daemonSocket = new FakeSocket();
-      controlSocket.open();
-      const bridge = new ControlWebSocketBridge({
-        streamId: 'stream-invalid',
-        controlSocket,
-        daemonSocket,
-        logger: { log: vi.fn() },
-      });
-      bridge.start();
-      testCase.prepare?.(daemonSocket);
-      bridge.receive(testCase.payload as Extract<RelayFrame, { type: 'stream.data' }>);
-      const close = JSON.parse(Buffer.from(controlSocket.sent.at(-1)?.data as Uint8Array).toString('utf8')) as {
-        type: string;
-        code: number;
-      };
-      expect(close, testCase.name).toMatchObject({
-        type: 'ws.close',
-        code: testCase.code,
-      });
-    }
-  });
-
-  it('cleans up when daemon or control sends fail', () => {
-    const controlSocket = new FakeSocket();
-    const daemonSocket = new FakeSocket();
-    const logger = { log: vi.fn() };
-    controlSocket.open();
-    const bridge = new ControlWebSocketBridge({
-      streamId: 'stream-errors',
-      controlSocket,
-      daemonSocket,
-      logger,
-    });
-    bridge.start();
-    daemonSocket.open();
-    daemonSocket.sendError = new Error('daemon send failed');
-    bridge.receive({
-      type: 'stream.data',
-      version: RELAY_TRANSPORT_PROTOCOL_VERSION,
-      streamId: 'stream-errors',
-      sequence: 0,
-      payload: { encoding: 'base64', dataB64: 'AQ==' },
-    });
-    expect(logger.log).toHaveBeenCalledWith(
-      'warn',
-      'multiplexed daemon websocket send failed',
-      expect.objectContaining({ streamId: 'stream-errors' }),
-    );
-
-    const failingControl = new FakeSocket();
-    const secondDaemon = new FakeSocket();
-    failingControl.open();
-    failingControl.sendError = new Error('control send failed');
-    const secondBridge = new ControlWebSocketBridge({
-      streamId: 'stream-control-error',
-      controlSocket: failingControl,
-      daemonSocket: secondDaemon,
-      logger,
-    });
-    secondBridge.start();
-    secondDaemon.open();
-    expect(secondDaemon.closes[0]?.code).toBe(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE);
-
-    const thirdControl = new FakeSocket();
-    const thirdDaemon = new FakeSocket();
-    thirdControl.open();
-    const thirdBridge = new ControlWebSocketBridge({
-      streamId: 'stream-daemon-error',
-      controlSocket: thirdControl,
-      daemonSocket: thirdDaemon,
-      logger,
-    });
-    thirdBridge.start();
-    thirdDaemon.open();
-    thirdDaemon.emit('error', new Error('socket failed'));
-    expect(thirdDaemon.closes[0]?.code).toBe(1011);
-  });
-
-  it('times out a daemon websocket that never completes its handshake', async () => {
-    vi.useFakeTimers();
-    try {
-      const controlSocket = new FakeSocket();
-      const daemonSocket = new FakeSocket();
-      const onClosed = vi.fn();
-      controlSocket.open();
-      const bridge = new ControlWebSocketBridge({
-        streamId: 'stream-timeout',
-        controlSocket,
-        daemonSocket,
-        logger: { log: vi.fn() },
-        onClosed,
-      });
-      bridge.start();
-
-      await vi.advanceTimersByTimeAsync(TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS);
-
-      expect(JSON.parse(Buffer.from(controlSocket.sent[0].data as Uint8Array).toString('utf8'))).toMatchObject({
-        type: 'ws.close',
-        streamId: 'stream-timeout',
-        code: TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT,
-      });
-      expect(daemonSocket.closes[0]?.code).toBe(TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT);
-      expect(onClosed).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('sanitizes control close metadata and cleans up when daemon close throws', () => {
-    const controlSocket = new FakeSocket();
-    const daemonSocket = new FakeSocket();
-    const logger = { log: vi.fn() };
-    const onClosed = vi.fn();
-    controlSocket.open();
-    const bridge = new ControlWebSocketBridge({
-      streamId: 'stream-close-metadata',
-      controlSocket,
-      daemonSocket,
-      logger,
-      onClosed,
-    });
-    bridge.start();
-    daemonSocket.open();
-    daemonSocket.closeError = new Error('invalid close metadata');
-
-    bridge.closeFromControl(1004, '🙂'.repeat(100));
-
-    expect(daemonSocket.closes[0]?.code).toBe(1011);
-    expect(daemonSocket.closes[0]?.reason).toBe('🙂'.repeat(30));
-    expect(onClosed).toHaveBeenCalledOnce();
-    expect(logger.log).toHaveBeenCalledWith(
-      'warn',
-      'multiplexed websocket close failed',
-      expect.objectContaining({ streamId: 'stream-close-metadata' }),
-    );
-  });
-
-  it('aborts locally without writing to a dead control socket', () => {
-    const controlSocket = new FakeSocket();
-    const daemonSocket = new FakeSocket();
-    const onClosed = vi.fn();
-    const bridge = new ControlWebSocketBridge({
-      streamId: 'stream-abort',
-      controlSocket,
-      daemonSocket,
-      logger: { log: vi.fn() },
-      onClosed,
-    });
-    bridge.start();
-    expect(bridge.belongsTo(controlSocket)).toBe(true);
-    expect(bridge.belongsTo(new FakeSocket())).toBe(false);
-    bridge.abort('control disconnected');
-    bridge.abort('already closed');
-    expect(controlSocket.sent).toEqual([]);
-    expect(daemonSocket.closes[0]?.code).toBe(TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE);
-    expect(onClosed).toHaveBeenCalledOnce();
-  });
-});
-
 describe('TunnelClient typed relay RPC', () => {
   it('sends daemon-origin relay event frames over the control socket', () => {
     const control = new FakeSocket();
@@ -519,10 +202,7 @@ describe('TunnelClient typed relay RPC', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('http://daemon.test/api/vaults');
       expect(init?.method).toBe('GET');
-      return Response.json({
-        ok: true,
-        vaults: [{ id: 'ledger', displayName: 'Ledger' }],
-      });
+      return Response.json({ ok: true, vaults: [{ id: 'ledger', displayName: 'Ledger' }] });
     });
     const client = new TunnelClient({
       relayUrl: new URL('ws://relay.test/t/demo'),
@@ -896,7 +576,11 @@ describe('TunnelClient typed relay RPC', () => {
         throw signal.reason;
       }
       return new Promise<Response>((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          'abort',
+          () => reject(signal.reason),
+          { once: true },
+        );
       });
     });
     const client = new TunnelClient({
@@ -1090,7 +774,11 @@ describe('TunnelClient typed relay RPC', () => {
       const signal = init?.signal;
       if (!signal) throw new Error('Expected the relay cancellation signal');
       return new Promise<Response>((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          'abort',
+          () => reject(signal.reason),
+          { once: true },
+        );
       });
     });
     const client = new TunnelClient({
@@ -1242,9 +930,7 @@ describe('TunnelClient HTTP proxy cancellation', () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       observedSignal = init?.signal as AbortSignal | undefined;
       await new Promise((_resolve, reject) => {
-        observedSignal?.addEventListener('abort', () => reject(new Error('aborted')), {
-          once: true,
-        });
+        observedSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       });
       return new Response('late');
     });
@@ -1395,33 +1081,30 @@ describe('DialbackBridge', () => {
     expect(daemonSocket.sent).toEqual([{ data: Buffer.from([9]), options: { binary: true } }]);
   });
 
-  it.each([2, 3])(
-    'closes both sockets when relay frames arrive while the daemon websocket state is %i',
-    (readyState) => {
-      const relaySocket = new FakeSocket();
-      const daemonSocket = new FakeSocket();
-      const logger = { log: vi.fn() };
-      new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
+  it.each([2, 3])('closes both sockets when relay frames arrive while the daemon websocket state is %i', (readyState) => {
+    const relaySocket = new FakeSocket();
+    const daemonSocket = new FakeSocket();
+    const logger = { log: vi.fn() };
+    new DialbackBridge({ streamId: 'stream-1', relaySocket, daemonSocket, logger }).start();
 
-      relaySocket.open();
-      daemonSocket.readyState = readyState;
-      relaySocket.message(Buffer.from([9]));
+    relaySocket.open();
+    daemonSocket.readyState = readyState;
+    relaySocket.message(Buffer.from([9]));
 
-      expect(daemonSocket.sent).toEqual([]);
-      expect(relaySocket.closes[0]).toEqual({
-        code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-        reason: 'Daemon websocket was not open for relay frame',
-      });
-      expect(daemonSocket.closes[0]).toEqual({
-        code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-        reason: 'Daemon websocket was not open for relay frame',
-      });
-      expect(logger.log).toHaveBeenCalledWith('warn', 'relay frame arrived while daemon websocket was not open', {
-        streamId: 'stream-1',
-        daemonReadyState: readyState,
-      });
-    },
-  );
+    expect(daemonSocket.sent).toEqual([]);
+    expect(relaySocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket was not open for relay frame',
+    });
+    expect(daemonSocket.closes[0]).toEqual({
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: 'Daemon websocket was not open for relay frame',
+    });
+    expect(logger.log).toHaveBeenCalledWith('warn', 'relay frame arrived while daemon websocket was not open', {
+      streamId: 'stream-1',
+      daemonReadyState: readyState,
+    });
+  });
 
   it('closes both sockets when sending relay frames to the daemon fails', () => {
     const relaySocket = new FakeSocket();
@@ -1672,10 +1355,7 @@ describe('DialbackBridge', () => {
 
     relaySocket.emit('error', new Error('relay down'));
 
-    expect(daemonSocket.closes[0]).toEqual({
-      code: 1011,
-      reason: 'Relay dial-back failed',
-    });
+    expect(daemonSocket.closes[0]).toEqual({ code: 1011, reason: 'Relay dial-back failed' });
     expect(logger.log).toHaveBeenCalledWith('warn', 'relay dial-back socket error', {
       streamId: 'stream-1',
       error: 'Error: relay down',
@@ -1690,10 +1370,7 @@ describe('DialbackBridge', () => {
 
     daemonSocket.emit('error', new Error('daemon down'));
 
-    expect(relaySocket.closes[0]).toEqual({
-      code: 1011,
-      reason: 'Daemon websocket failed',
-    });
+    expect(relaySocket.closes[0]).toEqual({ code: 1011, reason: 'Daemon websocket failed' });
     expect(logger.log).toHaveBeenCalledWith('warn', 'daemon websocket error', {
       streamId: 'stream-1',
       error: 'Error: daemon down',
