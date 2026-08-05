@@ -25,6 +25,8 @@ import {
   type TunnelHttpRequestEndEnvelope,
   type TunnelHttpRequestEnvelope,
   type TunnelHttpRequestStartEnvelope,
+  type TunnelHttpResponseChunkAckEnvelope,
+  type TunnelHttpResponseChunkEnvelope,
   type TunnelHttpResponseEnvelope,
   type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketOpenEnvelope,
@@ -118,6 +120,13 @@ type PendingDaemonHttpRequest = {
   canceled: boolean;
 };
 
+type PendingHttpResponseChunkAck = {
+  sequence: number;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
 /* v8 ignore start -- Live relay socket orchestration is covered by Stage A wrangler/daemon/browser drills; unit tests cover the deterministic backoff, close-code, URL, and dial-back bridge logic below. */
 export class TunnelClient {
   private readonly logger: TunnelClientLogger;
@@ -130,10 +139,15 @@ export class TunnelClient {
   private controlHeartbeatMisses = 0;
   private readonly httpAssembler = new ChunkedHttpRequestAssembler();
   private readonly pendingHttpRequests = new Map<string, PendingDaemonHttpRequest>();
+  private readonly pendingHttpResponseChunkAcks = new Map<
+    string,
+    PendingHttpResponseChunkAck
+  >();
   private readonly pendingRelayRpcRequests = new Map<string, AbortController>();
   private stopped = true;
   private hasStarted = false;
   private reconnectAttempt = 0;
+  private relaySupportsHttpResponseChunkAcks = false;
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
 
@@ -169,6 +183,8 @@ export class TunnelClient {
     }
     this.clearControlHeartbeat();
     this.abortPendingHttpRequests();
+    this.abortPendingHttpResponseChunkAcks('Tunnel client stopping');
+    this.relaySupportsHttpResponseChunkAcks = false;
     this.abortPendingRelayRpcRequests('Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
@@ -227,6 +243,8 @@ export class TunnelClient {
   private connectControl(): void {
     if (this.stopped) return;
 
+    this.relaySupportsHttpResponseChunkAcks = false;
+
     // Coordinated relay wire paths: keep `/__kb1_tunnel/*` stable until the
     // cloud relay and all clients migrate together.
     const controlUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/control');
@@ -249,6 +267,7 @@ export class TunnelClient {
           TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V1,
           TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
           TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
+          TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
         ],
       }));
       this.startControlHeartbeat(control);
@@ -269,6 +288,8 @@ export class TunnelClient {
         this.control = undefined;
         this.clearControlHeartbeat();
         this.abortPendingHttpRequests();
+        this.abortPendingHttpResponseChunkAcks('Relay control disconnected');
+        this.relaySupportsHttpResponseChunkAcks = false;
         this.abortPendingRelayRpcRequests('Relay control disconnected');
       }
 
@@ -307,6 +328,10 @@ export class TunnelClient {
     switch (message.type) {
       case 'control.ready':
         this.reconnectAttempt = 0;
+        this.relaySupportsHttpResponseChunkAcks =
+          message.features?.includes(
+            TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
+          ) ?? false;
         this.logger.log('info', 'relay control ready', { protocolVersion: message.version });
         return;
       case 'control.pong':
@@ -323,10 +348,7 @@ export class TunnelClient {
         await this.handleRelayFrame(control, parseRelayFrame(message.frame));
         return;
       case 'http.request':
-        {
-          const response = await this.proxyHttp(message);
-          if (response) this.sendHttpResponse(control, response);
-        }
+        await this.proxyAndSendHttpResponse(control, message);
         return;
       case 'http.request.start':
         this.httpAssembler.start(message);
@@ -337,13 +359,15 @@ export class TunnelClient {
       case 'http.request.end': {
         const assembled = this.httpAssembler.end(message);
         if (assembled) {
-          const response = await this.proxyHttp(assembled);
-          if (response) this.sendHttpResponse(control, response);
+          await this.proxyAndSendHttpResponse(control, assembled);
         }
         return;
       }
       case 'http.cancel':
         this.cancelHttpRequest(message);
+        return;
+      case 'http.response.chunk.ack':
+        this.resolveHttpResponseChunkAck(message);
         return;
       case 'ws.open':
         this.openDialback(message);
@@ -726,12 +750,37 @@ export class TunnelClient {
       };
     } finally {
       clearTimeout(timeout);
-      this.pendingHttpRequests.delete(envelope.id);
+    }
+  }
+
+  private async proxyAndSendHttpResponse(
+    control: WebSocket,
+    envelope: TunnelHttpRequestEnvelope,
+  ): Promise<void> {
+    let pending: PendingDaemonHttpRequest | undefined;
+    try {
+      const response = await this.proxyHttp(envelope);
+      pending = this.pendingHttpRequests.get(envelope.id);
+      if (response && !pending?.canceled) {
+        try {
+          await this.sendHttpResponse(control, response);
+        } catch (error) {
+          if (!pending?.canceled) throw error;
+        }
+      }
+    } finally {
+      if (!pending || this.pendingHttpRequests.get(envelope.id) === pending) {
+        this.pendingHttpRequests.delete(envelope.id);
+      }
     }
   }
 
   private cancelHttpRequest(message: TunnelHttpCancelEnvelope): void {
     this.httpAssembler.cancel(message.id);
+    this.rejectPendingHttpResponseChunkAck(
+      message.id,
+      new Error(message.reason ?? 'relay cancelled HTTP response'),
+    );
     const pending = this.pendingHttpRequests.get(message.id);
     if (!pending) return;
 
@@ -747,7 +796,41 @@ export class TunnelClient {
     this.pendingHttpRequests.clear();
   }
 
-  private sendHttpResponse(control: WebSocket, envelope: TunnelHttpResponseEnvelope): void {
+  private resolveHttpResponseChunkAck(
+    message: TunnelHttpResponseChunkAckEnvelope,
+  ): void {
+    const pending = this.pendingHttpResponseChunkAcks.get(message.id);
+    if (!pending) return;
+    if (pending.sequence !== message.sequence) {
+      this.rejectPendingHttpResponseChunkAck(
+        message.id,
+        new Error('Relay acknowledged an unexpected HTTP response chunk'),
+      );
+      return;
+    }
+    clearTimeout(pending.timeout);
+    this.pendingHttpResponseChunkAcks.delete(message.id);
+    pending.resolve();
+  }
+
+  private rejectPendingHttpResponseChunkAck(id: string, error: Error): void {
+    const pending = this.pendingHttpResponseChunkAcks.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.pendingHttpResponseChunkAcks.delete(id);
+    pending.reject(error);
+  }
+
+  private abortPendingHttpResponseChunkAcks(reason: string): void {
+    for (const id of this.pendingHttpResponseChunkAcks.keys()) {
+      this.rejectPendingHttpResponseChunkAck(id, new Error(reason));
+    }
+  }
+
+  private async sendHttpResponse(
+    control: WebSocket,
+    envelope: TunnelHttpResponseEnvelope,
+  ): Promise<void> {
     if (!envelope.bodyB64) {
       control.send(encodeJsonBytes(envelope));
       return;
@@ -763,6 +846,7 @@ export class TunnelClient {
     }
 
     const body = Buffer.from(envelope.bodyB64, 'base64');
+    if (this.pendingHttpRequests.get(envelope.id)?.canceled) return;
     control.send(encodeJsonBytes({
       type: 'http.response.start',
       id: envelope.id,
@@ -774,6 +858,7 @@ export class TunnelClient {
     let sequence = 0;
     let offset = 0;
     while (offset < body.byteLength) {
+      if (this.pendingHttpRequests.get(envelope.id)?.canceled) return;
       const emptyChunk = encodeJsonBytes({
         type: 'http.response.chunk',
         id: envelope.id,
@@ -786,21 +871,62 @@ export class TunnelClient {
         throw new Error('HTTP response chunk metadata exceeded tunnel frame cap');
       }
       const chunk = body.subarray(offset, offset + chunkBytes);
-      control.send(encodeJsonBytes({
+      const responseChunk: TunnelHttpResponseChunkEnvelope = {
         type: 'http.response.chunk',
         id: envelope.id,
         sequence,
         bodyB64: chunk.toString('base64'),
-      }));
+      };
+      if (this.relaySupportsHttpResponseChunkAcks) {
+        await this.sendHttpResponseChunk(control, responseChunk);
+      } else {
+        control.send(encodeJsonBytes(responseChunk));
+      }
       offset += chunk.byteLength;
       sequence += 1;
     }
 
+    if (this.pendingHttpRequests.get(envelope.id)?.canceled) return;
     control.send(encodeJsonBytes({
       type: 'http.response.end',
       id: envelope.id,
       chunks: sequence,
     }));
+  }
+
+  private async sendHttpResponseChunk(
+    control: WebSocket,
+    message: TunnelHttpResponseChunkEnvelope,
+  ): Promise<void> {
+    if (this.pendingHttpResponseChunkAcks.has(message.id)) {
+      throw new Error('HTTP response chunk acknowledgement is already pending');
+    }
+
+    const acknowledged = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.rejectPendingHttpResponseChunkAck(
+          message.id,
+          new Error('Timed out waiting for HTTP response chunk acknowledgement'),
+        );
+      }, TUNNEL_HTTP_REQUEST_TIMEOUT_MS);
+      this.pendingHttpResponseChunkAcks.set(message.id, {
+        sequence: message.sequence,
+        resolve,
+        reject,
+        timeout,
+      });
+    });
+
+    try {
+      control.send(encodeJsonBytes(message));
+    } catch (error) {
+      const sendError =
+        error instanceof Error ? error : new Error(String(error));
+      this.rejectPendingHttpResponseChunkAck(message.id, sendError);
+      await acknowledged.catch(() => undefined);
+      throw sendError;
+    }
+    await acknowledged;
   }
 
   private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {

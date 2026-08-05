@@ -30,10 +30,12 @@ class FakeSocket extends EventEmitter implements BridgeSocket {
   readonly sent: Array<{ data: unknown; options?: { binary?: boolean } }> = [];
   readonly closes: Array<{ code?: number; reason?: string }> = [];
   sendError: Error | undefined;
+  onSend: ((data: unknown) => void) | undefined;
 
   send(data: unknown, options?: { binary?: boolean }): void {
     if (this.sendError) throw this.sendError;
     this.sent.push({ data, options });
+    this.onSend?.(data);
   }
 
   close(code?: number, reason?: string): void {
@@ -50,6 +52,60 @@ class FakeSocket extends EventEmitter implements BridgeSocket {
   message(data: Buffer, isBinary = true): void {
     this.emit('message', data, isBinary);
   }
+}
+
+function acknowledgeHttpResponseChunks(
+  client: TunnelClient,
+  control: FakeSocket,
+): void {
+  control.onSend = (data) => {
+    const message = JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+      type: string;
+      id?: string;
+      sequence?: number;
+    };
+    if (
+      message.type !== 'http.response.chunk' ||
+      message.id === undefined ||
+      message.sequence === undefined
+    ) {
+      return;
+    }
+    void (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage(
+      control,
+      Buffer.from(
+        JSON.stringify({
+          type: 'http.response.chunk.ack',
+          id: message.id,
+          sequence: message.sequence,
+        }),
+      ),
+    );
+  };
+}
+
+async function advertiseHttpResponseChunkAcks(
+  client: TunnelClient,
+  control: FakeSocket,
+): Promise<void> {
+  await (
+    client as unknown as {
+      handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+    }
+  ).handleControlMessage(
+    control,
+    Buffer.from(
+      JSON.stringify({
+        type: 'control.ready',
+        version: 2,
+        features: [TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1],
+      }),
+    ),
+  );
 }
 
 describe('tunnel-client helpers', () => {
@@ -172,7 +228,7 @@ describe('ChunkedHttpRequestAssembler', () => {
 });
 
 describe('TunnelClient typed relay RPC', () => {
-  it('keeps multi-megabyte HTTP response chunks below the websocket frame cap', () => {
+  it('keeps multi-megabyte HTTP response chunks below the websocket frame cap', async () => {
     const control = new FakeSocket();
     control.open();
     const client = new TunnelClient({
@@ -180,14 +236,16 @@ describe('TunnelClient typed relay RPC', () => {
       daemonUrl: new URL('http://daemon.test'),
       token: 'token',
     });
+    await advertiseHttpResponseChunkAcks(client, control);
+    acknowledgeHttpResponseChunks(client, control);
     const body = Buffer.alloc(3 * 1024 * 1024 + 17, 0xa5);
 
-    (
+    await (
       client as unknown as {
         sendHttpResponse(
           control: FakeSocket,
           envelope: TunnelHttpResponseEnvelope,
-        ): void;
+        ): Promise<void>;
       }
     ).sendHttpResponse(control, {
       type: 'http.response',
@@ -224,7 +282,7 @@ describe('TunnelClient typed relay RPC', () => {
     expect(Buffer.concat(chunks).equals(body)).toBe(true);
   });
 
-  it('chunks a response when its encoded headers push it over the websocket frame cap', () => {
+  it('chunks a response when its encoded headers push it over the websocket frame cap', async () => {
     const control = new FakeSocket();
     control.open();
     const client = new TunnelClient({
@@ -232,13 +290,15 @@ describe('TunnelClient typed relay RPC', () => {
       daemonUrl: new URL('http://daemon.test'),
       token: 'token',
     });
+    await advertiseHttpResponseChunkAcks(client, control);
+    acknowledgeHttpResponseChunks(client, control);
 
-    (
+    await (
       client as unknown as {
         sendHttpResponse(
           control: FakeSocket,
           envelope: TunnelHttpResponseEnvelope,
-        ): void;
+        ): Promise<void>;
       }
     ).sendHttpResponse(control, {
       type: 'http.response',
@@ -254,6 +314,193 @@ describe('TunnelClient typed relay RPC', () => {
       type: 'http.response.start',
       totalBytes: 196 * 1024,
     });
+  });
+
+  it('waits for each large HTTP response chunk to be acknowledged', async () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+    await advertiseHttpResponseChunkAcks(client, control);
+    const sending = (
+      client as unknown as {
+        sendHttpResponse(
+          control: FakeSocket,
+          envelope: TunnelHttpResponseEnvelope,
+        ): Promise<void>;
+      }
+    ).sendHttpResponse(control, {
+      type: 'http.response',
+      id: 'backpressured-response',
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      bodyB64: Buffer.alloc(384 * 1024, 0xa5).toString('base64'),
+    });
+
+    await vi.waitFor(() => expect(control.sent).toHaveLength(2));
+    for (let sequence = 0; sequence < 3; sequence += 1) {
+      const chunk = JSON.parse(
+        Buffer.from(control.sent.at(-1)?.data as Uint8Array).toString('utf8'),
+      ) as { type: string; id: string; sequence: number };
+      expect(chunk).toMatchObject({
+        type: 'http.response.chunk',
+        id: 'backpressured-response',
+        sequence,
+      });
+      await (
+        client as unknown as {
+          handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+        }
+      ).handleControlMessage(
+        control,
+        Buffer.from(
+          JSON.stringify({
+            type: 'http.response.chunk.ack',
+            id: chunk.id,
+            sequence,
+          }),
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(control.sent).toHaveLength(sequence + 3),
+      );
+    }
+
+    await sending;
+    const frames = control.sent.map(({ data }) =>
+      JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+        type: string;
+      },
+    );
+    expect(frames.map(({ type }) => type)).toEqual([
+      'http.response.start',
+      'http.response.chunk',
+      'http.response.chunk',
+      'http.response.chunk',
+      'http.response.end',
+    ]);
+  });
+
+  it('retains chunked response compatibility when the relay does not advertise acknowledgements', async () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+
+    await (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage(
+      control,
+      Buffer.from(JSON.stringify({ type: 'control.ready', version: 2 })),
+    );
+    await (
+      client as unknown as {
+        sendHttpResponse(
+          control: FakeSocket,
+          envelope: TunnelHttpResponseEnvelope,
+        ): Promise<void>;
+      }
+    ).sendHttpResponse(control, {
+      type: 'http.response',
+      id: 'legacy-relay-response',
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      bodyB64: Buffer.alloc(384 * 1024, 0xa5).toString('base64'),
+    });
+
+    const frameTypes = control.sent.map(({ data }) =>
+      (JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+        type: string;
+      }).type,
+    );
+    expect(frameTypes).toEqual([
+      'http.response.start',
+      'http.response.chunk',
+      'http.response.chunk',
+      'http.response.chunk',
+      'http.response.end',
+    ]);
+  });
+
+  it('stops a chunked response when cancellation races the next chunk after an acknowledgement', async () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+    await advertiseHttpResponseChunkAcks(client, control);
+    (
+      client as unknown as {
+        pendingHttpRequests: Map<
+          string,
+          { abort: AbortController; canceled: boolean }
+        >;
+      }
+    ).pendingHttpRequests.set('cancelled-response', {
+      abort: new AbortController(),
+      canceled: false,
+    });
+
+    const sending = (
+      client as unknown as {
+        sendHttpResponse(
+          control: FakeSocket,
+          envelope: TunnelHttpResponseEnvelope,
+        ): Promise<void>;
+      }
+    ).sendHttpResponse(control, {
+      type: 'http.response',
+      id: 'cancelled-response',
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      bodyB64: Buffer.alloc(384 * 1024, 0xa5).toString('base64'),
+    });
+    await vi.waitFor(() => expect(control.sent).toHaveLength(2));
+
+    const handleControlMessage = (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage.bind(client);
+    const acknowledgement = handleControlMessage(
+      control,
+      Buffer.from(
+        JSON.stringify({
+          type: 'http.response.chunk.ack',
+          id: 'cancelled-response',
+          sequence: 0,
+        }),
+      ),
+    );
+    const cancellation = handleControlMessage(
+      control,
+      Buffer.from(
+        JSON.stringify({
+          type: 'http.cancel',
+          id: 'cancelled-response',
+          reason: 'browser disconnected',
+        }),
+      ),
+    );
+    await Promise.all([acknowledgement, cancellation, sending]);
+
+    expect(
+      control.sent.map(({ data }) =>
+        (JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+          type: string;
+        }).type,
+      ),
+    ).toEqual(['http.response.start', 'http.response.chunk']);
   });
 
   it('sends daemon-origin relay event frames over the control socket', () => {
