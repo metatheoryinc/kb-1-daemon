@@ -26,7 +26,8 @@ export const TUNNEL_FEATURES = {
   VAULT_CONTENT_EVENTS_V1: "relay.vault-content-events.v1",
   VAULT_CONTENT_EVENTS_V2: "relay.vault-content-events.v2",
   MCP_TOOL_CALL_BOUNDED_RESULTS_V1:
-    "relay.mcp-tool-call.bounded-results.v1"
+    "relay.mcp-tool-call.bounded-results.v1",
+  HTTP_RESPONSE_CHUNK_ACKS_V1: "relay.http-response-chunk-acks.v1"
 } as const;
 
 export type TunnelFeature = (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
@@ -366,6 +367,7 @@ export type TunnelControlClientHello = {
 export type TunnelControlServerReady = {
   type: "control.ready";
   version: TunnelProtocolVersion;
+  features?: readonly TunnelFeature[];
 };
 
 export type TunnelControlPing = {
@@ -442,6 +444,12 @@ export type TunnelHttpResponseChunkEnvelope = {
   bodyB64: string;
 };
 
+export type TunnelHttpResponseChunkAckEnvelope = {
+  type: "http.response.chunk.ack";
+  id: string;
+  sequence: number;
+};
+
 export type TunnelHttpResponseEndEnvelope = {
   type: "http.response.end";
   id: string;
@@ -494,6 +502,7 @@ export type TunnelControlServerMessage =
   | TunnelHttpRequestChunkEnvelope
   | TunnelHttpRequestEndEnvelope
   | TunnelHttpCancelEnvelope
+  | TunnelHttpResponseChunkAckEnvelope
   | TunnelWebSocketOpenEnvelope;
 
 export type TunnelDialbackClientMessage = TunnelWebSocketDialbackHello;
