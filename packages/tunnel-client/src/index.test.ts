@@ -9,6 +9,7 @@ import {
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   encodeTunnelMessage,
+  type TunnelHttpResponseEnvelope,
   type RelayFrame,
 } from '@kb-1/tunnel-protocol';
 import {
@@ -171,6 +172,90 @@ describe('ChunkedHttpRequestAssembler', () => {
 });
 
 describe('TunnelClient typed relay RPC', () => {
+  it('keeps multi-megabyte HTTP response chunks below the websocket frame cap', () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+    const body = Buffer.alloc(3 * 1024 * 1024 + 17, 0xa5);
+
+    (
+      client as unknown as {
+        sendHttpResponse(
+          control: FakeSocket,
+          envelope: TunnelHttpResponseEnvelope,
+        ): void;
+      }
+    ).sendHttpResponse(control, {
+      type: 'http.response',
+      id: `response-${'x'.repeat(2048)}`,
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      bodyB64: body.toString('base64'),
+    });
+
+    const encodedFrames = control.sent.map(({ data }) => Buffer.from(data as Uint8Array));
+    expect(encodedFrames.every((frame) => frame.byteLength <= TUNNEL_WS_FRAME_BYTE_LIMIT)).toBe(true);
+
+    const frames = encodedFrames.map((frame) => JSON.parse(frame.toString('utf8')) as {
+      type: string;
+      totalBytes?: number;
+      sequence?: number;
+      bodyB64?: string;
+      chunks?: number;
+    });
+    expect(frames[0]).toMatchObject({
+      type: 'http.response.start',
+      totalBytes: body.byteLength,
+    });
+    expect(frames.at(-1)).toMatchObject({
+      type: 'http.response.end',
+      chunks: frames.length - 2,
+    });
+
+    const chunks = frames.slice(1, -1).map((frame, sequence) => {
+      expect(frame).toMatchObject({ type: 'http.response.chunk', sequence });
+      const chunk = Buffer.from(frame.bodyB64 ?? '', 'base64');
+      return chunk;
+    });
+    expect(Buffer.concat(chunks).equals(body)).toBe(true);
+  });
+
+  it('chunks a response when its encoded headers push it over the websocket frame cap', () => {
+    const control = new FakeSocket();
+    control.open();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+    });
+
+    (
+      client as unknown as {
+        sendHttpResponse(
+          control: FakeSocket,
+          envelope: TunnelHttpResponseEnvelope,
+        ): void;
+      }
+    ).sendHttpResponse(control, {
+      type: 'http.response',
+      id: '00000000-0000-4000-8000-000000000000',
+      status: 200,
+      headers: { 'x-padding': 'x'.repeat(1024) },
+      bodyB64: Buffer.alloc(196 * 1024, 0xa5).toString('base64'),
+    });
+
+    const encodedFrames = control.sent.map(({ data }) => Buffer.from(data as Uint8Array));
+    expect(encodedFrames.every((frame) => frame.byteLength <= TUNNEL_WS_FRAME_BYTE_LIMIT)).toBe(true);
+    expect(JSON.parse(encodedFrames[0].toString('utf8'))).toMatchObject({
+      type: 'http.response.start',
+      totalBytes: 196 * 1024,
+    });
+  });
+
   it('sends daemon-origin relay event frames over the control socket', () => {
     const control = new FakeSocket();
     control.open();
