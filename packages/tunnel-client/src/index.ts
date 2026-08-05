@@ -753,12 +753,16 @@ export class TunnelClient {
       return;
     }
 
-    const body = Buffer.from(envelope.bodyB64, 'base64');
-    if (body.byteLength <= TUNNEL_HTTP_BODY_CHUNK_BYTES) {
+    const envelopeWithoutBody = encodeJsonBytes({ ...envelope, bodyB64: '' });
+    if (
+      envelopeWithoutBody.byteLength + envelope.bodyB64.length <=
+      TUNNEL_WS_FRAME_BYTE_LIMIT
+    ) {
       control.send(encodeJsonBytes(envelope));
       return;
     }
 
+    const body = Buffer.from(envelope.bodyB64, 'base64');
     control.send(encodeJsonBytes({
       type: 'http.response.start',
       id: envelope.id,
@@ -768,13 +772,27 @@ export class TunnelClient {
     }));
 
     let sequence = 0;
-    for (let offset = 0; offset < body.byteLength; offset += TUNNEL_HTTP_BODY_CHUNK_BYTES) {
+    let offset = 0;
+    while (offset < body.byteLength) {
+      const emptyChunk = encodeJsonBytes({
+        type: 'http.response.chunk',
+        id: envelope.id,
+        sequence,
+        bodyB64: '',
+      });
+      const chunkBytes =
+        Math.floor((TUNNEL_WS_FRAME_BYTE_LIMIT - emptyChunk.byteLength) / 4) * 3;
+      if (chunkBytes <= 0) {
+        throw new Error('HTTP response chunk metadata exceeded tunnel frame cap');
+      }
+      const chunk = body.subarray(offset, offset + chunkBytes);
       control.send(encodeJsonBytes({
         type: 'http.response.chunk',
         id: envelope.id,
         sequence,
-        bodyB64: body.subarray(offset, offset + TUNNEL_HTTP_BODY_CHUNK_BYTES).toString('base64'),
+        bodyB64: chunk.toString('base64'),
       }));
+      offset += chunk.byteLength;
       sequence += 1;
     }
 
