@@ -54,6 +54,11 @@ export {
 } from "./search.js";
 export {
   classifyArtifactPath,
+  type ArtifactInfo,
+  type ArtifactKind,
+  type ArtifactPreview,
+} from "./artifact.js";
+export {
   deleteVaultFile,
   deleteVaultFolder,
   getFolderMetadata,
@@ -67,9 +72,6 @@ export {
   setFolderMetadata,
   writeVaultRawFile,
   writeVaultFile,
-  type ArtifactInfo,
-  type ArtifactKind,
-  type ArtifactPreview,
   type DeleteValue,
   type FolderMetadata,
   type FolderMetadataInput,
