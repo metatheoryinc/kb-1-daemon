@@ -470,6 +470,12 @@ export type TunnelWebSocketDialbackHello = {
   streamId: string;
 };
 
+export type TunnelWebSocketDialbackPoolHello = {
+  type: "ws.dialback.pool.hello";
+  version: TunnelProtocolVersion;
+  token: string;
+};
+
 export type TunnelWebSocketCloseEnvelope = {
   type: "ws.close";
   streamId: string;
@@ -505,7 +511,9 @@ export type TunnelControlServerMessage =
   | TunnelHttpResponseChunkAckEnvelope
   | TunnelWebSocketOpenEnvelope;
 
-export type TunnelDialbackClientMessage = TunnelWebSocketDialbackHello;
+export type TunnelDialbackClientMessage =
+  | TunnelWebSocketDialbackHello
+  | TunnelWebSocketDialbackPoolHello;
 
 export type TunnelJsonMessage =
   | TunnelControlClientMessage
