@@ -151,12 +151,24 @@ export class TunnelClient {
   private relaySupportsHttpResponseChunkAcks = false;
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
+  private readonly dialbackPool: DialbackPool | undefined;
 
   constructor(private readonly config: TunnelClientConfig) {
     this.logger = config.logger ?? consoleLogger;
     this.fetchImpl = config.fetch ?? fetch;
     this.random = config.random ?? Math.random;
     this.daemonInstanceId = config.daemonInstanceId ?? randomUUID();
+
+    const poolSize = config.dialbackPoolSize ?? 3;
+    this.dialbackPool =
+      poolSize > 0
+        ? new DialbackPool({
+            size: poolSize,
+            logger: this.logger,
+            createSocket: () => this.openPoolRelaySocket(),
+            sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
+          })
+        : undefined;
   }
 
   start(): void {
@@ -334,6 +346,7 @@ export class TunnelClient {
             TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
           ) ?? false;
         this.logger.log('info', 'relay control ready', { protocolVersion: message.version });
+        this.dialbackPool?.prime();
         return;
       case 'control.pong':
         this.clearControlHeartbeatDeadline();
@@ -932,18 +945,15 @@ export class TunnelClient {
 
   private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {
     // Coordinated relay wire path; see the control URL comment above.
-    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
-    dialbackUrl.searchParams.set('streamId', envelope.streamId);
-
     const daemonWsUrl = new URL(envelope.path, this.config.daemonUrl);
     daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    const relaySocket = new WebSocket(dialbackUrl, {
-      headers: { authorization: `Bearer ${this.config.token}` },
-    });
     const daemonSocket = new WebSocket(daemonWsUrl, {
       headers: withoutHopByHop(envelope.headers),
     });
+
+    const pooled = this.dialbackPool?.acquire() ?? null;
+    const relaySocket = pooled ?? this.dialFreshRelaySocket(envelope.streamId);
+
     const bridge = new DialbackBridge({
       streamId: envelope.streamId,
       relaySocket,
@@ -952,16 +962,53 @@ export class TunnelClient {
       onRetrySafeClose: (message) => this.sendControlStreamClose(message),
     });
 
-    relaySocket.on('open', () => {
-      relaySocket.send(encodeJsonBytes({
+    if (pooled) {
+      // Already open + pool-hello'd: claim it for this stream now.
+      this.sendDialbackClaimHello(pooled, envelope.streamId);
+    } else {
+      relaySocket.on('open', () =>
+        this.sendDialbackClaimHello(relaySocket, envelope.streamId),
+      );
+    }
+
+    bridge.start();
+  }
+
+  private dialFreshRelaySocket(streamId: string): WebSocket {
+    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
+    dialbackUrl.searchParams.set('streamId', streamId);
+    return new WebSocket(dialbackUrl, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
+  }
+
+  private openPoolRelaySocket(): WebSocket {
+    const url = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
+    url.searchParams.set('pool', '1');
+    return new WebSocket(url, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
+  }
+
+  private sendDialbackPoolHello(socket: BridgeSocket): void {
+    socket.send(
+      encodeJsonBytes({
+        type: 'ws.dialback.pool.hello',
+        version: TUNNEL_PROTOCOL_VERSION,
+        token: this.config.token,
+      }),
+    );
+  }
+
+  private sendDialbackClaimHello(socket: BridgeSocket, streamId: string): void {
+    socket.send(
+      encodeJsonBytes({
         type: 'ws.dialback.hello',
         version: TUNNEL_PROTOCOL_VERSION,
         token: this.config.token,
-        streamId: envelope.streamId,
-      }));
-    });
-
-    bridge.start();
+        streamId,
+      }),
+    );
   }
 
   private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
