@@ -202,6 +202,7 @@ export class TunnelClient {
     this.abortPendingRelayRpcRequests('Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
+    this.dialbackPool?.dispose();
   }
 
   status(): TunnelClientStatus {
@@ -1280,12 +1281,23 @@ export class DialbackPool {
    * for the whole delay and then lifted atomically.
    */
   private backoffPending = false;
+  /** Set once `dispose()` has run. Neutralizes prime()/acquire()/open() permanently. */
+  private disposed = false;
+  /**
+   * All pool-owned, not-yet-consumed sockets (warming or parked in `ready`).
+   * Tracked separately from `ready` so `dispose()` can close warming sockets
+   * too. A socket is removed from this set the moment ownership passes to
+   * the caller via `acquire()`, or the moment it's gone (closed/failed) —
+   * dispose() must never touch a socket the caller now owns.
+   */
+  private readonly sockets = new Set<PoolSocket>();
 
   constructor(private readonly options: DialbackPoolOptions) {
     this.schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs));
   }
 
   prime(): void {
+    if (this.disposed) return;
     if (this.options.size <= 0) return;
     if (this.backoffPending) return;
     while (this.ready.length + this.warming < this.options.size) {
@@ -1294,6 +1306,7 @@ export class DialbackPool {
   }
 
   acquire(): PoolSocket | null {
+    if (this.disposed) return null;
     let socket: PoolSocket | null = null;
     while (this.ready.length > 0) {
       const candidate = this.ready.shift() as PoolSocket;
@@ -1302,16 +1315,49 @@ export class DialbackPool {
         break;
       }
       // stale/dead: drop it silently
+      this.sockets.delete(candidate);
+    }
+    if (socket) {
+      // Ownership passes to the caller: dispose() must not close it.
+      this.sockets.delete(socket);
     }
     this.prime();
     return socket;
   }
 
+  /**
+   * Permanently disables the pool: closes every pool-owned socket (warming
+   * or parked ready), clears the ready list, and neutralizes any in-flight
+   * backoff timer (its callback calls `prime()`, which is now a no-op).
+   * Sockets already handed out via `acquire()` are not touched — the caller
+   * owns their lifecycle.
+   */
+  dispose(): void {
+    this.disposed = true;
+    for (const s of this.sockets) {
+      try {
+        s.close(1001, 'pool disposed');
+      } catch {
+        /* already closed */
+      }
+    }
+    this.sockets.clear();
+    this.ready.length = 0;
+  }
+
   private open(): void {
     const socket = this.options.createSocket();
+    this.sockets.add(socket);
     this.warming += 1;
     let opened = false;
     socket.on('open', () => {
+      if (this.disposed) {
+        opened = true;
+        this.warming -= 1;
+        this.sockets.delete(socket);
+        socket.close(1001, 'pool disposed');
+        return;
+      }
       opened = true;
       this.warming -= 1;
       this.consecutiveFailures = 0;
@@ -1326,6 +1372,7 @@ export class DialbackPool {
       }
       const i = this.ready.indexOf(socket);
       if (i >= 0) this.ready.splice(i, 1);
+      this.sockets.delete(socket);
 
       if (connectFailure) {
         // Socket died without ever firing 'open' (e.g. persistently

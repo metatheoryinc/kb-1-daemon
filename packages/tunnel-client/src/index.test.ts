@@ -1944,4 +1944,65 @@ describe("DialbackPool", () => {
       vi.useRealTimers();
     }
   });
+
+  it("dispose closes parked ready sockets and clears the ready list", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    expect(created.every((s) => s.closes.length === 0)).toBe(true);
+
+    pool.dispose();
+
+    expect(created.every((s) => s.closes.length > 0)).toBe(true);
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("after dispose, prime() opens nothing and acquire() returns null and opens nothing", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    pool.dispose();
+
+    pool.prime();
+    expect(created).toHaveLength(2);
+
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(2);
+  });
+
+  it("dispose neutralizes a pending backoff timer: the scheduled callback opens no new socket", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule });
+    pool.prime();
+    expect(created).toHaveLength(1);
+    // dies while warming, never opened: a connect failure, arms backoff
+    created[0].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(1);
+
+    pool.dispose();
+
+    // Invoke the captured backoff callback as if the timer fired after
+    // dispose. Without the `disposed` guard at the top of prime(), this
+    // would open a replacement socket and reopen a relay connection after
+    // the client already stopped.
+    scheduled[0].fn();
+    expect(created).toHaveLength(1);
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("a socket that fires 'open' after dispose is closed immediately and never handed out", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    expect(created).toHaveLength(1);
+    expect(created[0].closes).toHaveLength(0);
+
+    pool.dispose();
+
+    // The in-flight connect finishes after dispose already ran.
+    created[0].open();
+
+    expect(created[0].closes.length).toBeGreaterThan(0);
+    expect(pool.acquire()).toBeNull();
+  });
 });
