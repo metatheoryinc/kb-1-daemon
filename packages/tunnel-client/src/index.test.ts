@@ -15,6 +15,7 @@ import {
 import {
   ChunkedHttpRequestAssembler,
   DialbackBridge,
+  DialbackPool,
   TunnelClient,
   createBackoffDelay,
   materializedResponseBody,
@@ -1716,5 +1717,292 @@ describe('DialbackBridge', () => {
       streamId: 'stream-1',
       error: 'Error: daemon down',
     });
+  });
+});
+
+describe("DialbackPool", () => {
+  const OPEN = 1;
+
+  function makePool(
+    size: number,
+    extra: {
+      schedule?: (fn: () => void, delayMs: number) => void;
+      random?: () => number;
+    } = {},
+  ) {
+    const created: FakeSocket[] = [];
+    const helloed: FakeSocket[] = [];
+    const pool = new DialbackPool({
+      size,
+      createSocket: () => {
+        const s = new FakeSocket();
+        created.push(s);
+        return s;
+      },
+      sendPoolHello: (s) => helloed.push(s as FakeSocket),
+      ...extra,
+    });
+    return { pool, created, helloed };
+  }
+
+  /** Captures scheduled (fn, delayMs) pairs without running them until invoked. */
+  function makeCapturingSchedule() {
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
+    const schedule = (fn: () => void, delayMs: number) => {
+      scheduled.push({ fn, delayMs });
+    };
+    return { schedule, scheduled };
+  }
+
+  it("primes up to size and sends pool hello once each socket opens", () => {
+    const { pool, created, helloed } = makePool(3);
+    pool.prime();
+    expect(created).toHaveLength(3);
+    created.forEach((s) => s.open());
+    expect(helloed).toHaveLength(3);
+  });
+
+  it("acquire returns an opened socket and refills back to size", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    const s = pool.acquire();
+    expect(s).not.toBeNull();
+    expect(s!.readyState).toBe(OPEN);
+    // one consumed; pool opened a replacement
+    expect(created).toHaveLength(3);
+  });
+
+  it("acquire returns null when the pool is empty", () => {
+    const { pool } = makePool(1);
+    // prime() called, socket still CONNECTING (never opened)
+    pool.prime();
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("acquire skips a dead ready socket and returns null", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    created[0].open();
+    created[0].readyState = 3; // CLOSED under the socket without emitting close
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("size 0 opens nothing and always returns null", () => {
+    const { pool, created } = makePool(0);
+    pool.prime();
+    expect(created).toHaveLength(0);
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("closing a warming socket before it opens defers the refill via the injected scheduler (connect failure), and suppresses new opens for the whole backoff window", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule });
+    pool.prime();
+    expect(created).toHaveLength(1);
+    // still CONNECTING (never opened) — dies while warming: a connect failure
+    created[0].close();
+    // onGone must decrement `warming` (not double-count) but must NOT
+    // re-createSocket() synchronously — the refill is deferred.
+    expect(created).toHaveLength(1);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].delayMs).toBeGreaterThan(0);
+    // nothing acquirable until the scheduled refill actually runs
+    expect(pool.acquire()).toBeNull();
+    // The real guarantee under test: interleaved calls on the hot path
+    // (acquire()'s internal refill, and a bare prime() like control.ready
+    // triggers) during the backoff window must NOT open a replacement
+    // socket. A prior version of this test only asserted acquire()'s
+    // return value, which stayed null (nothing readyState OPEN) whether or
+    // not a new CONNECTING socket was opened underneath — so it passed
+    // even while the guard was absent. Assert on `created.length` instead,
+    // which is the thing that actually distinguishes "no new socket was
+    // opened" from "a socket opened but isn't ready yet".
+    expect(created).toHaveLength(1);
+    pool.prime();
+    expect(created).toHaveLength(1);
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(1);
+
+    scheduled[0].fn();
+    expect(created).toHaveLength(2);
+    expect(pool.acquire()).toBeNull();
+    created[1].open();
+    expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("control.ready-style prime() and hot-path acquire() calls during the backoff window open nothing until the scheduled callback runs", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(2, { schedule });
+    pool.prime();
+    expect(created).toHaveLength(2);
+    // one socket opens normally and sits ready; the other dies while
+    // warming — a connect failure that arms the backoff guard.
+    created[0].open();
+    created[1].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(2);
+
+    // Simulate the two real call sites that raced the backoff window in
+    // the pre-fix code: control.ready firing prime() directly, and the hot
+    // openDialback path calling acquire() (which internally re-primes).
+    pool.prime();
+    expect(created).toHaveLength(2);
+    pool.prime();
+    expect(created).toHaveLength(2);
+    const acquired = pool.acquire();
+    // The still-ready, already-open socket from created[0] may be handed
+    // out — consuming an existing ready socket is fine and expected...
+    expect(acquired).toBe(created[0]);
+    // ...but acquiring it must not have opened a replacement while the
+    // backoff guard is set.
+    expect(created).toHaveLength(2);
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(2);
+
+    // Once the scheduled callback fires, the guard lifts and refilling
+    // resumes: two replacements are opened — one for the failed socket,
+    // one for the ready socket that acquire() just consumed — bringing
+    // the pool back up to `size`.
+    scheduled[0].fn();
+    expect(created).toHaveLength(4);
+  });
+
+  it("consecutive connect failures increase the backoff delay passed to schedule", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule, random: () => 0 });
+    pool.prime();
+
+    // first connect failure
+    created[0].close();
+    expect(scheduled).toHaveLength(1);
+    const firstDelay = scheduled[0].delayMs;
+
+    // run the scheduled refill, which opens a new warming socket…
+    scheduled[0].fn();
+    expect(created).toHaveLength(2);
+    // …that itself fails to connect (still consecutive: no open in between)
+    created[1].close();
+    expect(scheduled).toHaveLength(2);
+    const secondDelay = scheduled[1].delayMs;
+
+    expect(secondDelay).toBeGreaterThan(firstDelay);
+  });
+
+  it("a successful open resets the failure count so a later failure starts from the base delay again", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule, random: () => 0 });
+    pool.prime();
+
+    // first connect failure
+    created[0].close();
+    const firstDelay = scheduled[0].delayMs;
+
+    // scheduled refill opens successfully, resetting consecutiveFailures
+    scheduled[0].fn();
+    created[1].open();
+
+    // that socket is later consumed/dies after opening — not a connect
+    // failure, refills promptly (no new schedule() call for it)…
+    created[1].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(3);
+
+    // …and now the freshly-created replacement fails to connect: since the
+    // last open reset the counter, this should start from the base delay.
+    created[2].close();
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[1].delayMs).toBe(firstDelay);
+  });
+
+  it("closing an unconsumed ready socket removes it and refills back to size", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    created[0].open();
+    // sitting READY, unconsumed — dies on its own
+    created[0].close();
+    // onGone must remove it from `ready` and trigger a background refill
+    expect(created).toHaveLength(2);
+    // the replacement isn't open yet, so nothing is acquirable
+    expect(pool.acquire()).toBeNull();
+    created[1].open();
+    expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("default scheduler (real setTimeout) still eventually refills after a connect failure", () => {
+    vi.useFakeTimers();
+    try {
+      const { pool, created } = makePool(1);
+      pool.prime();
+      expect(created).toHaveLength(1);
+      created[0].close();
+      // deferred: no synchronous refill with the default scheduler either
+      expect(created).toHaveLength(1);
+      vi.runOnlyPendingTimers();
+      expect(created).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispose closes parked ready sockets and clears the ready list", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    expect(created.every((s) => s.closes.length === 0)).toBe(true);
+
+    pool.dispose();
+
+    expect(created.every((s) => s.closes.length > 0)).toBe(true);
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("after dispose, prime() opens nothing and acquire() returns null and opens nothing", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    pool.dispose();
+
+    pool.prime();
+    expect(created).toHaveLength(2);
+
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(2);
+  });
+
+  it("dispose neutralizes a pending backoff timer: the scheduled callback opens no new socket", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule });
+    pool.prime();
+    expect(created).toHaveLength(1);
+    // dies while warming, never opened: a connect failure, arms backoff
+    created[0].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(1);
+
+    pool.dispose();
+
+    // Invoke the captured backoff callback as if the timer fired after
+    // dispose. Without the `disposed` guard at the top of prime(), this
+    // would open a replacement socket and reopen a relay connection after
+    // the client already stopped.
+    scheduled[0].fn();
+    expect(created).toHaveLength(1);
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("a socket that fires 'open' after dispose is closed immediately and never handed out", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    expect(created).toHaveLength(1);
+    expect(created[0].closes).toHaveLength(0);
+
+    pool.dispose();
+
+    // The in-flight connect finishes after dispose already ran.
+    created[0].open();
+
+    expect(created[0].closes.length).toBeGreaterThan(0);
+    expect(pool.acquire()).toBeNull();
   });
 });

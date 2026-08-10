@@ -50,6 +50,7 @@ export type TunnelClientConfig = {
   daemonVersion?: string;
   daemonBuild?: string;
   daemonInstanceId?: string;
+  dialbackPoolSize?: number;
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
@@ -150,12 +151,28 @@ export class TunnelClient {
   private relaySupportsHttpResponseChunkAcks = false;
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
+  private dialbackPool: DialbackPool | undefined;
 
   constructor(private readonly config: TunnelClientConfig) {
     this.logger = config.logger ?? consoleLogger;
     this.fetchImpl = config.fetch ?? fetch;
     this.random = config.random ?? Math.random;
     this.daemonInstanceId = config.daemonInstanceId ?? randomUUID();
+
+    this.dialbackPool = this.createDialbackPool();
+  }
+
+  private createDialbackPool(): DialbackPool | undefined {
+    const poolSize = this.config.dialbackPoolSize ?? 3;
+    return poolSize > 0
+      ? new DialbackPool({
+          size: poolSize,
+          logger: this.logger,
+          createSocket: () => this.openPoolRelaySocket(),
+          sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
+          random: this.random,
+        })
+      : undefined;
   }
 
   start(): void {
@@ -172,6 +189,12 @@ export class TunnelClient {
     }
     this.stopped = false;
     this.reconnectAttempt = 0;
+    // A prior stop() disposed the pool permanently; recreate a fresh,
+    // pristine instance for this (re)connect. Any still-in-flight sockets
+    // from the old, now-disposed pool resolve against handlers bound to
+    // that old instance and self-close via its `disposed` guard — they
+    // never get parked into the new pool's `ready` list.
+    this.dialbackPool = this.createDialbackPool();
     this.connectControl();
   }
 
@@ -188,6 +211,7 @@ export class TunnelClient {
     this.abortPendingRelayRpcRequests('Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
+    this.dialbackPool?.dispose();
   }
 
   status(): TunnelClientStatus {
@@ -333,6 +357,7 @@ export class TunnelClient {
             TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
           ) ?? false;
         this.logger.log('info', 'relay control ready', { protocolVersion: message.version });
+        this.dialbackPool?.prime();
         return;
       case 'control.pong':
         this.clearControlHeartbeatDeadline();
@@ -931,18 +956,15 @@ export class TunnelClient {
 
   private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {
     // Coordinated relay wire path; see the control URL comment above.
-    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
-    dialbackUrl.searchParams.set('streamId', envelope.streamId);
-
     const daemonWsUrl = new URL(envelope.path, this.config.daemonUrl);
     daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    const relaySocket = new WebSocket(dialbackUrl, {
-      headers: { authorization: `Bearer ${this.config.token}` },
-    });
     const daemonSocket = new WebSocket(daemonWsUrl, {
       headers: withoutHopByHop(envelope.headers),
     });
+
+    const pooled = this.dialbackPool?.acquire() ?? null;
+    const relaySocket = pooled ?? this.dialFreshRelaySocket(envelope.streamId);
+
     const bridge = new DialbackBridge({
       streamId: envelope.streamId,
       relaySocket,
@@ -951,16 +973,53 @@ export class TunnelClient {
       onRetrySafeClose: (message) => this.sendControlStreamClose(message),
     });
 
-    relaySocket.on('open', () => {
-      relaySocket.send(encodeJsonBytes({
+    if (pooled) {
+      // Already open + pool-hello'd: claim it for this stream now.
+      this.sendDialbackClaimHello(pooled, envelope.streamId);
+    } else {
+      relaySocket.on('open', () =>
+        this.sendDialbackClaimHello(relaySocket, envelope.streamId),
+      );
+    }
+
+    bridge.start();
+  }
+
+  private dialFreshRelaySocket(streamId: string): WebSocket {
+    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
+    dialbackUrl.searchParams.set('streamId', streamId);
+    return new WebSocket(dialbackUrl, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
+  }
+
+  private openPoolRelaySocket(): WebSocket {
+    const url = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
+    url.searchParams.set('pool', '1');
+    return new WebSocket(url, {
+      headers: { authorization: `Bearer ${this.config.token}` },
+    });
+  }
+
+  private sendDialbackPoolHello(socket: BridgeSocket): void {
+    socket.send(
+      encodeJsonBytes({
+        type: 'ws.dialback.pool.hello',
+        version: TUNNEL_PROTOCOL_VERSION,
+        token: this.config.token,
+      }),
+    );
+  }
+
+  private sendDialbackClaimHello(socket: BridgeSocket, streamId: string): void {
+    socket.send(
+      encodeJsonBytes({
         type: 'ws.dialback.hello',
         version: TUNNEL_PROTOCOL_VERSION,
         token: this.config.token,
-        streamId: envelope.streamId,
-      }));
-    });
-
-    bridge.start();
+        streamId,
+      }),
+    );
   }
 
   private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
@@ -1195,6 +1254,161 @@ export class DialbackBridge {
     this.pendingDaemonFrames.clear();
     this.options.relaySocket.close(code, reason);
     this.options.daemonSocket.close(code, reason);
+  }
+}
+
+export type PoolSocket = BridgeSocket;
+
+export type DialbackPoolOptions = {
+  size: number;
+  createSocket: () => PoolSocket;
+  sendPoolHello: (socket: PoolSocket) => void;
+  logger?: TunnelClientLogger;
+  /**
+   * Injectable scheduler for the backoff delay applied after a connect
+   * failure. Defaults to real `setTimeout`. Tests inject a synchronous or
+   * capturing implementation to drive the delay deterministically.
+   */
+  schedule?: (fn: () => void, delayMs: number) => void;
+  /** Injectable RNG passed through to `createBackoffDelay` for deterministic jitter in tests. */
+  random?: () => number;
+};
+
+const WS_OPEN = 1;
+
+export class DialbackPool {
+  private readonly ready: PoolSocket[] = [];
+  private readonly schedule: (fn: () => void, delayMs: number) => void;
+  private warming = 0;
+  private consecutiveFailures = 0;
+  /**
+   * Set while a connect-failure backoff timer is outstanding. While true,
+   * `prime()` is a no-op: no new pool socket may be opened, whether `prime()`
+   * is invoked directly, via `acquire()`'s refill, or via a non-failure
+   * `onGone` refill that happens to race the window. The scheduled callback
+   * clears this before calling the real refill, so the backoff is enforced
+   * for the whole delay and then lifted atomically.
+   */
+  private backoffPending = false;
+  /** Set once `dispose()` has run. Neutralizes prime()/acquire()/open() permanently. */
+  private disposed = false;
+  /**
+   * All pool-owned, not-yet-consumed sockets (warming or parked in `ready`).
+   * Tracked separately from `ready` so `dispose()` can close warming sockets
+   * too. A socket is removed from this set the moment ownership passes to
+   * the caller via `acquire()`, or the moment it's gone (closed/failed) —
+   * dispose() must never touch a socket the caller now owns.
+   */
+  private readonly sockets = new Set<PoolSocket>();
+
+  constructor(private readonly options: DialbackPoolOptions) {
+    this.schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs));
+  }
+
+  prime(): void {
+    if (this.disposed) return;
+    if (this.options.size <= 0) return;
+    if (this.backoffPending) return;
+    while (this.ready.length + this.warming < this.options.size) {
+      this.open();
+    }
+  }
+
+  acquire(): PoolSocket | null {
+    if (this.disposed) return null;
+    let socket: PoolSocket | null = null;
+    while (this.ready.length > 0) {
+      const candidate = this.ready.shift() as PoolSocket;
+      if (candidate.readyState === WS_OPEN) {
+        socket = candidate;
+        break;
+      }
+      // stale/dead: drop it silently
+      this.sockets.delete(candidate);
+    }
+    if (socket) {
+      // Ownership passes to the caller: dispose() must not close it.
+      this.sockets.delete(socket);
+    }
+    this.prime();
+    return socket;
+  }
+
+  /**
+   * Permanently disables the pool: closes every pool-owned socket (warming
+   * or parked ready), clears the ready list, and neutralizes any in-flight
+   * backoff timer (its callback calls `prime()`, which is now a no-op).
+   * Sockets already handed out via `acquire()` are not touched — the caller
+   * owns their lifecycle.
+   */
+  dispose(): void {
+    this.disposed = true;
+    for (const s of this.sockets) {
+      try {
+        s.close(1001, 'pool disposed');
+      } catch {
+        /* already closed */
+      }
+    }
+    this.sockets.clear();
+    this.ready.length = 0;
+  }
+
+  private open(): void {
+    const socket = this.options.createSocket();
+    this.sockets.add(socket);
+    this.warming += 1;
+    let opened = false;
+    socket.on('open', () => {
+      if (this.disposed) {
+        opened = true;
+        this.warming -= 1;
+        this.sockets.delete(socket);
+        socket.close(1001, 'pool disposed');
+        return;
+      }
+      opened = true;
+      this.warming -= 1;
+      this.consecutiveFailures = 0;
+      this.options.sendPoolHello(socket);
+      this.ready.push(socket);
+    });
+    const onGone = () => {
+      const connectFailure = !opened;
+      if (!opened) {
+        opened = true;
+        this.warming -= 1;
+      }
+      const i = this.ready.indexOf(socket);
+      if (i >= 0) this.ready.splice(i, 1);
+      this.sockets.delete(socket);
+
+      if (connectFailure) {
+        // Socket died without ever firing 'open' (e.g. persistently
+        // REJECTED pool-socket connects on version skew). Back off the
+        // re-prime instead of refilling every RTT with no ceiling.
+        this.consecutiveFailures += 1;
+        const delayMs = createBackoffDelay(
+          this.consecutiveFailures - 1,
+          {},
+          this.options.random,
+        );
+        this.backoffPending = true;
+        this.schedule(() => {
+          this.backoffPending = false;
+          this.prime();
+        }, delayMs);
+        return;
+      }
+
+      // Opened then later closed (consumed via acquire() or died while
+      // ready): not a connect failure, refill promptly as before.
+      this.prime();
+    };
+    socket.on('close', onGone);
+    socket.on('error', () => {
+      /* a close event follows; cleanup happens there */
+    });
   }
 }
 

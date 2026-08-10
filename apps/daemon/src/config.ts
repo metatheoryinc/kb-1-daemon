@@ -46,6 +46,7 @@ interface DaemonRelayConfig {
   token: string;
   daemonVersion?: string;
   daemonBuild?: string;
+  dialbackPoolSize?: number;
 }
 
 export interface ResolveConfigOptions {
@@ -107,11 +108,24 @@ export function resolveRelayConfig(env: NodeJS.ProcessEnv = process.env): Daemon
   const daemonVersion = resolveEnvValue(env, 'DAEMON_VERSION');
   const daemonBuild = resolveEnvValue(env, 'DAEMON_BUILD');
 
+  const configuredPoolSize = resolveEnvValue(env, 'DIALBACK_POOL_SIZE');
+  let dialbackPoolSize = 3;
+  if (configuredPoolSize !== undefined) {
+    const parsed = Number(configuredPoolSize);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new Error(
+        `KB1_DIALBACK_POOL_SIZE must be a non-negative integer. Received: ${configuredPoolSize}`
+      );
+    }
+    dialbackPoolSize = parsed;
+  }
+
   return {
     relayUrl: new URL(relayUrl).href,
     token,
     ...(daemonVersion ? { daemonVersion } : {}),
-    ...(daemonBuild ? { daemonBuild } : {})
+    ...(daemonBuild ? { daemonBuild } : {}),
+    dialbackPoolSize
   };
 }
 
