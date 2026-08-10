@@ -151,7 +151,7 @@ export class TunnelClient {
   private relaySupportsHttpResponseChunkAcks = false;
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
-  private readonly dialbackPool: DialbackPool | undefined;
+  private dialbackPool: DialbackPool | undefined;
 
   constructor(private readonly config: TunnelClientConfig) {
     this.logger = config.logger ?? consoleLogger;
@@ -159,17 +159,20 @@ export class TunnelClient {
     this.random = config.random ?? Math.random;
     this.daemonInstanceId = config.daemonInstanceId ?? randomUUID();
 
-    const poolSize = config.dialbackPoolSize ?? 3;
-    this.dialbackPool =
-      poolSize > 0
-        ? new DialbackPool({
-            size: poolSize,
-            logger: this.logger,
-            createSocket: () => this.openPoolRelaySocket(),
-            sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
-            random: this.random,
-          })
-        : undefined;
+    this.dialbackPool = this.createDialbackPool();
+  }
+
+  private createDialbackPool(): DialbackPool | undefined {
+    const poolSize = this.config.dialbackPoolSize ?? 3;
+    return poolSize > 0
+      ? new DialbackPool({
+          size: poolSize,
+          logger: this.logger,
+          createSocket: () => this.openPoolRelaySocket(),
+          sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
+          random: this.random,
+        })
+      : undefined;
   }
 
   start(): void {
@@ -186,6 +189,12 @@ export class TunnelClient {
     }
     this.stopped = false;
     this.reconnectAttempt = 0;
+    // A prior stop() disposed the pool permanently; recreate a fresh,
+    // pristine instance for this (re)connect. Any still-in-flight sockets
+    // from the old, now-disposed pool resolve against handlers bound to
+    // that old instance and self-close via its `disposed` guard — they
+    // never get parked into the new pool's `ready` list.
+    this.dialbackPool = this.createDialbackPool();
     this.connectControl();
   }
 
