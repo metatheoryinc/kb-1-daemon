@@ -1271,6 +1271,15 @@ export class DialbackPool {
   private readonly schedule: (fn: () => void, delayMs: number) => void;
   private warming = 0;
   private consecutiveFailures = 0;
+  /**
+   * Set while a connect-failure backoff timer is outstanding. While true,
+   * `prime()` is a no-op: no new pool socket may be opened, whether `prime()`
+   * is invoked directly, via `acquire()`'s refill, or via a non-failure
+   * `onGone` refill that happens to race the window. The scheduled callback
+   * clears this before calling the real refill, so the backoff is enforced
+   * for the whole delay and then lifted atomically.
+   */
+  private backoffPending = false;
 
   constructor(private readonly options: DialbackPoolOptions) {
     this.schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs));
@@ -1278,6 +1287,7 @@ export class DialbackPool {
 
   prime(): void {
     if (this.options.size <= 0) return;
+    if (this.backoffPending) return;
     while (this.ready.length + this.warming < this.options.size) {
       this.open();
     }
@@ -1327,7 +1337,11 @@ export class DialbackPool {
           {},
           this.options.random,
         );
-        this.schedule(() => this.prime(), delayMs);
+        this.backoffPending = true;
+        this.schedule(() => {
+          this.backoffPending = false;
+          this.prime();
+        }, delayMs);
         return;
       }
 

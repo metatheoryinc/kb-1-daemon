@@ -1795,7 +1795,7 @@ describe("DialbackPool", () => {
     expect(pool.acquire()).toBeNull();
   });
 
-  it("closing a warming socket before it opens defers the refill via the injected scheduler (connect failure)", () => {
+  it("closing a warming socket before it opens defers the refill via the injected scheduler (connect failure), and suppresses new opens for the whole backoff window", () => {
     const { schedule, scheduled } = makeCapturingSchedule();
     const { pool, created } = makePool(1, { schedule });
     pool.prime();
@@ -1809,12 +1809,63 @@ describe("DialbackPool", () => {
     expect(scheduled[0].delayMs).toBeGreaterThan(0);
     // nothing acquirable until the scheduled refill actually runs
     expect(pool.acquire()).toBeNull();
+    // The real guarantee under test: interleaved calls on the hot path
+    // (acquire()'s internal refill, and a bare prime() like control.ready
+    // triggers) during the backoff window must NOT open a replacement
+    // socket. A prior version of this test only asserted acquire()'s
+    // return value, which stayed null (nothing readyState OPEN) whether or
+    // not a new CONNECTING socket was opened underneath — so it passed
+    // even while the guard was absent. Assert on `created.length` instead,
+    // which is the thing that actually distinguishes "no new socket was
+    // opened" from "a socket opened but isn't ready yet".
+    expect(created).toHaveLength(1);
+    pool.prime();
+    expect(created).toHaveLength(1);
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(1);
 
     scheduled[0].fn();
     expect(created).toHaveLength(2);
     expect(pool.acquire()).toBeNull();
     created[1].open();
     expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("control.ready-style prime() and hot-path acquire() calls during the backoff window open nothing until the scheduled callback runs", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(2, { schedule });
+    pool.prime();
+    expect(created).toHaveLength(2);
+    // one socket opens normally and sits ready; the other dies while
+    // warming — a connect failure that arms the backoff guard.
+    created[0].open();
+    created[1].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(2);
+
+    // Simulate the two real call sites that raced the backoff window in
+    // the pre-fix code: control.ready firing prime() directly, and the hot
+    // openDialback path calling acquire() (which internally re-primes).
+    pool.prime();
+    expect(created).toHaveLength(2);
+    pool.prime();
+    expect(created).toHaveLength(2);
+    const acquired = pool.acquire();
+    // The still-ready, already-open socket from created[0] may be handed
+    // out — consuming an existing ready socket is fine and expected...
+    expect(acquired).toBe(created[0]);
+    // ...but acquiring it must not have opened a replacement while the
+    // backoff guard is set.
+    expect(created).toHaveLength(2);
+    expect(pool.acquire()).toBeNull();
+    expect(created).toHaveLength(2);
+
+    // Once the scheduled callback fires, the guard lifts and refilling
+    // resumes: two replacements are opened — one for the failed socket,
+    // one for the ready socket that acquire() just consumed — bringing
+    // the pool back up to `size`.
+    scheduled[0].fn();
+    expect(created).toHaveLength(4);
   });
 
   it("consecutive connect failures increase the backoff delay passed to schedule", () => {
