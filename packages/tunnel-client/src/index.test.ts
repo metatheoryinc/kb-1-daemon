@@ -15,6 +15,7 @@ import {
 import {
   ChunkedHttpRequestAssembler,
   DialbackBridge,
+  DialbackPool,
   TunnelClient,
   createBackoffDelay,
   materializedResponseBody,
@@ -1716,5 +1717,65 @@ describe('DialbackBridge', () => {
       streamId: 'stream-1',
       error: 'Error: daemon down',
     });
+  });
+});
+
+describe("DialbackPool", () => {
+  const OPEN = 1;
+
+  function makePool(size: number) {
+    const created: FakeSocket[] = [];
+    const helloed: FakeSocket[] = [];
+    const pool = new DialbackPool({
+      size,
+      createSocket: () => {
+        const s = new FakeSocket();
+        created.push(s);
+        return s;
+      },
+      sendPoolHello: (s) => helloed.push(s as FakeSocket),
+    });
+    return { pool, created, helloed };
+  }
+
+  it("primes up to size and sends pool hello once each socket opens", () => {
+    const { pool, created, helloed } = makePool(3);
+    pool.prime();
+    expect(created).toHaveLength(3);
+    created.forEach((s) => s.open());
+    expect(helloed).toHaveLength(3);
+  });
+
+  it("acquire returns an opened socket and refills back to size", () => {
+    const { pool, created } = makePool(2);
+    pool.prime();
+    created.forEach((s) => s.open());
+    const s = pool.acquire();
+    expect(s).not.toBeNull();
+    expect(s!.readyState).toBe(OPEN);
+    // one consumed; pool opened a replacement
+    expect(created).toHaveLength(3);
+  });
+
+  it("acquire returns null when the pool is empty", () => {
+    const { pool } = makePool(1);
+    // prime() called, socket still CONNECTING (never opened)
+    pool.prime();
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("acquire skips a dead ready socket and returns null", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    created[0].open();
+    created[0].readyState = 3; // CLOSED under the socket without emitting close
+    expect(pool.acquire()).toBeNull();
+  });
+
+  it("size 0 opens nothing and always returns null", () => {
+    const { pool, created } = makePool(0);
+    pool.prime();
+    expect(created).toHaveLength(0);
+    expect(pool.acquire()).toBeNull();
   });
 });

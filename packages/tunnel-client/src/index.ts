@@ -1199,6 +1199,70 @@ export class DialbackBridge {
   }
 }
 
+export type PoolSocket = BridgeSocket;
+
+export type DialbackPoolOptions = {
+  size: number;
+  createSocket: () => PoolSocket;
+  sendPoolHello: (socket: PoolSocket) => void;
+  logger?: TunnelClientLogger;
+};
+
+const WS_OPEN = 1;
+
+export class DialbackPool {
+  private readonly ready: PoolSocket[] = [];
+  private warming = 0;
+
+  constructor(private readonly options: DialbackPoolOptions) {}
+
+  prime(): void {
+    if (this.options.size <= 0) return;
+    while (this.ready.length + this.warming < this.options.size) {
+      this.open();
+    }
+  }
+
+  acquire(): PoolSocket | null {
+    let socket: PoolSocket | null = null;
+    while (this.ready.length > 0) {
+      const candidate = this.ready.shift() as PoolSocket;
+      if (candidate.readyState === WS_OPEN) {
+        socket = candidate;
+        break;
+      }
+      // stale/dead: drop it silently
+    }
+    this.prime();
+    return socket;
+  }
+
+  private open(): void {
+    const socket = this.options.createSocket();
+    this.warming += 1;
+    let opened = false;
+    socket.on('open', () => {
+      opened = true;
+      this.warming -= 1;
+      this.options.sendPoolHello(socket);
+      this.ready.push(socket);
+    });
+    const onGone = () => {
+      if (!opened) {
+        opened = true;
+        this.warming -= 1;
+      }
+      const i = this.ready.indexOf(socket);
+      if (i >= 0) this.ready.splice(i, 1);
+      this.prime();
+    };
+    socket.on('close', onGone);
+    socket.on('error', () => {
+      /* a close event follows; cleanup happens there */
+    });
+  }
+}
+
 type ChunkedHttpRequestDraft = {
   start: TunnelHttpRequestStartEnvelope;
   chunks: Map<number, Buffer>;
