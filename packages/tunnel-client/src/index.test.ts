@@ -1723,7 +1723,13 @@ describe('DialbackBridge', () => {
 describe("DialbackPool", () => {
   const OPEN = 1;
 
-  function makePool(size: number) {
+  function makePool(
+    size: number,
+    extra: {
+      schedule?: (fn: () => void, delayMs: number) => void;
+      random?: () => number;
+    } = {},
+  ) {
     const created: FakeSocket[] = [];
     const helloed: FakeSocket[] = [];
     const pool = new DialbackPool({
@@ -1734,8 +1740,18 @@ describe("DialbackPool", () => {
         return s;
       },
       sendPoolHello: (s) => helloed.push(s as FakeSocket),
+      ...extra,
     });
     return { pool, created, helloed };
+  }
+
+  /** Captures scheduled (fn, delayMs) pairs without running them until invoked. */
+  function makeCapturingSchedule() {
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
+    const schedule = (fn: () => void, delayMs: number) => {
+      scheduled.push({ fn, delayMs });
+    };
+    return { schedule, scheduled };
   }
 
   it("primes up to size and sends pool hello once each socket opens", () => {
@@ -1779,18 +1795,73 @@ describe("DialbackPool", () => {
     expect(pool.acquire()).toBeNull();
   });
 
-  it("closing a warming socket before it opens refills back to size", () => {
-    const { pool, created } = makePool(1);
+  it("closing a warming socket before it opens defers the refill via the injected scheduler (connect failure)", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule });
     pool.prime();
     expect(created).toHaveLength(1);
-    // still CONNECTING (never opened) — dies while warming
+    // still CONNECTING (never opened) — dies while warming: a connect failure
     created[0].close();
-    // onGone must decrement `warming` (not double-count) and trigger a background refill
+    // onGone must decrement `warming` (not double-count) but must NOT
+    // re-createSocket() synchronously — the refill is deferred.
+    expect(created).toHaveLength(1);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].delayMs).toBeGreaterThan(0);
+    // nothing acquirable until the scheduled refill actually runs
+    expect(pool.acquire()).toBeNull();
+
+    scheduled[0].fn();
     expect(created).toHaveLength(2);
-    // the replacement isn't open yet, so nothing is acquirable
     expect(pool.acquire()).toBeNull();
     created[1].open();
     expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("consecutive connect failures increase the backoff delay passed to schedule", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule, random: () => 0 });
+    pool.prime();
+
+    // first connect failure
+    created[0].close();
+    expect(scheduled).toHaveLength(1);
+    const firstDelay = scheduled[0].delayMs;
+
+    // run the scheduled refill, which opens a new warming socket…
+    scheduled[0].fn();
+    expect(created).toHaveLength(2);
+    // …that itself fails to connect (still consecutive: no open in between)
+    created[1].close();
+    expect(scheduled).toHaveLength(2);
+    const secondDelay = scheduled[1].delayMs;
+
+    expect(secondDelay).toBeGreaterThan(firstDelay);
+  });
+
+  it("a successful open resets the failure count so a later failure starts from the base delay again", () => {
+    const { schedule, scheduled } = makeCapturingSchedule();
+    const { pool, created } = makePool(1, { schedule, random: () => 0 });
+    pool.prime();
+
+    // first connect failure
+    created[0].close();
+    const firstDelay = scheduled[0].delayMs;
+
+    // scheduled refill opens successfully, resetting consecutiveFailures
+    scheduled[0].fn();
+    created[1].open();
+
+    // that socket is later consumed/dies after opening — not a connect
+    // failure, refills promptly (no new schedule() call for it)…
+    created[1].close();
+    expect(scheduled).toHaveLength(1);
+    expect(created).toHaveLength(3);
+
+    // …and now the freshly-created replacement fails to connect: since the
+    // last open reset the counter, this should start from the base delay.
+    created[2].close();
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[1].delayMs).toBe(firstDelay);
   });
 
   it("closing an unconsumed ready socket removes it and refills back to size", () => {
@@ -1805,5 +1876,21 @@ describe("DialbackPool", () => {
     expect(pool.acquire()).toBeNull();
     created[1].open();
     expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("default scheduler (real setTimeout) still eventually refills after a connect failure", () => {
+    vi.useFakeTimers();
+    try {
+      const { pool, created } = makePool(1);
+      pool.prime();
+      expect(created).toHaveLength(1);
+      created[0].close();
+      // deferred: no synchronous refill with the default scheduler either
+      expect(created).toHaveLength(1);
+      vi.runOnlyPendingTimers();
+      expect(created).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

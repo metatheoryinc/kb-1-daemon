@@ -167,6 +167,7 @@ export class TunnelClient {
             logger: this.logger,
             createSocket: () => this.openPoolRelaySocket(),
             sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
+            random: this.random,
           })
         : undefined;
   }
@@ -1253,15 +1254,27 @@ export type DialbackPoolOptions = {
   createSocket: () => PoolSocket;
   sendPoolHello: (socket: PoolSocket) => void;
   logger?: TunnelClientLogger;
+  /**
+   * Injectable scheduler for the backoff delay applied after a connect
+   * failure. Defaults to real `setTimeout`. Tests inject a synchronous or
+   * capturing implementation to drive the delay deterministically.
+   */
+  schedule?: (fn: () => void, delayMs: number) => void;
+  /** Injectable RNG passed through to `createBackoffDelay` for deterministic jitter in tests. */
+  random?: () => number;
 };
 
 const WS_OPEN = 1;
 
 export class DialbackPool {
   private readonly ready: PoolSocket[] = [];
+  private readonly schedule: (fn: () => void, delayMs: number) => void;
   private warming = 0;
+  private consecutiveFailures = 0;
 
-  constructor(private readonly options: DialbackPoolOptions) {}
+  constructor(private readonly options: DialbackPoolOptions) {
+    this.schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs));
+  }
 
   prime(): void {
     if (this.options.size <= 0) return;
@@ -1291,16 +1304,35 @@ export class DialbackPool {
     socket.on('open', () => {
       opened = true;
       this.warming -= 1;
+      this.consecutiveFailures = 0;
       this.options.sendPoolHello(socket);
       this.ready.push(socket);
     });
     const onGone = () => {
+      const connectFailure = !opened;
       if (!opened) {
         opened = true;
         this.warming -= 1;
       }
       const i = this.ready.indexOf(socket);
       if (i >= 0) this.ready.splice(i, 1);
+
+      if (connectFailure) {
+        // Socket died without ever firing 'open' (e.g. persistently
+        // REJECTED pool-socket connects on version skew). Back off the
+        // re-prime instead of refilling every RTT with no ceiling.
+        this.consecutiveFailures += 1;
+        const delayMs = createBackoffDelay(
+          this.consecutiveFailures - 1,
+          {},
+          this.options.random,
+        );
+        this.schedule(() => this.prime(), delayMs);
+        return;
+      }
+
+      // Opened then later closed (consumed via acquire() or died while
+      // ready): not a connect failure, refill promptly as before.
       this.prime();
     };
     socket.on('close', onGone);
