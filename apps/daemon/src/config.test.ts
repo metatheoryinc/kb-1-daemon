@@ -99,7 +99,8 @@ describe('daemon config', () => {
       webProxyTarget: 'http://127.0.0.1:5173',
       relay: {
         relayUrl: 'http://127.0.0.1:9920/t/dev1',
-        token: 'test-token'
+        token: 'test-token',
+        dialbackPoolSize: 3
       },
       actorDefault: 'user',
       historyCoalesceWindowMs: DEFAULT_HISTORY_COALESCE_WINDOW_MS,
@@ -163,7 +164,8 @@ describe('daemon config', () => {
       relayUrl: 'http://127.0.0.1:9920/t/dev1',
       token: 'test-token',
       daemonVersion: '0.1.0',
-      daemonBuild: 'registry.fly.io/kb1@sha256:abc123'
+      daemonBuild: 'registry.fly.io/kb1@sha256:abc123',
+      dialbackPoolSize: 3
     });
   });
 
@@ -180,6 +182,30 @@ describe('daemon config', () => {
     expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: '120000' })).toBe(DEFAULT_HISTORY_COALESCE_WINDOW_MS);
     expect(() => resolveHistoryCoalesceWindowMs({ KB1_HISTORY_COALESCE_WINDOW_MS: '-1' })).toThrow(/KB1_HISTORY_COALESCE_WINDOW_MS/);
     expect(resolveHistoryCoalesceWindowMs({ KB2_HISTORY_COALESCE_WINDOW_MS: 'five' })).toBe(DEFAULT_HISTORY_COALESCE_WINDOW_MS);
+  });
+
+  it('defaults dialbackPoolSize to 3 when KB1_DIALBACK_POOL_SIZE is unset', () => {
+    const cfg = resolveRelayConfig({ KB1_RELAY_URL: 'https://relay.test', KB1_RELAY_TOKEN: 't' });
+    expect(cfg?.dialbackPoolSize).toBe(3);
+  });
+
+  it('parses KB1_DIALBACK_POOL_SIZE as a non-negative integer', () => {
+    const cfg = resolveRelayConfig({
+      KB1_RELAY_URL: 'https://relay.test',
+      KB1_RELAY_TOKEN: 't',
+      KB1_DIALBACK_POOL_SIZE: '0'
+    });
+    expect(cfg?.dialbackPoolSize).toBe(0);
+  });
+
+  it('rejects a negative KB1_DIALBACK_POOL_SIZE', () => {
+    expect(() =>
+      resolveRelayConfig({
+        KB1_RELAY_URL: 'https://relay.test',
+        KB1_RELAY_TOKEN: 't',
+        KB1_DIALBACK_POOL_SIZE: '-1'
+      })
+    ).toThrow(/KB1_DIALBACK_POOL_SIZE/);
   });
 
   it('does not report KB2 deprecation warnings because KB2 env is not honored', () => {

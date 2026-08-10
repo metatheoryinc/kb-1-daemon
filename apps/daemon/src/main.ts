@@ -399,6 +399,7 @@ function createRelayLifecycleController(
     token: config.relay.token,
     daemonVersion: config.relay.daemonVersion,
     daemonBuild: config.relay.daemonBuild,
+    dialbackPoolSize: config.relay.dialbackPoolSize,
     logger: daemonRelayLogger,
   });
   let unsubscribeVaultEvents: (() => void) | undefined;

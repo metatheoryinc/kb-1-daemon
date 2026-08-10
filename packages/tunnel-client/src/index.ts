@@ -50,6 +50,7 @@ export type TunnelClientConfig = {
   daemonVersion?: string;
   daemonBuild?: string;
   daemonInstanceId?: string;
+  dialbackPoolSize?: number;
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
