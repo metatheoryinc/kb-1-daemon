@@ -1778,4 +1778,32 @@ describe("DialbackPool", () => {
     expect(created).toHaveLength(0);
     expect(pool.acquire()).toBeNull();
   });
+
+  it("closing a warming socket before it opens refills back to size", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    expect(created).toHaveLength(1);
+    // still CONNECTING (never opened) — dies while warming
+    created[0].close();
+    // onGone must decrement `warming` (not double-count) and trigger a background refill
+    expect(created).toHaveLength(2);
+    // the replacement isn't open yet, so nothing is acquirable
+    expect(pool.acquire()).toBeNull();
+    created[1].open();
+    expect(pool.acquire()).toBe(created[1]);
+  });
+
+  it("closing an unconsumed ready socket removes it and refills back to size", () => {
+    const { pool, created } = makePool(1);
+    pool.prime();
+    created[0].open();
+    // sitting READY, unconsumed — dies on its own
+    created[0].close();
+    // onGone must remove it from `ready` and trigger a background refill
+    expect(created).toHaveLength(2);
+    // the replacement isn't open yet, so nothing is acquirable
+    expect(pool.acquire()).toBeNull();
+    created[1].open();
+    expect(pool.acquire()).toBe(created[1]);
+  });
 });
