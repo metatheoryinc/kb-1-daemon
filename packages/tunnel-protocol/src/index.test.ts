@@ -1,4 +1,5 @@
 import {
+  DocumentStreamCodec,
   PendingFrameBuffer,
   RELAY_DEFAULT_REQUEST_TIMEOUT_MS,
   RELAY_ERROR_CODES,
@@ -15,10 +16,13 @@ import {
   TUNNEL_PENDING_STREAM_BYTE_LIMIT,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
+  TUNNEL_WS_DATA_CHUNK_BYTES,
+  TUNNEL_WS_FRAME_BYTE_LIMIT,
   decodeRelayFrame,
   decodeTunnelMessage,
   encodeRelayFrame,
-  encodeTunnelMessage
+  encodeTunnelMessage,
+  type TunnelWebSocketDataEnvelope
 } from "./index.js";
 
 it("round-trips an HTTP response envelope", () => {
@@ -56,16 +60,6 @@ it("round-trips control hello feature advertisement", () => {
       TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
       TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1
     ]
-  } as const;
-
-  expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
-});
-
-it("round-trips dialback pool hello", () => {
-  const hello = {
-    type: "ws.dialback.pool.hello",
-    version: TUNNEL_PROTOCOL_VERSION,
-    token: "test-token"
   } as const;
 
   expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
@@ -148,7 +142,7 @@ it("round-trips chunked HTTP response envelopes", () => {
 });
 
 it("carries the relay prototype protocol version", () => {
-  expect(TUNNEL_PROTOCOL_VERSION).toBe(2);
+  expect(TUNNEL_PROTOCOL_VERSION).toBe(3);
 });
 
 it("rejects malformed tunnel messages", () => {
@@ -672,4 +666,163 @@ it("cancels and clears relay pending rpc requests", () => {
   expect(pending.add("req-2")).toMatchObject({ ok: true, pending: 1 });
   pending.clear();
   expect(pending.size).toBe(0);
+});
+
+describe("ws.data protocol surface", () => {
+  it("bumps the protocol version to 3", () => {
+    expect(TUNNEL_PROTOCOL_VERSION).toBe(3);
+  });
+
+  it("keeps a base64 ws.data chunk under the frame cap", () => {
+    const frame: TunnelWebSocketDataEnvelope = {
+      type: "ws.data",
+      streamId: "s-1",
+      seq: 0,
+      bytesB64: Buffer.alloc(TUNNEL_WS_DATA_CHUNK_BYTES, 7).toString("base64"),
+      fin: true
+    };
+    expect(
+      Buffer.byteLength(encodeTunnelMessage(frame))
+    ).toBeLessThanOrEqual(TUNNEL_WS_FRAME_BYTE_LIMIT);
+  });
+
+  it("round-trips a ws.data envelope through decode", () => {
+    const frame: TunnelWebSocketDataEnvelope = {
+      type: "ws.data",
+      streamId: "s-2",
+      seq: 3,
+      bytesB64: "AAAA",
+      fin: false
+    };
+    const decoded = decodeTunnelMessage(encodeTunnelMessage(frame));
+    expect(decoded).toEqual(frame);
+  });
+});
+
+describe("DocumentStreamCodec", () => {
+  it("enqueues a small message and pullSendable returns a single fin chunk", () => {
+    const codec = new DocumentStreamCodec("s");
+    codec.enqueue(new Uint8Array([1, 2, 3]));
+    const frames = codec.pullSendable();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ streamId: "s", seq: 0, fin: true });
+    expect(Buffer.from(frames[0].bytesB64, "base64")).toEqual(
+      Buffer.from([1, 2, 3])
+    );
+    expect(codec.hasPendingOutbound()).toBe(false);
+    expect(codec.unackedBytes()).toBe(3);
+  });
+
+  it("enqueues a zero-length message as a single empty fin frame", () => {
+    const codec = new DocumentStreamCodec("s");
+    codec.enqueue(new Uint8Array([]));
+    const frames = codec.pullSendable();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ streamId: "s", seq: 0, bytesB64: "", fin: true });
+    expect(codec.hasPendingOutbound()).toBe(false);
+    expect(codec.unackedBytes()).toBe(0);
+  });
+
+  it("splits a large message into capped chunks with a final fin when the window allows", () => {
+    const codec = new DocumentStreamCodec("s");
+    const big = new Uint8Array(TUNNEL_WS_DATA_CHUNK_BYTES * 2 + 10).fill(9);
+    codec.enqueue(big);
+    const frames = codec.pullSendable();
+    expect(frames).toHaveLength(3);
+    expect(frames.map((f) => f.seq)).toEqual([0, 1, 2]);
+    expect(frames.slice(0, 2).every((f) => f.fin === false)).toBe(true);
+    expect(frames[2].fin).toBe(true);
+    const reassembled = Buffer.concat(
+      frames.map((f) => Buffer.from(f.bytesB64, "base64"))
+    );
+    expect(reassembled.byteLength).toBe(big.byteLength);
+  });
+
+  it("caps pullSendable at the window and releases the rest as acks arrive", () => {
+    // chunkBytes 2, windowBytes 4 => at most 2 chunks (4 bytes) outstanding.
+    const codec = new DocumentStreamCodec("s", { chunkBytes: 2, windowBytes: 4 });
+    const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]); // 4 chunks
+    codec.enqueue(payload);
+
+    // First pull: only what fits in the window (2 chunks / 4 bytes).
+    const first = codec.pullSendable();
+    expect(first).toHaveLength(2);
+    expect(first.map((f) => f.seq)).toEqual([0, 1]);
+    const firstBytes = first.reduce(
+      (n, f) => n + Buffer.from(f.bytesB64, "base64").byteLength,
+      0
+    );
+    expect(firstBytes).toBeLessThanOrEqual(4);
+    expect(codec.unackedBytes()).toBe(4);
+    expect(codec.hasPendingOutbound()).toBe(true);
+
+    // Nothing more until an ack frees window room.
+    expect(codec.pullSendable()).toHaveLength(0);
+
+    codec.onAck(0); // frees 2 bytes
+    const second = codec.pullSendable();
+    expect(second.map((f) => f.seq)).toEqual([2]);
+    expect(codec.hasPendingOutbound()).toBe(true);
+
+    codec.onAck(1); // frees 2 bytes
+    const third = codec.pullSendable();
+    expect(third.map((f) => f.seq)).toEqual([3]);
+    expect(third[0].fin).toBe(true);
+    expect(codec.hasPendingOutbound()).toBe(false);
+
+    // Every byte was delivered exactly once, in order.
+    const all = [...first, ...second, ...third];
+    expect(all.map((f) => f.seq)).toEqual([0, 1, 2, 3]);
+    const reassembled = Buffer.concat(
+      all.map((f) => Buffer.from(f.bytesB64, "base64"))
+    );
+    expect(reassembled).toEqual(Buffer.from(payload));
+  });
+
+  it("always sends at least one frame even if a single chunk exceeds the window", () => {
+    const codec = new DocumentStreamCodec("s", { chunkBytes: 8, windowBytes: 4 });
+    codec.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6])); // one 6-byte chunk > window
+    const frames = codec.pullSendable();
+    expect(frames).toHaveLength(1);
+    expect(frames[0].fin).toBe(true);
+    expect(codec.unackedBytes()).toBe(6);
+    expect(codec.hasPendingOutbound()).toBe(false);
+  });
+
+  it("reassembles multi-chunk frames on the receiver via fin", () => {
+    const tx = new DocumentStreamCodec("s");
+    const rx = new DocumentStreamCodec("s");
+    const payload = new Uint8Array(TUNNEL_WS_DATA_CHUNK_BYTES + 5).fill(4);
+    tx.enqueue(payload);
+    const frames = tx.pullSendable();
+    const outputs = frames.map((f) => rx.ingest(f));
+    expect(outputs[0]).toBeNull();
+    expect(Buffer.from(outputs[1]!)).toEqual(Buffer.from(payload));
+  });
+
+  it("tracks the unacked send window and releases on ack", () => {
+    // One message = one chunk (default chunkBytes is large); 5 bytes fills the
+    // 4-byte window (sent under the deadlock-avoidance one-frame rule).
+    const codec = new DocumentStreamCodec("s", { windowBytes: 4 });
+    codec.enqueue(new Uint8Array([1, 2, 3, 4, 5]));
+    codec.pullSendable(); // seq 0, 5 bytes unacked
+    expect(codec.unackedBytes()).toBe(5);
+    expect(codec.canSend()).toBe(false);
+    codec.onAck(0);
+    expect(codec.unackedBytes()).toBe(0);
+    expect(codec.canSend()).toBe(true);
+  });
+
+  it("throws when a reassembly exceeds the message byte limit", () => {
+    const rx = new DocumentStreamCodec("s", { messageByteLimit: 4 });
+    expect(() =>
+      rx.ingest({
+        type: "ws.data",
+        streamId: "s",
+        seq: 0,
+        bytesB64: "AAAAAAAA",
+        fin: false
+      })
+    ).toThrow(RangeError);
+  });
 });

@@ -1,8 +1,8 @@
-export const TUNNEL_PROTOCOL_VERSION = 2 as const;
+export const TUNNEL_PROTOCOL_VERSION = 3 as const;
 
 export type TunnelProtocolVersion = typeof TUNNEL_PROTOCOL_VERSION;
 
-export type TunnelRole = "control" | "dialback";
+export type TunnelRole = "control";
 
 export const RELAY_TRANSPORT_PROTOCOL_VERSION = 1 as const;
 
@@ -17,6 +17,15 @@ export const TUNNEL_HTTP_PENDING_BYTE_LIMIT = 8 * 1024 * 1024;
 export const TUNNEL_HTTP_REQUEST_TIMEOUT_MS = 15_000 as const;
 export const TUNNEL_HTTP_BODY_CHUNK_BYTES = 256 * 1024;
 export const TUNNEL_WS_FRAME_BYTE_LIMIT = 256 * 1024;
+// A ws.data chunk is base64-encoded (~4/3 inflation) and wrapped in a small
+// JSON envelope; size the raw chunk so the encoded frame stays under the cap,
+// mirroring how sendHttpResponse derives its chunk size from the frame limit.
+export const TUNNEL_WS_DATA_CHUNK_BYTES =
+  Math.floor((TUNNEL_WS_FRAME_BYTE_LIMIT - 1024) / 4) * 3;
+// Bounded per-stream unacked-byte send window (backpressure).
+export const TUNNEL_WS_DATA_WINDOW_BYTES = 4 * 1024 * 1024;
+// Cap a single reassembled logical document message (missing `fin` guard).
+export const TUNNEL_WS_DATA_MESSAGE_BYTE_LIMIT = 8 * 1024 * 1024;
 export const RELAY_FRAME_BYTE_LIMIT = 256 * 1024;
 export const RELAY_PENDING_REQUEST_LIMIT = 128 as const;
 export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
@@ -353,6 +362,148 @@ export class RelayPendingRequestTable {
   }
 }
 
+// Encode/decode helpers below use the platform-standard atob/btoa (available
+// in both Node and the Workers runtime) rather than Node's Buffer, so this
+// package's build stays free of @types/node (see tsconfig.build.json).
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK_SIZE = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function concatBytes(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array {
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+export class DocumentStreamCodec {
+  private txSeq = 0;
+  private unacked = 0;
+  private readonly unackedBySeq = new Map<number, number>();
+  private readonly outbound: Array<{ frame: TunnelWebSocketDataEnvelope; bytes: number }> = [];
+  private readonly inbound: Uint8Array[] = [];
+  private inboundBytes = 0;
+
+  private readonly chunkBytes: number;
+  private readonly windowBytes: number;
+  private readonly messageByteLimit: number;
+
+  constructor(
+    readonly streamId: string,
+    opts: {
+      chunkBytes?: number;
+      windowBytes?: number;
+      messageByteLimit?: number;
+    } = {}
+  ) {
+    this.chunkBytes = opts.chunkBytes ?? TUNNEL_WS_DATA_CHUNK_BYTES;
+    this.windowBytes = opts.windowBytes ?? TUNNEL_WS_DATA_WINDOW_BYTES;
+    this.messageByteLimit =
+      opts.messageByteLimit ?? TUNNEL_WS_DATA_MESSAGE_BYTE_LIMIT;
+  }
+
+  // Split `bytes` into chunk frames and push them onto the internal outbound
+  // queue. Sending/window accounting happens later in `pullSendable`, so a large
+  // message does not burst past the window on enqueue.
+  enqueue(bytes: Uint8Array): void {
+    if (bytes.byteLength === 0) {
+      const seq = this.txSeq++;
+      this.outbound.push({
+        frame: { type: "ws.data", streamId: this.streamId, seq, bytesB64: "", fin: true },
+        bytes: 0
+      });
+      return;
+    }
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const chunk = bytes.subarray(offset, offset + this.chunkBytes);
+      offset += chunk.byteLength;
+      const seq = this.txSeq++;
+      this.outbound.push({
+        frame: {
+          type: "ws.data",
+          streamId: this.streamId,
+          seq,
+          bytesB64: bytesToBase64(chunk),
+          fin: offset >= bytes.byteLength
+        },
+        bytes: chunk.byteLength
+      });
+    }
+  }
+
+  // Pop frames off the front of the outbound queue while they fit in the send
+  // window, counting `unacked` as each frame is pulled. Always allows at least
+  // one frame when nothing is outstanding so a single oversized chunk cannot
+  // deadlock the stream.
+  pullSendable(): TunnelWebSocketDataEnvelope[] {
+    const out: TunnelWebSocketDataEnvelope[] = [];
+    while (this.outbound.length > 0) {
+      const next = this.outbound[0];
+      if (this.unacked > 0 && this.unacked + next.bytes > this.windowBytes) break;
+      this.outbound.shift();
+      this.unacked += next.bytes;
+      if (next.bytes > 0) this.unackedBySeq.set(next.frame.seq, next.bytes);
+      out.push(next.frame);
+    }
+    return out;
+  }
+
+  hasPendingOutbound(): boolean {
+    return this.outbound.length > 0;
+  }
+
+  ingest(frame: TunnelWebSocketDataEnvelope): Uint8Array | null {
+    const chunk = base64ToBytes(frame.bytesB64);
+    if (this.inboundBytes + chunk.byteLength > this.messageByteLimit) {
+      this.inbound.length = 0;
+      this.inboundBytes = 0;
+      throw new RangeError(
+        `ws.data reassembly for ${this.streamId} exceeded ${this.messageByteLimit} bytes`
+      );
+    }
+    this.inbound.push(chunk);
+    this.inboundBytes += chunk.byteLength;
+    if (!frame.fin) return null;
+    const message = concatBytes(this.inbound, this.inboundBytes);
+    this.inbound.length = 0;
+    this.inboundBytes = 0;
+    return message;
+  }
+
+  onAck(seq: number): void {
+    const bytes = this.unackedBySeq.get(seq);
+    if (bytes === undefined) return;
+    this.unackedBySeq.delete(seq);
+    this.unacked = Math.max(0, this.unacked - bytes);
+  }
+
+  unackedBytes(): number {
+    return this.unacked;
+  }
+
+  canSend(): boolean {
+    return this.unacked < this.windowBytes;
+  }
+}
+
 export type TunnelControlClientHello = {
   type: "control.hello";
   version: TunnelProtocolVersion;
@@ -463,24 +614,25 @@ export type TunnelWebSocketOpenEnvelope = {
   headers: Record<string, string>;
 };
 
-export type TunnelWebSocketDialbackHello = {
-  type: "ws.dialback.hello";
-  version: TunnelProtocolVersion;
-  token: string;
-  streamId: string;
-};
-
-export type TunnelWebSocketDialbackPoolHello = {
-  type: "ws.dialback.pool.hello";
-  version: TunnelProtocolVersion;
-  token: string;
-};
-
 export type TunnelWebSocketCloseEnvelope = {
   type: "ws.close";
   streamId: string;
   code: TunnelCloseCode;
   reason: string;
+};
+
+export type TunnelWebSocketDataEnvelope = {
+  type: "ws.data";
+  streamId: string;
+  seq: number;
+  bytesB64: string;
+  fin: boolean;
+};
+
+export type TunnelWebSocketDataAckEnvelope = {
+  type: "ws.data.ack";
+  streamId: string;
+  seq: number;
 };
 
 export type TunnelRelayFrameEnvelope = {
@@ -492,6 +644,8 @@ export type TunnelControlClientMessage =
   | TunnelControlClientHello
   | TunnelControlPing
   | TunnelWebSocketCloseEnvelope
+  | TunnelWebSocketDataEnvelope
+  | TunnelWebSocketDataAckEnvelope
   | TunnelRelayFrameEnvelope
   | TunnelHttpResponseEnvelope
   | TunnelHttpResponseStartEnvelope
@@ -509,16 +663,14 @@ export type TunnelControlServerMessage =
   | TunnelHttpRequestEndEnvelope
   | TunnelHttpCancelEnvelope
   | TunnelHttpResponseChunkAckEnvelope
-  | TunnelWebSocketOpenEnvelope;
-
-export type TunnelDialbackClientMessage =
-  | TunnelWebSocketDialbackHello
-  | TunnelWebSocketDialbackPoolHello;
+  | TunnelWebSocketOpenEnvelope
+  | TunnelWebSocketCloseEnvelope
+  | TunnelWebSocketDataEnvelope
+  | TunnelWebSocketDataAckEnvelope;
 
 export type TunnelJsonMessage =
   | TunnelControlClientMessage
-  | TunnelControlServerMessage
-  | TunnelDialbackClientMessage;
+  | TunnelControlServerMessage;
 
 export function encodeTunnelMessage(message: TunnelJsonMessage): string {
   return JSON.stringify(message);
