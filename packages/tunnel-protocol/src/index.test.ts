@@ -1,4 +1,5 @@
 import {
+  DocumentStreamCodec,
   PendingFrameBuffer,
   RELAY_DEFAULT_REQUEST_TIMEOUT_MS,
   RELAY_ERROR_CODES,
@@ -705,5 +706,66 @@ describe("ws.data protocol surface", () => {
     };
     const decoded = decodeTunnelMessage(encodeTunnelMessage(frame));
     expect(decoded).toEqual(frame);
+  });
+});
+
+describe("DocumentStreamCodec", () => {
+  it("passes a small frame through as a single fin chunk", () => {
+    const codec = new DocumentStreamCodec("s");
+    const frames = codec.encode(new Uint8Array([1, 2, 3]));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ streamId: "s", seq: 0, fin: true });
+    expect(Buffer.from(frames[0].bytesB64, "base64")).toEqual(
+      Buffer.from([1, 2, 3])
+    );
+  });
+
+  it("splits a large frame into capped chunks with a final fin", () => {
+    const codec = new DocumentStreamCodec("s");
+    const big = new Uint8Array(TUNNEL_WS_DATA_CHUNK_BYTES * 2 + 10).fill(9);
+    const frames = codec.encode(big);
+    expect(frames).toHaveLength(3);
+    expect(frames.map((f) => f.seq)).toEqual([0, 1, 2]);
+    expect(frames.slice(0, 2).every((f) => f.fin === false)).toBe(true);
+    expect(frames[2].fin).toBe(true);
+    const reassembled = Buffer.concat(
+      frames.map((f) => Buffer.from(f.bytesB64, "base64"))
+    );
+    expect(reassembled.byteLength).toBe(big.byteLength);
+  });
+
+  it("reassembles multi-chunk frames on the receiver via fin", () => {
+    const tx = new DocumentStreamCodec("s");
+    const rx = new DocumentStreamCodec("s");
+    const payload = new Uint8Array(TUNNEL_WS_DATA_CHUNK_BYTES + 5).fill(4);
+    const frames = tx.encode(payload);
+    const outputs = frames.map((f) => rx.ingest(f));
+    expect(outputs[0]).toBeNull();
+    expect(Buffer.from(outputs[1]!)).toEqual(Buffer.from(payload));
+  });
+
+  it("tracks the unacked send window and releases on ack", () => {
+    const codec = new DocumentStreamCodec("s", { windowBytes: 4 });
+    codec.encode(new Uint8Array([1, 2, 3])); // seq 0, 3 bytes unacked
+    expect(codec.unackedBytes()).toBe(3);
+    expect(codec.canSend()).toBe(true);
+    codec.encode(new Uint8Array([4, 5])); // seq 1, +2 => 5 unacked >= 4
+    expect(codec.canSend()).toBe(false);
+    codec.onAck(0);
+    expect(codec.unackedBytes()).toBe(2);
+    expect(codec.canSend()).toBe(true);
+  });
+
+  it("throws when a reassembly exceeds the message byte limit", () => {
+    const rx = new DocumentStreamCodec("s", { messageByteLimit: 4 });
+    expect(() =>
+      rx.ingest({
+        type: "ws.data",
+        streamId: "s",
+        seq: 0,
+        bytesB64: "AAAAAAAA",
+        fin: false
+      })
+    ).toThrow(RangeError);
   });
 });

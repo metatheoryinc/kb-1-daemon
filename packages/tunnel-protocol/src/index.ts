@@ -362,6 +362,121 @@ export class RelayPendingRequestTable {
   }
 }
 
+// Encode/decode helpers below use the platform-standard atob/btoa (available
+// in both Node and the Workers runtime) rather than Node's Buffer, so this
+// package's build stays free of @types/node (see tsconfig.build.json).
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK_SIZE = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK_SIZE));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function concatBytes(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array {
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+export class DocumentStreamCodec {
+  private txSeq = 0;
+  private unacked = 0;
+  private readonly unackedBySeq = new Map<number, number>();
+  private readonly inbound: Uint8Array[] = [];
+  private inboundBytes = 0;
+
+  private readonly chunkBytes: number;
+  private readonly windowBytes: number;
+  private readonly messageByteLimit: number;
+
+  constructor(
+    readonly streamId: string,
+    opts: {
+      chunkBytes?: number;
+      windowBytes?: number;
+      messageByteLimit?: number;
+    } = {}
+  ) {
+    this.chunkBytes = opts.chunkBytes ?? TUNNEL_WS_DATA_CHUNK_BYTES;
+    this.windowBytes = opts.windowBytes ?? TUNNEL_WS_DATA_WINDOW_BYTES;
+    this.messageByteLimit =
+      opts.messageByteLimit ?? TUNNEL_WS_DATA_MESSAGE_BYTE_LIMIT;
+  }
+
+  encode(bytes: Uint8Array): TunnelWebSocketDataEnvelope[] {
+    const frames: TunnelWebSocketDataEnvelope[] = [];
+    if (bytes.byteLength === 0) {
+      const seq = this.txSeq++;
+      frames.push({ type: "ws.data", streamId: this.streamId, seq, bytesB64: "", fin: true });
+      return frames;
+    }
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const chunk = bytes.subarray(offset, offset + this.chunkBytes);
+      offset += chunk.byteLength;
+      const seq = this.txSeq++;
+      this.unacked += chunk.byteLength;
+      this.unackedBySeq.set(seq, chunk.byteLength);
+      frames.push({
+        type: "ws.data",
+        streamId: this.streamId,
+        seq,
+        bytesB64: bytesToBase64(chunk),
+        fin: offset >= bytes.byteLength
+      });
+    }
+    return frames;
+  }
+
+  ingest(frame: TunnelWebSocketDataEnvelope): Uint8Array | null {
+    const chunk = base64ToBytes(frame.bytesB64);
+    if (this.inboundBytes + chunk.byteLength > this.messageByteLimit) {
+      this.inbound.length = 0;
+      this.inboundBytes = 0;
+      throw new RangeError(
+        `ws.data reassembly for ${this.streamId} exceeded ${this.messageByteLimit} bytes`
+      );
+    }
+    this.inbound.push(chunk);
+    this.inboundBytes += chunk.byteLength;
+    if (!frame.fin) return null;
+    const message = concatBytes(this.inbound, this.inboundBytes);
+    this.inbound.length = 0;
+    this.inboundBytes = 0;
+    return message;
+  }
+
+  onAck(seq: number): void {
+    const bytes = this.unackedBySeq.get(seq);
+    if (bytes === undefined) return;
+    this.unackedBySeq.delete(seq);
+    this.unacked = Math.max(0, this.unacked - bytes);
+  }
+
+  unackedBytes(): number {
+    return this.unacked;
+  }
+
+  canSend(): boolean {
+    return this.unacked < this.windowBytes;
+  }
+}
+
 export type TunnelControlClientHello = {
   type: "control.hello";
   version: TunnelProtocolVersion;
