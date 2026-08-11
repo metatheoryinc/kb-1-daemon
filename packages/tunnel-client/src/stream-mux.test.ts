@@ -104,7 +104,7 @@ describe("StreamMux", () => {
     expect(send).toHaveBeenCalledWith({ type: "ws.data.ack", streamId: "s1", seq: 1 });
   });
 
-  it("pauses the loopback when outbound backpressure exceeds the window, then resumes once acked", () => {
+  it("caps outbound at the window instead of bursting a whole large message, then drains as acks arrive", () => {
     const lb = fakeLoopback();
     const send = vi.fn();
     const mux = new StreamMux({
@@ -117,14 +117,29 @@ describe("StreamMux", () => {
     mux.handleOpen(OPEN);
     lb.emit("open");
 
-    lb.emit("message", Buffer.from([1, 2, 3, 4, 5, 6])); // 3 chunks of 2 bytes = 6 unacked > window of 4
+    const dataFrames = () =>
+      send.mock.calls.map((c) => c[0]).filter((m) => m.type === "ws.data");
+
+    // One large loopback message: 4 chunks of 2 bytes (8 bytes) >> window of 4.
+    lb.emit("message", Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]));
+
+    // Only a window's worth (2 chunks / 4 bytes) is sent — NOT the whole message.
+    expect(dataFrames().map((f) => f.seq)).toEqual([0, 1]);
+    const outstanding = dataFrames().reduce(
+      (n, f) => n + Buffer.from(f.bytesB64, "base64").byteLength,
+      0
+    );
+    expect(outstanding).toBeLessThanOrEqual(4);
     expect(lb.paused).toBe(true);
 
-    mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 0 }); // unacked 4, still not < window
-    expect(lb.paused).toBe(true);
+    mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 0 }); // frees 2 bytes
+    expect(dataFrames().map((f) => f.seq)).toEqual([0, 1, 2]);
+    expect(lb.paused).toBe(true); // still one chunk queued
 
-    mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 1 }); // unacked 2, < window
-    expect(lb.paused).toBe(false);
+    mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 1 }); // frees 2 bytes
+    expect(dataFrames().map((f) => f.seq)).toEqual([0, 1, 2, 3]);
+    expect(dataFrames()[3].fin).toBe(true);
+    expect(lb.paused).toBe(false); // fully drained -> resumed
   });
 
   it("ignores a second ws.open for an already-open stream", () => {

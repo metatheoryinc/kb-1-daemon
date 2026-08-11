@@ -397,6 +397,7 @@ export class DocumentStreamCodec {
   private txSeq = 0;
   private unacked = 0;
   private readonly unackedBySeq = new Map<number, number>();
+  private readonly outbound: Array<{ frame: TunnelWebSocketDataEnvelope; bytes: number }> = [];
   private readonly inbound: Uint8Array[] = [];
   private inboundBytes = 0;
 
@@ -418,29 +419,55 @@ export class DocumentStreamCodec {
       opts.messageByteLimit ?? TUNNEL_WS_DATA_MESSAGE_BYTE_LIMIT;
   }
 
-  encode(bytes: Uint8Array): TunnelWebSocketDataEnvelope[] {
-    const frames: TunnelWebSocketDataEnvelope[] = [];
+  // Split `bytes` into chunk frames and push them onto the internal outbound
+  // queue. Sending/window accounting happens later in `pullSendable`, so a large
+  // message does not burst past the window on enqueue.
+  enqueue(bytes: Uint8Array): void {
     if (bytes.byteLength === 0) {
       const seq = this.txSeq++;
-      frames.push({ type: "ws.data", streamId: this.streamId, seq, bytesB64: "", fin: true });
-      return frames;
+      this.outbound.push({
+        frame: { type: "ws.data", streamId: this.streamId, seq, bytesB64: "", fin: true },
+        bytes: 0
+      });
+      return;
     }
     let offset = 0;
     while (offset < bytes.byteLength) {
       const chunk = bytes.subarray(offset, offset + this.chunkBytes);
       offset += chunk.byteLength;
       const seq = this.txSeq++;
-      this.unacked += chunk.byteLength;
-      this.unackedBySeq.set(seq, chunk.byteLength);
-      frames.push({
-        type: "ws.data",
-        streamId: this.streamId,
-        seq,
-        bytesB64: bytesToBase64(chunk),
-        fin: offset >= bytes.byteLength
+      this.outbound.push({
+        frame: {
+          type: "ws.data",
+          streamId: this.streamId,
+          seq,
+          bytesB64: bytesToBase64(chunk),
+          fin: offset >= bytes.byteLength
+        },
+        bytes: chunk.byteLength
       });
     }
-    return frames;
+  }
+
+  // Pop frames off the front of the outbound queue while they fit in the send
+  // window, counting `unacked` as each frame is pulled. Always allows at least
+  // one frame when nothing is outstanding so a single oversized chunk cannot
+  // deadlock the stream.
+  pullSendable(): TunnelWebSocketDataEnvelope[] {
+    const out: TunnelWebSocketDataEnvelope[] = [];
+    while (this.outbound.length > 0) {
+      const next = this.outbound[0];
+      if (this.unacked > 0 && this.unacked + next.bytes > this.windowBytes) break;
+      this.outbound.shift();
+      this.unacked += next.bytes;
+      if (next.bytes > 0) this.unackedBySeq.set(next.frame.seq, next.bytes);
+      out.push(next.frame);
+    }
+    return out;
+  }
+
+  hasPendingOutbound(): boolean {
+    return this.outbound.length > 0;
   }
 
   ingest(frame: TunnelWebSocketDataEnvelope): Uint8Array | null {

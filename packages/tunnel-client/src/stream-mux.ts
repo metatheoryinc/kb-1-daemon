@@ -74,8 +74,8 @@ export class StreamMux {
     loopback.on("message", (data: unknown) => {
       const bytes = toBytes(data);
       if (!bytes) return;
-      for (const frame of stream.codec.encode(bytes)) this.deps.send(frame);
-      this.applyBackpressure(stream);
+      stream.codec.enqueue(bytes);
+      this.flushOutbound(stream);
     });
     loopback.on("close", (code?: number, reason?: unknown) => {
       if (!this.streams.delete(open.streamId)) return;
@@ -119,10 +119,7 @@ export class StreamMux {
     const stream = this.streams.get(ack.streamId);
     if (!stream) return;
     stream.codec.onAck(ack.seq);
-    if (stream.paused && stream.codec.canSend()) {
-      stream.paused = false;
-      stream.loopback.resume?.();
-    }
+    this.flushOutbound(stream);
   }
 
   handleClose(close: TunnelWebSocketCloseEnvelope): void {
@@ -149,10 +146,15 @@ export class StreamMux {
     }
   }
 
-  private applyBackpressure(stream: MuxStream): void {
-    if (!stream.codec.canSend() && !stream.paused) {
+  private flushOutbound(stream: MuxStream): void {
+    for (const frame of stream.codec.pullSendable()) this.deps.send(frame);
+    const pending = stream.codec.hasPendingOutbound();
+    if (pending && !stream.paused) {
       stream.paused = true;
       stream.loopback.pause?.();
+    } else if (!pending && stream.paused) {
+      stream.paused = false;
+      stream.loopback.resume?.();
     }
   }
 
