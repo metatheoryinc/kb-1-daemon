@@ -1,4 +1,4 @@
-export const TUNNEL_PROTOCOL_VERSION = 2 as const;
+export const TUNNEL_PROTOCOL_VERSION = 3 as const;
 
 export type TunnelProtocolVersion = typeof TUNNEL_PROTOCOL_VERSION;
 
@@ -17,6 +17,15 @@ export const TUNNEL_HTTP_PENDING_BYTE_LIMIT = 8 * 1024 * 1024;
 export const TUNNEL_HTTP_REQUEST_TIMEOUT_MS = 15_000 as const;
 export const TUNNEL_HTTP_BODY_CHUNK_BYTES = 256 * 1024;
 export const TUNNEL_WS_FRAME_BYTE_LIMIT = 256 * 1024;
+// A ws.data chunk is base64-encoded (~4/3 inflation) and wrapped in a small
+// JSON envelope; size the raw chunk so the encoded frame stays under the cap,
+// mirroring how sendHttpResponse derives its chunk size from the frame limit.
+export const TUNNEL_WS_DATA_CHUNK_BYTES =
+  Math.floor((TUNNEL_WS_FRAME_BYTE_LIMIT - 1024) / 4) * 3;
+// Bounded per-stream unacked-byte send window (backpressure).
+export const TUNNEL_WS_DATA_WINDOW_BYTES = 4 * 1024 * 1024;
+// Cap a single reassembled logical document message (missing `fin` guard).
+export const TUNNEL_WS_DATA_MESSAGE_BYTE_LIMIT = 8 * 1024 * 1024;
 export const RELAY_FRAME_BYTE_LIMIT = 256 * 1024;
 export const RELAY_PENDING_REQUEST_LIMIT = 128 as const;
 export const RELAY_DEFAULT_REQUEST_TIMEOUT_MS = 15_000 as const;
@@ -483,6 +492,20 @@ export type TunnelWebSocketCloseEnvelope = {
   reason: string;
 };
 
+export type TunnelWebSocketDataEnvelope = {
+  type: "ws.data";
+  streamId: string;
+  seq: number;
+  bytesB64: string;
+  fin: boolean;
+};
+
+export type TunnelWebSocketDataAckEnvelope = {
+  type: "ws.data.ack";
+  streamId: string;
+  seq: number;
+};
+
 export type TunnelRelayFrameEnvelope = {
   type: "relay.frame";
   frame: RelayFrame;
@@ -492,6 +515,8 @@ export type TunnelControlClientMessage =
   | TunnelControlClientHello
   | TunnelControlPing
   | TunnelWebSocketCloseEnvelope
+  | TunnelWebSocketDataEnvelope
+  | TunnelWebSocketDataAckEnvelope
   | TunnelRelayFrameEnvelope
   | TunnelHttpResponseEnvelope
   | TunnelHttpResponseStartEnvelope
@@ -509,7 +534,10 @@ export type TunnelControlServerMessage =
   | TunnelHttpRequestEndEnvelope
   | TunnelHttpCancelEnvelope
   | TunnelHttpResponseChunkAckEnvelope
-  | TunnelWebSocketOpenEnvelope;
+  | TunnelWebSocketOpenEnvelope
+  | TunnelWebSocketCloseEnvelope
+  | TunnelWebSocketDataEnvelope
+  | TunnelWebSocketDataAckEnvelope;
 
 export type TunnelDialbackClientMessage =
   | TunnelWebSocketDialbackHello

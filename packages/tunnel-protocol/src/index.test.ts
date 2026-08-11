@@ -15,10 +15,13 @@ import {
   TUNNEL_PENDING_STREAM_BYTE_LIMIT,
   TUNNEL_PENDING_STREAM_FRAME_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
+  TUNNEL_WS_DATA_CHUNK_BYTES,
+  TUNNEL_WS_FRAME_BYTE_LIMIT,
   decodeRelayFrame,
   decodeTunnelMessage,
   encodeRelayFrame,
-  encodeTunnelMessage
+  encodeTunnelMessage,
+  type TunnelWebSocketDataEnvelope
 } from "./index.js";
 
 it("round-trips an HTTP response envelope", () => {
@@ -148,7 +151,7 @@ it("round-trips chunked HTTP response envelopes", () => {
 });
 
 it("carries the relay prototype protocol version", () => {
-  expect(TUNNEL_PROTOCOL_VERSION).toBe(2);
+  expect(TUNNEL_PROTOCOL_VERSION).toBe(3);
 });
 
 it("rejects malformed tunnel messages", () => {
@@ -672,4 +675,35 @@ it("cancels and clears relay pending rpc requests", () => {
   expect(pending.add("req-2")).toMatchObject({ ok: true, pending: 1 });
   pending.clear();
   expect(pending.size).toBe(0);
+});
+
+describe("ws.data protocol surface", () => {
+  it("bumps the protocol version to 3", () => {
+    expect(TUNNEL_PROTOCOL_VERSION).toBe(3);
+  });
+
+  it("keeps a base64 ws.data chunk under the frame cap", () => {
+    const frame: TunnelWebSocketDataEnvelope = {
+      type: "ws.data",
+      streamId: "s-1",
+      seq: 0,
+      bytesB64: Buffer.alloc(TUNNEL_WS_DATA_CHUNK_BYTES, 7).toString("base64"),
+      fin: true
+    };
+    expect(
+      Buffer.byteLength(encodeTunnelMessage(frame))
+    ).toBeLessThanOrEqual(TUNNEL_WS_FRAME_BYTE_LIMIT);
+  });
+
+  it("round-trips a ws.data envelope through decode", () => {
+    const frame: TunnelWebSocketDataEnvelope = {
+      type: "ws.data",
+      streamId: "s-2",
+      seq: 3,
+      bytesB64: "AAAA",
+      fin: false
+    };
+    const decoded = decodeTunnelMessage(encodeTunnelMessage(frame));
+    expect(decoded).toEqual(frame);
+  });
 });
