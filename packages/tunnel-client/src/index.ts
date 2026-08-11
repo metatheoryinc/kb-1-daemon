@@ -1,5 +1,4 @@
 import {
-  PendingFrameBuffer,
   RELAY_ERROR_CODES,
   RELAY_PENDING_REQUEST_LIMIT,
   RELAY_TRANSPORT_PROTOCOL_VERSION,
@@ -10,7 +9,6 @@ import {
   TUNNEL_HTTP_REQUEST_TIMEOUT_MS,
   TUNNEL_WS_FRAME_BYTE_LIMIT,
   TUNNEL_PROTOCOL_VERSION,
-  TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS,
   decodeTunnelMessage,
   encodeTunnelMessage,
   parseRelayFrame,
@@ -29,7 +27,6 @@ import {
   type TunnelHttpResponseChunkEnvelope,
   type TunnelHttpResponseEnvelope,
   type TunnelJsonMessage,
-  type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketDataAckEnvelope,
   type TunnelWebSocketDataEnvelope,
   type TunnelWebSocketOpenEnvelope,
@@ -54,7 +51,6 @@ export type TunnelClientConfig = {
   daemonVersion?: string;
   daemonBuild?: string;
   daemonInstanceId?: string;
-  dialbackPoolSize?: number;
   logger?: TunnelClientLogger;
   fetch?: typeof fetch;
   random?: () => number;
@@ -132,7 +128,7 @@ type PendingHttpResponseChunkAck = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
-/* v8 ignore start -- Live relay socket orchestration is covered by Stage A wrangler/daemon/browser drills; unit tests cover the deterministic backoff, close-code, URL, and dial-back bridge logic below. */
+/* v8 ignore start -- Live relay socket orchestration is covered by Stage A wrangler/daemon/browser drills; unit tests cover the deterministic backoff, close-code, and URL logic below. */
 export class TunnelClient {
   private readonly logger: TunnelClientLogger;
   private readonly fetchImpl: typeof fetch;
@@ -155,7 +151,6 @@ export class TunnelClient {
   private relaySupportsHttpResponseChunkAcks = false;
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
-  private dialbackPool: DialbackPool | undefined;
   private readonly streamMux: StreamMux;
 
   constructor(private readonly config: TunnelClientConfig) {
@@ -171,21 +166,6 @@ export class TunnelClient {
       openLoopback: (open) => this.openDocumentLoopback(open),
       send: (msg) => this.sendControlJson(msg),
     });
-
-    this.dialbackPool = this.createDialbackPool();
-  }
-
-  private createDialbackPool(): DialbackPool | undefined {
-    const poolSize = this.config.dialbackPoolSize ?? 3;
-    return poolSize > 0
-      ? new DialbackPool({
-          size: poolSize,
-          logger: this.logger,
-          createSocket: () => this.openPoolRelaySocket(),
-          sendPoolHello: (socket) => this.sendDialbackPoolHello(socket),
-          random: this.random,
-        })
-      : undefined;
   }
 
   start(): void {
@@ -202,12 +182,6 @@ export class TunnelClient {
     }
     this.stopped = false;
     this.reconnectAttempt = 0;
-    // A prior stop() disposed the pool permanently; recreate a fresh,
-    // pristine instance for this (re)connect. Any still-in-flight sockets
-    // from the old, now-disposed pool resolve against handlers bound to
-    // that old instance and self-close via its `disposed` guard — they
-    // never get parked into the new pool's `ready` list.
-    this.dialbackPool = this.createDialbackPool();
     this.connectControl();
   }
 
@@ -224,7 +198,6 @@ export class TunnelClient {
     this.abortPendingRelayRpcRequests('Tunnel client stopping');
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
-    this.dialbackPool?.dispose();
     this.streamMux.disposeAll('Tunnel client stopped');
   }
 
@@ -371,7 +344,6 @@ export class TunnelClient {
             TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
           ) ?? false;
         this.logger.log('info', 'relay control ready', { protocolVersion: message.version });
-        this.dialbackPool?.prime();
         return;
       case 'control.pong':
         this.clearControlHeartbeatDeadline();
@@ -977,74 +949,6 @@ export class TunnelClient {
     await acknowledged;
   }
 
-  private openDialback(envelope: TunnelWebSocketOpenEnvelope): void {
-    // Coordinated relay wire path; see the control URL comment above.
-    const daemonWsUrl = new URL(envelope.path, this.config.daemonUrl);
-    daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    const daemonSocket = new WebSocket(daemonWsUrl, {
-      headers: withoutHopByHop(envelope.headers),
-    });
-
-    const pooled = this.dialbackPool?.acquire() ?? null;
-    const relaySocket = pooled ?? this.dialFreshRelaySocket(envelope.streamId);
-
-    const bridge = new DialbackBridge({
-      streamId: envelope.streamId,
-      relaySocket,
-      daemonSocket,
-      logger: this.logger,
-      onRetrySafeClose: (message) => this.sendControlStreamClose(message),
-    });
-
-    if (pooled) {
-      // Already open + pool-hello'd: claim it for this stream now.
-      this.sendDialbackClaimHello(pooled, envelope.streamId);
-    } else {
-      relaySocket.on('open', () =>
-        this.sendDialbackClaimHello(relaySocket, envelope.streamId),
-      );
-    }
-
-    bridge.start();
-  }
-
-  private dialFreshRelaySocket(streamId: string): WebSocket {
-    const dialbackUrl = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
-    dialbackUrl.searchParams.set('streamId', streamId);
-    return new WebSocket(dialbackUrl, {
-      headers: { authorization: `Bearer ${this.config.token}` },
-    });
-  }
-
-  private openPoolRelaySocket(): WebSocket {
-    const url = relayInternalUrl(this.config.relayUrl, '/__kb1_tunnel/dialback');
-    url.searchParams.set('pool', '1');
-    return new WebSocket(url, {
-      headers: { authorization: `Bearer ${this.config.token}` },
-    });
-  }
-
-  private sendDialbackPoolHello(socket: BridgeSocket): void {
-    socket.send(
-      encodeJsonBytes({
-        type: 'ws.dialback.pool.hello',
-        version: TUNNEL_PROTOCOL_VERSION,
-        token: this.config.token,
-      }),
-    );
-  }
-
-  private sendDialbackClaimHello(socket: BridgeSocket, streamId: string): void {
-    socket.send(
-      encodeJsonBytes({
-        type: 'ws.dialback.hello',
-        version: TUNNEL_PROTOCOL_VERSION,
-        token: this.config.token,
-        streamId,
-      }),
-    );
-  }
-
   private openDocumentLoopback(
     open: TunnelWebSocketOpenEnvelope,
   ): MuxLoopbackSocket {
@@ -1059,396 +963,8 @@ export class TunnelClient {
     if (!this.control || this.control.readyState !== WebSocket.OPEN) return;
     this.control.send(encodeJsonBytes(message));
   }
-
-  private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
-    if (!this.control || this.control.readyState !== WebSocket.OPEN) {
-      this.logger.log('warn', 'cannot notify relay about stale stream because control is not open', {
-        streamId: message.streamId,
-      });
-      return;
-    }
-
-    this.control.send(encodeJsonBytes(message));
-  }
 }
 /* v8 ignore stop */
-
-export type BridgeSocket = {
-  readonly readyState: number;
-  send(data: WebSocket.RawData, options?: { binary?: boolean }): void;
-  close(code?: number, reason?: string): void;
-  on(event: 'open', listener: () => void): void;
-  on(event: 'message', listener: (data: WebSocket.RawData, isBinary: boolean) => void): void;
-  on(event: 'close', listener: (code: number, reason: Buffer) => void): void;
-  on(event: 'error', listener: (error: Error) => void): void;
-};
-
-export type DialbackBridgeOptions = {
-  streamId: string;
-  relaySocket: BridgeSocket;
-  daemonSocket: BridgeSocket;
-  logger?: TunnelClientLogger;
-  onRetrySafeClose?: (message: TunnelWebSocketCloseEnvelope) => void;
-};
-
-export class DialbackBridge {
-  private readonly logger: TunnelClientLogger;
-  private readonly pendingRelayFrames = new PendingFrameBuffer();
-  private readonly pendingDaemonFrames = new PendingFrameBuffer();
-  private readonly pairTimeout: ReturnType<typeof setTimeout>;
-  private closed = false;
-
-  constructor(private readonly options: DialbackBridgeOptions) {
-    this.logger = options.logger ?? consoleLogger;
-    this.pairTimeout = setTimeout(() => {
-      this.closeBoth(
-        TUNNEL_CLOSE_CODES.PENDING_STREAM_TIMEOUT,
-        'Timed out waiting for daemon websocket',
-      );
-    }, TUNNEL_PENDING_STREAM_PAIR_TIMEOUT_MS);
-  }
-
-  start(): void {
-    this.options.relaySocket.on('open', () => {
-      for (const frame of this.pendingDaemonFrames.drain()) {
-        if (!this.sendToRelay(Buffer.from(frame), true)) return;
-      }
-    });
-
-    this.options.daemonSocket.on('open', () => {
-      clearTimeout(this.pairTimeout);
-      for (const frame of this.pendingRelayFrames.drain()) {
-        if (!this.sendToDaemon(Buffer.from(frame), true)) return;
-      }
-    });
-
-    this.options.relaySocket.on('message', (data, isBinary) => {
-      const frame = rawDataToBytes(data);
-      if (frame.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
-        this.closeBoth(
-          TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
-          'Relay websocket frame exceeded tunnel cap',
-        );
-        return;
-      }
-
-      if (this.options.daemonSocket.readyState === WebSocket.OPEN) {
-        this.sendToDaemon(data, isBinary);
-        return;
-      }
-
-      if (this.options.daemonSocket.readyState !== WebSocket.CONNECTING) {
-        this.logger.log('warn', 'relay frame arrived while daemon websocket was not open', {
-          streamId: this.options.streamId,
-          daemonReadyState: this.options.daemonSocket.readyState,
-        });
-        this.closeBoth(
-          TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-          'Daemon websocket was not open for relay frame',
-        );
-        return;
-      }
-
-      const queued = this.pendingRelayFrames.push(frame);
-      if (!queued.ok) {
-        this.logger.log('warn', 'dial-back pending buffer overflow', {
-          streamId: this.options.streamId,
-          reason: queued.reason,
-          queuedFrames: queued.queuedFrames,
-          queuedBytes: queued.queuedBytes,
-        });
-        this.closeBoth(
-          TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
-          `Pending dial-back buffer exceeded ${queued.reason} cap`,
-        );
-      }
-    });
-
-    this.options.daemonSocket.on('message', (data, isBinary) => {
-      const frame = rawDataToBytes(data);
-      if (frame.byteLength > TUNNEL_WS_FRAME_BYTE_LIMIT) {
-        this.closeBoth(
-          TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME,
-          'Daemon websocket frame exceeded tunnel cap',
-        );
-        return;
-      }
-
-      if (this.options.relaySocket.readyState === WebSocket.OPEN) {
-        this.sendToRelay(data, isBinary);
-        return;
-      }
-
-      if (this.options.relaySocket.readyState === WebSocket.CONNECTING) {
-        const queued = this.pendingDaemonFrames.push(frame);
-        if (!queued.ok) {
-          this.logger.log('warn', 'dial-back pending daemon buffer overflow', {
-            streamId: this.options.streamId,
-            reason: queued.reason,
-            queuedFrames: queued.queuedFrames,
-            queuedBytes: queued.queuedBytes,
-          });
-          this.closeBoth(
-            TUNNEL_CLOSE_CODES.PENDING_STREAM_OVERFLOW,
-            `Pending daemon-to-relay buffer exceeded ${queued.reason} cap`,
-          );
-        }
-        return;
-      }
-
-      this.logger.log('warn', 'daemon frame arrived while relay dial-back was not open', {
-        streamId: this.options.streamId,
-        relayReadyState: this.options.relaySocket.readyState,
-      });
-      this.notifyRetrySafeClose('Relay dial-back socket was not open for daemon frame');
-      this.closeBoth(
-        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-        'Relay dial-back socket was not open for daemon frame',
-      );
-    });
-
-    this.options.relaySocket.on('close', (code, reason) => {
-      clearTimeout(this.pairTimeout);
-      if (this.options.daemonSocket.readyState === WebSocket.OPEN || this.options.daemonSocket.readyState === WebSocket.CONNECTING) {
-        this.options.daemonSocket.close(sendableCloseCode(code), reason.toString());
-      }
-    });
-
-    this.options.daemonSocket.on('close', (code, reason) => {
-      clearTimeout(this.pairTimeout);
-      if (this.options.relaySocket.readyState === WebSocket.OPEN || this.options.relaySocket.readyState === WebSocket.CONNECTING) {
-        this.options.relaySocket.close(sendableCloseCode(code), reason.toString());
-      }
-    });
-
-    this.options.relaySocket.on('error', (error) => {
-      this.logger.log('warn', 'relay dial-back socket error', {
-        streamId: this.options.streamId,
-        error: String(error),
-      });
-      this.options.daemonSocket.close(1011, 'Relay dial-back failed');
-    });
-
-    this.options.daemonSocket.on('error', (error) => {
-      this.logger.log('warn', 'daemon websocket error', {
-        streamId: this.options.streamId,
-        error: String(error),
-      });
-      this.options.relaySocket.close(1011, 'Daemon websocket failed');
-    });
-  }
-
-  private sendToDaemon(data: WebSocket.RawData, isBinary: boolean): boolean {
-    try {
-      this.options.daemonSocket.send(data, { binary: isBinary });
-      return true;
-    } catch (error) {
-      this.logger.log('warn', 'daemon websocket send failed', {
-        streamId: this.options.streamId,
-        error: String(error),
-      });
-      this.closeBoth(
-        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-        'Daemon websocket send failed; reconnect required',
-      );
-      return false;
-    }
-  }
-
-  private sendToRelay(data: WebSocket.RawData, isBinary: boolean): boolean {
-    try {
-      this.options.relaySocket.send(data, { binary: isBinary });
-      return true;
-    } catch (error) {
-      this.logger.log('warn', 'relay dial-back send failed', {
-        streamId: this.options.streamId,
-        error: String(error),
-      });
-      this.notifyRetrySafeClose('Relay dial-back send failed; reconnect required');
-      this.closeBoth(
-        TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-        'Relay dial-back send failed; reconnect required',
-      );
-      return false;
-    }
-  }
-
-  private notifyRetrySafeClose(reason: string): void {
-    this.options.onRetrySafeClose?.({
-      type: 'ws.close',
-      streamId: this.options.streamId,
-      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
-      reason,
-    });
-  }
-
-  private closeBoth(code: number, reason: string): void {
-    /* v8 ignore next -- Defensive against reciprocal close re-entry; socket close propagation covers the practical path. */
-    if (this.closed) return;
-
-    this.closed = true;
-    clearTimeout(this.pairTimeout);
-    this.pendingRelayFrames.clear();
-    this.pendingDaemonFrames.clear();
-    this.options.relaySocket.close(code, reason);
-    this.options.daemonSocket.close(code, reason);
-  }
-}
-
-export type PoolSocket = BridgeSocket;
-
-export type DialbackPoolOptions = {
-  size: number;
-  createSocket: () => PoolSocket;
-  sendPoolHello: (socket: PoolSocket) => void;
-  logger?: TunnelClientLogger;
-  /**
-   * Injectable scheduler for the backoff delay applied after a connect
-   * failure. Defaults to real `setTimeout`. Tests inject a synchronous or
-   * capturing implementation to drive the delay deterministically.
-   */
-  schedule?: (fn: () => void, delayMs: number) => void;
-  /** Injectable RNG passed through to `createBackoffDelay` for deterministic jitter in tests. */
-  random?: () => number;
-};
-
-const WS_OPEN = 1;
-
-export class DialbackPool {
-  private readonly ready: PoolSocket[] = [];
-  private readonly schedule: (fn: () => void, delayMs: number) => void;
-  private warming = 0;
-  private consecutiveFailures = 0;
-  /**
-   * Set while a connect-failure backoff timer is outstanding. While true,
-   * `prime()` is a no-op: no new pool socket may be opened, whether `prime()`
-   * is invoked directly, via `acquire()`'s refill, or via a non-failure
-   * `onGone` refill that happens to race the window. The scheduled callback
-   * clears this before calling the real refill, so the backoff is enforced
-   * for the whole delay and then lifted atomically.
-   */
-  private backoffPending = false;
-  /** Set once `dispose()` has run. Neutralizes prime()/acquire()/open() permanently. */
-  private disposed = false;
-  /**
-   * All pool-owned, not-yet-consumed sockets (warming or parked in `ready`).
-   * Tracked separately from `ready` so `dispose()` can close warming sockets
-   * too. A socket is removed from this set the moment ownership passes to
-   * the caller via `acquire()`, or the moment it's gone (closed/failed) —
-   * dispose() must never touch a socket the caller now owns.
-   */
-  private readonly sockets = new Set<PoolSocket>();
-
-  constructor(private readonly options: DialbackPoolOptions) {
-    this.schedule = options.schedule ?? ((fn, delayMs) => setTimeout(fn, delayMs));
-  }
-
-  prime(): void {
-    if (this.disposed) return;
-    if (this.options.size <= 0) return;
-    if (this.backoffPending) return;
-    while (this.ready.length + this.warming < this.options.size) {
-      this.open();
-    }
-  }
-
-  acquire(): PoolSocket | null {
-    if (this.disposed) return null;
-    let socket: PoolSocket | null = null;
-    while (this.ready.length > 0) {
-      const candidate = this.ready.shift() as PoolSocket;
-      if (candidate.readyState === WS_OPEN) {
-        socket = candidate;
-        break;
-      }
-      // stale/dead: drop it silently
-      this.sockets.delete(candidate);
-    }
-    if (socket) {
-      // Ownership passes to the caller: dispose() must not close it.
-      this.sockets.delete(socket);
-    }
-    this.prime();
-    return socket;
-  }
-
-  /**
-   * Permanently disables the pool: closes every pool-owned socket (warming
-   * or parked ready), clears the ready list, and neutralizes any in-flight
-   * backoff timer (its callback calls `prime()`, which is now a no-op).
-   * Sockets already handed out via `acquire()` are not touched — the caller
-   * owns their lifecycle.
-   */
-  dispose(): void {
-    this.disposed = true;
-    for (const s of this.sockets) {
-      try {
-        s.close(1001, 'pool disposed');
-      } catch {
-        /* already closed */
-      }
-    }
-    this.sockets.clear();
-    this.ready.length = 0;
-  }
-
-  private open(): void {
-    const socket = this.options.createSocket();
-    this.sockets.add(socket);
-    this.warming += 1;
-    let opened = false;
-    socket.on('open', () => {
-      if (this.disposed) {
-        opened = true;
-        this.warming -= 1;
-        this.sockets.delete(socket);
-        socket.close(1001, 'pool disposed');
-        return;
-      }
-      opened = true;
-      this.warming -= 1;
-      this.consecutiveFailures = 0;
-      this.options.sendPoolHello(socket);
-      this.ready.push(socket);
-    });
-    const onGone = () => {
-      const connectFailure = !opened;
-      if (!opened) {
-        opened = true;
-        this.warming -= 1;
-      }
-      const i = this.ready.indexOf(socket);
-      if (i >= 0) this.ready.splice(i, 1);
-      this.sockets.delete(socket);
-
-      if (connectFailure) {
-        // Socket died without ever firing 'open' (e.g. persistently
-        // REJECTED pool-socket connects on version skew). Back off the
-        // re-prime instead of refilling every RTT with no ceiling.
-        this.consecutiveFailures += 1;
-        const delayMs = createBackoffDelay(
-          this.consecutiveFailures - 1,
-          {},
-          this.options.random,
-        );
-        this.backoffPending = true;
-        this.schedule(() => {
-          this.backoffPending = false;
-          this.prime();
-        }, delayMs);
-        return;
-      }
-
-      // Opened then later closed (consumed via acquire() or died while
-      // ready): not a connect failure, refill promptly as before.
-      this.prime();
-    };
-    socket.on('close', onGone);
-    socket.on('error', () => {
-      /* a close event follows; cleanup happens there */
-    });
-  }
-}
 
 type ChunkedHttpRequestDraft = {
   start: TunnelHttpRequestStartEnvelope;
@@ -1524,13 +1040,6 @@ export function createBackoffDelay(
   const exponential = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt));
   const jitter = exponential * jitterRatio * random();
   return Math.round(Math.min(maxMs, exponential + jitter));
-}
-
-export function sendableCloseCode(code: number): number {
-  return ((code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) ||
-    (code >= 3000 && code <= 4999))
-    ? code
-    : 1011;
 }
 
 function relayRpcError(
@@ -1631,22 +1140,6 @@ export function relayInternalUrl(relayUrl: URL, internalPath: string): URL {
   url.pathname = `${relayPrefix}${suffix}`;
   url.search = '';
   return url;
-}
-
-function rawDataToBytes(data: WebSocket.RawData): Uint8Array {
-  if (Buffer.isBuffer(data)) {
-    return new Uint8Array(data);
-  }
-
-  if (data instanceof ArrayBuffer) {
-    return new Uint8Array(data);
-  }
-
-  if (Array.isArray(data)) {
-    return new Uint8Array(Buffer.concat(data));
-  }
-
-  return new TextEncoder().encode(String(data));
 }
 
 /* v8 ignore start -- Only used by the live TunnelClient HTTP response proxy path covered in Stage A drills. */
