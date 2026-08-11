@@ -65,16 +65,6 @@ it("round-trips control hello feature advertisement", () => {
   expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
 });
 
-it("round-trips dialback pool hello", () => {
-  const hello = {
-    type: "ws.dialback.pool.hello",
-    version: TUNNEL_PROTOCOL_VERSION,
-    token: "test-token"
-  } as const;
-
-  expect(decodeTunnelMessage(encodeTunnelMessage(hello))).toEqual(hello);
-});
-
 it("round-trips typed relay frames over the tunnel control socket", () => {
   const message = {
     type: "relay.frame",

@@ -2,7 +2,7 @@ export const TUNNEL_PROTOCOL_VERSION = 3 as const;
 
 export type TunnelProtocolVersion = typeof TUNNEL_PROTOCOL_VERSION;
 
-export type TunnelRole = "control" | "dialback";
+export type TunnelRole = "control";
 
 export const RELAY_TRANSPORT_PROTOCOL_VERSION = 1 as const;
 
@@ -587,19 +587,6 @@ export type TunnelWebSocketOpenEnvelope = {
   headers: Record<string, string>;
 };
 
-export type TunnelWebSocketDialbackHello = {
-  type: "ws.dialback.hello";
-  version: TunnelProtocolVersion;
-  token: string;
-  streamId: string;
-};
-
-export type TunnelWebSocketDialbackPoolHello = {
-  type: "ws.dialback.pool.hello";
-  version: TunnelProtocolVersion;
-  token: string;
-};
-
 export type TunnelWebSocketCloseEnvelope = {
   type: "ws.close";
   streamId: string;
@@ -654,14 +641,9 @@ export type TunnelControlServerMessage =
   | TunnelWebSocketDataEnvelope
   | TunnelWebSocketDataAckEnvelope;
 
-export type TunnelDialbackClientMessage =
-  | TunnelWebSocketDialbackHello
-  | TunnelWebSocketDialbackPoolHello;
-
 export type TunnelJsonMessage =
   | TunnelControlClientMessage
-  | TunnelControlServerMessage
-  | TunnelDialbackClientMessage;
+  | TunnelControlServerMessage;
 
 export function encodeTunnelMessage(message: TunnelJsonMessage): string {
   return JSON.stringify(message);
