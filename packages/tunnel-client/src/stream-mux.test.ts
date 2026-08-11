@@ -294,7 +294,7 @@ describe("StreamMux", () => {
     );
   });
 
-  it("tears down the stream when loopback delivery of a reassembled frame fails", () => {
+  it("tears down the stream when loopback delivery of a reassembled frame fails, and does NOT ack the dropped frame", () => {
     const lb = fakeLoopback();
     const log = vi.fn();
     const send = vi.fn();
@@ -315,6 +315,10 @@ describe("StreamMux", () => {
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({ type: "ws.close", streamId: "s1" }),
     );
+    // The write failed: the sender must NOT be told this frame was delivered.
+    expect(send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data.ack", streamId: "s1", seq: 0 }),
+    );
 
     // the stream is gone: further frames/close events for it are no-ops
     send.mockClear();
@@ -327,6 +331,79 @@ describe("StreamMux", () => {
       code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
       reason: "n/a",
     });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("acks a final chunk only after the loopback write succeeds (open loopback, happy path)", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+
+    mux.handleData({ type: "ws.data", streamId: "s1", seq: 0, bytesB64: "AAAA", fin: true });
+
+    expect(lb.sent).toHaveLength(1);
+    expect(send).toHaveBeenCalledWith({ type: "ws.data.ack", streamId: "s1", seq: 0 });
+  });
+
+  it("acks a non-final chunk right after ingest, since it is safely buffered in the codec", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+
+    mux.handleData({ type: "ws.data", streamId: "s1", seq: 0, bytesB64: "AAAA", fin: false });
+
+    expect(lb.sent).toHaveLength(0); // not written yet, still reassembling
+    expect(send).toHaveBeenCalledWith({ type: "ws.data.ack", streamId: "s1", seq: 0 });
+  });
+
+  it("acks pre-open buffered messages that fit the window, but tears down (no ack) once the pending-inbound bound overflows", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({
+      logger: { log: () => {} } as any,
+      openLoopback: () => lb as any,
+      send,
+      windowBytes: 4,
+    });
+    mux.handleOpen(OPEN);
+    // loopback never opened yet
+
+    // 2 bytes: fits under the 4-byte pending-inbound bound.
+    mux.handleData({
+      type: "ws.data",
+      streamId: "s1",
+      seq: 0,
+      bytesB64: Buffer.from([1, 2]).toString("base64"),
+      fin: true,
+    });
+    expect(send).toHaveBeenCalledWith({ type: "ws.data.ack", streamId: "s1", seq: 0 });
+    expect(lb.sent).toHaveLength(0); // still not delivered, loopback not open
+
+    send.mockClear();
+
+    // Another 3 bytes: 2 + 3 = 5 > 4-byte bound -> overflow.
+    mux.handleData({
+      type: "ws.data",
+      streamId: "s1",
+      seq: 1,
+      bytesB64: Buffer.from([3, 4, 5]).toString("base64"),
+      fin: true,
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.close", streamId: "s1" }),
+    );
+    expect(send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data.ack", streamId: "s1", seq: 1 }),
+    );
+
+    // stream was torn down: further activity for it is a no-op
+    send.mockClear();
+    expect(() => lb.emit("open")).not.toThrow();
     expect(send).not.toHaveBeenCalled();
   });
 

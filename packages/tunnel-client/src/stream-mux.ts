@@ -1,6 +1,7 @@
 import {
   DocumentStreamCodec,
   TUNNEL_CLOSE_CODES,
+  TUNNEL_WS_DATA_WINDOW_BYTES,
   type TunnelWebSocketCloseEnvelope,
   type TunnelWebSocketDataAckEnvelope,
   type TunnelWebSocketDataEnvelope,
@@ -24,6 +25,7 @@ type MuxStream = {
   loopbackOpen: boolean;
   paused: boolean;
   pendingInbound: Uint8Array[];
+  pendingInboundBytes: number;
 };
 
 const WS_OPEN = 1;
@@ -58,6 +60,7 @@ export class StreamMux {
       loopbackOpen: false,
       paused: false,
       pendingInbound: [],
+      pendingInboundBytes: 0,
     };
     this.streams.set(open.streamId, stream);
 
@@ -70,6 +73,7 @@ export class StreamMux {
         }
       }
       stream.pendingInbound = [];
+      stream.pendingInboundBytes = 0;
     });
     loopback.on("message", (data: unknown) => {
       const bytes = toBytes(data);
@@ -104,15 +108,31 @@ export class StreamMux {
       this.tearDown(frame.streamId, TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME, String(error));
       return;
     }
-    this.deps.send({ type: "ws.data.ack", streamId: frame.streamId, seq: frame.seq });
-    if (message === null) return;
+    if (message === null) {
+      this.sendDataAck(frame); // non-final chunk safely buffered in the codec
+      return;
+    }
     if (stream.loopbackOpen) {
       if (!this.writeLoopback(stream, message)) {
         this.tearDown(frame.streamId, TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, "loopback delivery failed");
+        return; // do NOT ack a dropped message
       }
-    } else {
-      stream.pendingInbound.push(message);
+      this.sendDataAck(frame);
+      return;
     }
+    // Loopback not open yet: buffer the completed message, bounded.
+    const limit = this.deps.windowBytes ?? TUNNEL_WS_DATA_WINDOW_BYTES;
+    if (stream.pendingInboundBytes + message.byteLength > limit) {
+      this.tearDown(frame.streamId, TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, "pending inbound buffer overflow");
+      return; // do NOT ack
+    }
+    stream.pendingInbound.push(message);
+    stream.pendingInboundBytes += message.byteLength;
+    this.sendDataAck(frame);
+  }
+
+  private sendDataAck(frame: TunnelWebSocketDataEnvelope): void {
+    this.deps.send({ type: "ws.data.ack", streamId: frame.streamId, seq: frame.seq });
   }
 
   handleDataAck(ack: TunnelWebSocketDataAckEnvelope): void {
