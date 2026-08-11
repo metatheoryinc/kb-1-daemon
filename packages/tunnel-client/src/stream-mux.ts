@@ -63,7 +63,12 @@ export class StreamMux {
 
     loopback.on("open", () => {
       stream.loopbackOpen = true;
-      for (const bytes of stream.pendingInbound) this.writeLoopback(stream, bytes);
+      for (const bytes of stream.pendingInbound) {
+        if (!this.writeLoopback(stream, bytes)) {
+          this.tearDown(open.streamId, TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, "loopback delivery failed");
+          return;
+        }
+      }
       stream.pendingInbound = [];
     });
     loopback.on("message", (data: unknown) => {
@@ -101,8 +106,13 @@ export class StreamMux {
     }
     this.deps.send({ type: "ws.data.ack", streamId: frame.streamId, seq: frame.seq });
     if (message === null) return;
-    if (stream.loopbackOpen) this.writeLoopback(stream, message);
-    else stream.pendingInbound.push(message);
+    if (stream.loopbackOpen) {
+      if (!this.writeLoopback(stream, message)) {
+        this.tearDown(frame.streamId, TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, "loopback delivery failed");
+      }
+    } else {
+      stream.pendingInbound.push(message);
+    }
   }
 
   handleDataAck(ack: TunnelWebSocketDataAckEnvelope): void {
@@ -129,11 +139,13 @@ export class StreamMux {
     this.streams.clear();
   }
 
-  private writeLoopback(stream: MuxStream, bytes: Uint8Array): void {
+  private writeLoopback(stream: MuxStream, bytes: Uint8Array): boolean {
     try {
       stream.loopback.send(bytes);
+      return true;
     } catch (error) {
       this.deps.logger.log("warn", "stream loopback send failed", { error: String(error) });
+      return false;
     }
   }
 

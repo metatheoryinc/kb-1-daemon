@@ -9,13 +9,17 @@ function fakeLoopback() {
     paused: false,
     closed: null as null | { code?: number },
     readyState: 1,
+    throwOnSend: false,
     on(ev: string, cb: (...a: any[]) => void) {
       (handlers[ev] ??= []).push(cb);
     },
     emit(ev: string, ...a: any[]) {
       (handlers[ev] ?? []).forEach((cb) => cb(...a));
     },
-    send(d: Uint8Array) { this.sent.push(d); },
+    send(d: Uint8Array) {
+      if (this.throwOnSend) throw new Error("write failed");
+      this.sent.push(d);
+    },
     pause() { this.paused = true; },
     resume() { this.paused = false; },
     close(code?: number) { this.closed = { code }; },
@@ -275,23 +279,72 @@ describe("StreamMux", () => {
     );
   });
 
-  it("swallows a loopback send failure and logs it instead of throwing", () => {
+  it("tears down the stream when loopback delivery of a reassembled frame fails", () => {
     const lb = fakeLoopback();
     const log = vi.fn();
-    const mux = new StreamMux({ logger: { log } as any, openLoopback: () => lb as any, send: vi.fn() });
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log } as any, openLoopback: () => lb as any, send });
     mux.handleOpen(OPEN);
     lb.emit("open");
-    lb.send = () => {
-      throw new Error("write failed");
-    };
+    lb.throwOnSend = true;
+
     expect(() =>
       mux.handleData({ type: "ws.data", streamId: "s1", seq: 0, bytesB64: "AAAA", fin: true }),
     ).not.toThrow();
+
     expect(log).toHaveBeenCalledWith(
       "warn",
       "stream loopback send failed",
       expect.objectContaining({ error: expect.any(String) }),
     );
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.close", streamId: "s1" }),
+    );
+
+    // the stream is gone: further frames/close events for it are no-ops
+    send.mockClear();
+    expect(() =>
+      mux.handleData({ type: "ws.data", streamId: "s1", seq: 1, bytesB64: "AAAA", fin: true }),
+    ).not.toThrow();
+    mux.handleClose({
+      type: "ws.close",
+      streamId: "s1",
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: "n/a",
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("tears down the stream when flushing pendingInbound after loopback open fails", () => {
+    const lb = fakeLoopback();
+    const log = vi.fn();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    // buffered before the loopback is open
+    mux.handleData({ type: "ws.data", streamId: "s1", seq: 0, bytesB64: "AAAA", fin: true });
+    expect(lb.sent).toHaveLength(0);
+
+    lb.throwOnSend = true;
+    expect(() => lb.emit("open")).not.toThrow();
+
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "stream loopback send failed",
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.close", streamId: "s1" }),
+    );
+
+    send.mockClear();
+    mux.handleClose({
+      type: "ws.close",
+      streamId: "s1",
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: "n/a",
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("no-ops handleData, handleDataAck, and handleClose for an unknown stream id", () => {
