@@ -87,7 +87,7 @@ describe('TunnelClient control heartbeat', () => {
 
     expect(sentText(firstControl, 0)).toBe(encodeTunnelMessage({
       type: 'control.hello',
-      version: 2,
+      version: 3,
       token: 'token-1',
       daemonInstanceId: 'instance-1',
       vaultMutationEpoch: 0,
@@ -203,7 +203,7 @@ describe('TunnelClient control heartbeat', () => {
 
     expect(sentText(firstControl, 0)).toBe(encodeTunnelMessage({
       type: 'control.hello',
-      version: 2,
+      version: 3,
       token: 'token-1',
       daemonVersion: '0.1.0',
       daemonBuild: 'registry.fly.io/kb1@sha256:abc123',

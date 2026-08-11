@@ -28,7 +28,10 @@ import {
   type TunnelHttpResponseChunkAckEnvelope,
   type TunnelHttpResponseChunkEnvelope,
   type TunnelHttpResponseEnvelope,
+  type TunnelJsonMessage,
   type TunnelWebSocketCloseEnvelope,
+  type TunnelWebSocketDataAckEnvelope,
+  type TunnelWebSocketDataEnvelope,
   type TunnelWebSocketOpenEnvelope,
 } from '@kb-1/tunnel-protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -36,6 +39,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { randomUUID } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { WebSocket } from 'ws';
+import { StreamMux, type MuxLoopbackSocket } from './stream-mux.js';
 
 export type TunnelClientLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -152,12 +156,21 @@ export class TunnelClient {
   private readonly daemonInstanceId: string;
   private vaultMutationEpoch = 0;
   private dialbackPool: DialbackPool | undefined;
+  private readonly streamMux: StreamMux;
 
   constructor(private readonly config: TunnelClientConfig) {
     this.logger = config.logger ?? consoleLogger;
     this.fetchImpl = config.fetch ?? fetch;
     this.random = config.random ?? Math.random;
     this.daemonInstanceId = config.daemonInstanceId ?? randomUUID();
+    // Constructed here (not as a field initializer) so it captures the
+    // real `this.logger` assigned above — field initializers run before
+    // the constructor body, which would otherwise bake in `undefined`.
+    this.streamMux = new StreamMux({
+      logger: this.logger,
+      openLoopback: (open) => this.openDocumentLoopback(open),
+      send: (msg) => this.sendControlJson(msg),
+    });
 
     this.dialbackPool = this.createDialbackPool();
   }
@@ -212,6 +225,7 @@ export class TunnelClient {
     this.control?.close(1001, 'Tunnel client stopping');
     this.control = undefined;
     this.dialbackPool?.dispose();
+    this.streamMux.disposeAll('Tunnel client stopped');
   }
 
   status(): TunnelClientStatus {
@@ -395,7 +409,16 @@ export class TunnelClient {
         this.resolveHttpResponseChunkAck(message);
         return;
       case 'ws.open':
-        this.openDialback(message);
+        this.streamMux.handleOpen(message);
+        return;
+      case 'ws.data':
+        this.streamMux.handleData(message);
+        return;
+      case 'ws.data.ack':
+        this.streamMux.handleDataAck(message);
+        return;
+      case 'ws.close':
+        this.streamMux.handleClose(message);
         return;
     }
   }
@@ -1020,6 +1043,21 @@ export class TunnelClient {
         streamId,
       }),
     );
+  }
+
+  private openDocumentLoopback(
+    open: TunnelWebSocketOpenEnvelope,
+  ): MuxLoopbackSocket {
+    const daemonWsUrl = new URL(open.path, this.config.daemonUrl);
+    daemonWsUrl.protocol = daemonWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    return new WebSocket(daemonWsUrl, {
+      headers: withoutHopByHop(open.headers),
+    }) as unknown as MuxLoopbackSocket;
+  }
+
+  private sendControlJson(message: TunnelJsonMessage): void {
+    if (!this.control || this.control.readyState !== WebSocket.OPEN) return;
+    this.control.send(encodeJsonBytes(message));
   }
 
   private sendControlStreamClose(message: TunnelWebSocketCloseEnvelope): void {
