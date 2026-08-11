@@ -122,4 +122,197 @@ describe("StreamMux", () => {
     mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 1 }); // unacked 2, < window
     expect(lb.paused).toBe(false);
   });
+
+  it("ignores a second ws.open for an already-open stream", () => {
+    const lb = fakeLoopback();
+    const openLoopback = vi.fn(() => lb as any);
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback, send: vi.fn() });
+    mux.handleOpen(OPEN);
+    mux.handleOpen(OPEN);
+    expect(openLoopback).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops loopback 'message' events whose payload cannot be converted to bytes", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("message", 42); // not string/Buffer/ArrayBuffer/array/typed array
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("converts a string loopback message to bytes before chunking", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("message", "hi");
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data", streamId: "s1", bytesB64: Buffer.from("hi").toString("base64") }),
+    );
+  });
+
+  it("converts an ArrayBuffer loopback message to bytes before chunking", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("message", new Uint8Array([9, 8, 7]).buffer);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data", streamId: "s1", bytesB64: Buffer.from([9, 8, 7]).toString("base64") }),
+    );
+  });
+
+  it("converts an array of mixed buffer/non-buffer chunks to bytes before chunking", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("message", [Buffer.from([1]), new Uint8Array([2])]);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data", streamId: "s1", bytesB64: Buffer.from([1, 2]).toString("base64") }),
+    );
+  });
+
+  it("converts a plain typed-array loopback message to bytes before chunking", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("message", new Uint8Array([5, 6]));
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.data", streamId: "s1", bytesB64: Buffer.from([5, 6]).toString("base64") }),
+    );
+  });
+
+  it("falls back to STREAM_RETRY_SAFE and a string reason when the loopback ends without a close code", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("close", undefined, "server hangup");
+    expect(send).toHaveBeenCalledWith({
+      type: "ws.close",
+      streamId: "s1",
+      code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE,
+      reason: "server hangup",
+    });
+  });
+
+  it("uses an empty reason when the loopback close event carries no usable reason", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.emit("close", 1000);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ws.close", streamId: "s1", reason: "" }),
+    );
+  });
+
+  it("ignores a loopback close event for a stream already removed from the map", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    mux.handleClose({ type: "ws.close", streamId: "s1", code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, reason: "browser closed" });
+    send.mockClear();
+    lb.emit("close", 1000, "late event");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not double-close the loopback when its readyState is already not open", () => {
+    const lb = fakeLoopback();
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.readyState = 3; // e.g. CLOSED
+    mux.handleClose({ type: "ws.close", streamId: "s1", code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, reason: "tab closed" });
+    expect(lb.closed).toBeNull();
+  });
+
+  it("disposeAll closes every open loopback and skips ones already not open", () => {
+    const lbA = fakeLoopback();
+    const lbB = fakeLoopback();
+    const byStream: Record<string, any> = { a: lbA, b: lbB };
+    const mux = new StreamMux({
+      logger: { log: () => {} } as any,
+      openLoopback: (open) => byStream[open.streamId],
+      send: vi.fn(),
+    });
+    mux.handleOpen({ ...OPEN, streamId: "a" });
+    mux.handleOpen({ ...OPEN, streamId: "b" });
+    lbA.emit("open");
+    lbB.emit("open");
+    lbB.readyState = 3; // already closed some other way
+
+    mux.disposeAll("shutting down");
+
+    expect(lbA.closed).toEqual({ code: 1001 });
+    expect(lbB.closed).toBeNull();
+  });
+
+  it("logs and does not throw when the loopback emits an error", () => {
+    const lb = fakeLoopback();
+    const log = vi.fn();
+    const mux = new StreamMux({ logger: { log } as any, openLoopback: () => lb as any, send: vi.fn() });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    expect(() => lb.emit("error", new Error("boom"))).not.toThrow();
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "stream loopback error",
+      expect.objectContaining({ streamId: "s1" }),
+    );
+  });
+
+  it("swallows a loopback send failure and logs it instead of throwing", () => {
+    const lb = fakeLoopback();
+    const log = vi.fn();
+    const mux = new StreamMux({ logger: { log } as any, openLoopback: () => lb as any, send: vi.fn() });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    lb.send = () => {
+      throw new Error("write failed");
+    };
+    expect(() =>
+      mux.handleData({ type: "ws.data", streamId: "s1", seq: 0, bytesB64: "AAAA", fin: true }),
+    ).not.toThrow();
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "stream loopback send failed",
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+  });
+
+  it("no-ops handleData, handleDataAck, and handleClose for an unknown stream id", () => {
+    const send = vi.fn();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => fakeLoopback() as any, send });
+    expect(() =>
+      mux.handleData({ type: "ws.data", streamId: "ghost", seq: 0, bytesB64: "AAAA", fin: true }),
+    ).not.toThrow();
+    expect(() => mux.handleDataAck({ type: "ws.data.ack", streamId: "ghost", seq: 0 })).not.toThrow();
+    expect(() =>
+      mux.handleClose({ type: "ws.close", streamId: "ghost", code: TUNNEL_CLOSE_CODES.STREAM_RETRY_SAFE, reason: "n/a" }),
+    ).not.toThrow();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not resume the loopback on ack when it was never paused", () => {
+    const lb = fakeLoopback();
+    const mux = new StreamMux({ logger: { log: () => {} } as any, openLoopback: () => lb as any, send: vi.fn() });
+    mux.handleOpen(OPEN);
+    lb.emit("open");
+    mux.handleDataAck({ type: "ws.data.ack", streamId: "s1", seq: 0 });
+    expect(lb.paused).toBe(false);
+  });
 });
