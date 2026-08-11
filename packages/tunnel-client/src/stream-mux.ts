@@ -41,6 +41,8 @@ export class StreamMux {
           | TunnelWebSocketDataAckEnvelope
           | TunnelWebSocketCloseEnvelope,
       ) => void;
+      chunkBytes?: number;
+      windowBytes?: number;
     },
   ) {}
 
@@ -48,7 +50,10 @@ export class StreamMux {
     if (this.streams.has(open.streamId)) return;
     const loopback = this.deps.openLoopback(open);
     const stream: MuxStream = {
-      codec: new DocumentStreamCodec(open.streamId),
+      codec: new DocumentStreamCodec(open.streamId, {
+        chunkBytes: this.deps.chunkBytes,
+        windowBytes: this.deps.windowBytes,
+      }),
       loopback,
       loopbackOpen: false,
       paused: false,
@@ -65,7 +70,7 @@ export class StreamMux {
       const bytes = toBytes(data);
       if (!bytes) return;
       for (const frame of stream.codec.encode(bytes)) this.deps.send(frame);
-      this.applyBackpressure(open.streamId, stream);
+      this.applyBackpressure(stream);
     });
     loopback.on("close", (code?: number, reason?: unknown) => {
       if (!this.streams.delete(open.streamId)) return;
@@ -94,10 +99,10 @@ export class StreamMux {
       this.tearDown(frame.streamId, TUNNEL_CLOSE_CODES.OVERSIZED_WS_FRAME, String(error));
       return;
     }
+    this.deps.send({ type: "ws.data.ack", streamId: frame.streamId, seq: frame.seq });
     if (message === null) return;
     if (stream.loopbackOpen) this.writeLoopback(stream, message);
     else stream.pendingInbound.push(message);
-    this.deps.send({ type: "ws.data.ack", streamId: frame.streamId, seq: frame.seq });
   }
 
   handleDataAck(ack: TunnelWebSocketDataAckEnvelope): void {
@@ -118,7 +123,7 @@ export class StreamMux {
   }
 
   disposeAll(reason: string): void {
-    for (const [streamId, stream] of this.streams) {
+    for (const stream of this.streams.values()) {
       if (stream.loopback.readyState === WS_OPEN) stream.loopback.close(1001, reason);
     }
     this.streams.clear();
@@ -132,7 +137,7 @@ export class StreamMux {
     }
   }
 
-  private applyBackpressure(streamId: string, stream: MuxStream): void {
+  private applyBackpressure(stream: MuxStream): void {
     if (!stream.codec.canSend() && !stream.paused) {
       stream.paused = true;
       stream.loopback.pause?.();
