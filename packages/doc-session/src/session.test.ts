@@ -343,7 +343,10 @@ describe('OneFileDocumentSession', () => {
     if (typeof staleContent !== 'string') throw new Error('expected current_content');
     expect(new TextEncoder().encode(staleContent).length).toBeLessThanOrEqual(1024 * 1024);
     await session.close();
-  });
+    // Builds a 1MB+ resident document and runs fast-diff + Yjs delta over it —
+    // CPU-bound enough to exceed vitest's 5s default under v8 coverage on slower
+    // CI runners (observed ~7.3s), while ~1s locally. Give it explicit headroom.
+  }, 20_000);
 
   it('applies a baseline edit through the session Y.Text so concurrent Yjs updates survive', async () => {
     const session = new OneFileDocumentSession(filePath, { defaultContent: 'alpha\nomega\n' });
