@@ -143,6 +143,44 @@ describe('TunnelClient control heartbeat', () => {
     expect(sentText(firstControl, 5)).toBe(encodeTunnelMessage({ type: 'control.ping' }));
     expect(Buffer.isBuffer(firstControl.sent[6])).toBe(true);
 
+    // Miss #2: with the raised tolerance the socket survives a slow DO wake.
+    // Clear first so the assertion below matches ONLY this phase's miss log,
+    // making the miss #2 -> #3 ordering exclusive rather than any-call.
+    logger.log.mockClear();
+    await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_TIMEOUT_MS);
+    expect(firstControl.terminated).toBe(false);
+    expect(logger.log).toHaveBeenCalledWith(
+      'warn',
+      'relay control heartbeat missed; waiting for next probe',
+      {
+        consecutiveMisses: 2,
+        reconnectAfterMisses: CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT,
+      },
+    );
+
+    // Miss #3: still under the threshold. Clear again so this assertion is
+    // exclusive to the miss #3 log (guaranteeing it followed miss #2).
+    logger.log.mockClear();
+    await vi.advanceTimersByTimeAsync(
+      CONTROL_HEARTBEAT_INTERVAL_MS - CONTROL_HEARTBEAT_TIMEOUT_MS,
+    );
+    await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_TIMEOUT_MS);
+    expect(firstControl.terminated).toBe(false);
+    expect(logger.log).toHaveBeenCalledWith(
+      'warn',
+      'relay control heartbeat missed; waiting for next probe',
+      {
+        consecutiveMisses: 3,
+        reconnectAfterMisses: CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT,
+      },
+    );
+
+    // Miss #4 reaches the threshold and terminates the socket to reconnect.
+    // Clear so the terminate assertion is exclusive to this final phase.
+    logger.log.mockClear();
+    await vi.advanceTimersByTimeAsync(
+      CONTROL_HEARTBEAT_INTERVAL_MS - CONTROL_HEARTBEAT_TIMEOUT_MS,
+    );
     await vi.advanceTimersByTimeAsync(CONTROL_HEARTBEAT_TIMEOUT_MS);
     expect(firstControl.terminated).toBe(true);
     expect(logger.log).toHaveBeenCalledWith(

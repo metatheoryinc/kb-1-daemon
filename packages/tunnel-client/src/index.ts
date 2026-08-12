@@ -96,7 +96,10 @@ const MCP_READ_ONLY_TOOLS = new Set([
 ]);
 export const CONTROL_HEARTBEAT_INTERVAL_MS = 15_000;
 export const CONTROL_HEARTBEAT_TIMEOUT_MS = 12_000;
-export const CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT = 2;
+// Raised 2->4: a slow post-hibernation DO wake can delay the control pong past
+// the deadline for a probe or two; tolerate more misses before dropping the
+// control socket, since a reconnect strands any in-flight multiplexed doc open.
+export const CONTROL_HEARTBEAT_MISSES_BEFORE_RECONNECT = 4;
 export const CONTROL_DURABLE_LIVENESS_INTERVAL_MS = 30_000;
 
 const hopByHopHeaders = new Set([
