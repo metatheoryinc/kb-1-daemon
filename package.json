@@ -25,10 +25,10 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/ws": "8.18.1",
-    "@types/node": "25.9.2",
+    "@types/node": "26.2.0",
     "lib0": "0.2.117",
-    "nx": "22.7.6",
-    "tsx": "4.22.4",
+    "nx": "23.1.1",
+    "tsx": "4.23.11",
     "typescript": "6.0.3",
     "vitest": "4.1.8",
     "ws": "8.21.0",
