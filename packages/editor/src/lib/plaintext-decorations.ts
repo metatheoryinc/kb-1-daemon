@@ -2305,6 +2305,50 @@ export function buildMarkdownDecorations(
         return false;
       }
 
+      // -- Escapes inside link labels -------------------------------
+      // CommonMark requires nested `[` / `]` characters in link labels
+      // to be escaped. Keep those escapes in the source so the parser
+      // retains the outer Link node, but hide only the slash while the
+      // link is rendered. The normal line-based Link reveal still shows
+      // the original Markdown when the user edits that line.
+      if (name === 'Escape') {
+        const escaped = state.sliceDoc(node.from, node.to);
+        if (escaped === '\\[' || escaped === '\\]') {
+          let link: SyntaxNode | null = node.node.parent;
+          while (link !== null && link.type.name !== 'Link') link = link.parent;
+
+          if (link !== null) {
+            let closeBracket: number | null = null;
+            let child: SyntaxNode | null = link.firstChild;
+            while (child !== null) {
+              if (
+                child.type.name === 'LinkMark' &&
+                state.sliceDoc(child.from, child.to) === ']'
+              ) {
+                closeBracket = child.from;
+                break;
+              }
+              child = child.nextSibling;
+            }
+
+            const escapeLine = state.doc.lineAt(node.from);
+            if (
+              closeBracket !== null &&
+              node.to <= closeBracket &&
+              !intersects(escapeLine.from, escapeLine.to)
+            ) {
+              items.push({
+                kind: 'mark',
+                from: node.from,
+                to: node.from + 1,
+                deco: hiddenSyntaxMark,
+              });
+            }
+          }
+        }
+        return false;
+      }
+
       // -- Link (inline) --------------------------------------------
       // `[label](url)` — emit a `.cm-md-link-label` mark over the
       // label range so CSS can paint a subtle tint. The bracket /
