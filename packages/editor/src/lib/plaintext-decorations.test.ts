@@ -699,6 +699,90 @@ describe('wikilinks (Slice 5) — parse + decoration', () => {
   });
 });
 
+describe('escaped brackets in Markdown link labels', () => {
+  function hiddenEscapeRanges(
+    set: ReturnType<typeof buildMarkdownDecorations>,
+    doc: string,
+  ): { from: number; to: number }[] {
+    const hits: { from: number; to: number }[] = [];
+    set.between(0, doc.length, (from, to, value) => {
+      const spec = value.spec as { class?: string };
+      if (spec.class?.includes('cm-hidden') && doc.slice(from, to) === '\\') {
+        hits.push({ from, to });
+      }
+    });
+    return hits;
+  }
+
+  it('hides escape slashes when a bracketed link label is rendered', () => {
+    const doc = '[Q2 notes \\[Ongoing\\]](https://example.com)\nelsewhere';
+    const state = makeState(doc);
+    const cursor = doc.indexOf('elsewhere');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+
+    const escapes = hiddenEscapeRanges(set, doc);
+    expect(escapes).toHaveLength(2);
+    expect(escapes.map(({ from }) => from)).toEqual([
+      doc.indexOf('\\['),
+      doc.indexOf('\\]'),
+    ]);
+  });
+
+  it('finds escaped brackets nested inside formatted label content', () => {
+    const doc = '[**Q2 \\[Ongoing\\]**](https://example.com)\nelsewhere';
+    const state = makeState(doc);
+    const cursor = doc.indexOf('elsewhere');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+
+    expect(hiddenEscapeRanges(set, doc)).toHaveLength(2);
+  });
+
+  it('reveals the escape slashes on the active link line', () => {
+    const doc = '[Q2 notes \\[Ongoing\\]](https://example.com)\nelsewhere';
+    const state = makeState(doc);
+    const cursor = doc.indexOf('Q2');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+
+    expect(hiddenEscapeRanges(set, doc)).toHaveLength(0);
+  });
+
+  it('reveals escapes on an active continuation line of a multiline label', () => {
+    const doc = '[first line\nsecond \\[Ongoing\\]](https://example.com)\nelsewhere';
+    const state = makeState(doc);
+    const cursor = doc.indexOf('Ongoing');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+
+    expect(hiddenEscapeRanges(set, doc)).toHaveLength(0);
+  });
+
+  it('reveals escapes included in a multiline range selection', () => {
+    const doc = '[Q2 notes \\[Ongoing\\]](https://example.com)\nselected tail';
+    const state = makeState(doc);
+    const set = buildMarkdownDecorations(state, {
+      from: doc.indexOf('Ongoing'),
+      to: doc.indexOf('tail') + 'tail'.length,
+    });
+
+    expect(hiddenEscapeRanges(set, doc)).toHaveLength(0);
+  });
+
+  it('does not hide escapes in link-shaped inline or fenced code', () => {
+    const doc = [
+      '`[inline \\[example\\]](https://example.com)`',
+      '',
+      '```md',
+      '[fenced \\[example\\]](https://example.com)',
+      '```',
+      'elsewhere',
+    ].join('\n');
+    const state = makeState(doc);
+    const cursor = doc.indexOf('elsewhere');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+
+    expect(hiddenEscapeRanges(set, doc)).toHaveLength(0);
+  });
+});
+
 describe('autolinks (GFM) — parse + decoration', () => {
   /**
    * Same shape as the wikilink `findMarksByClass` helper. Kept local
