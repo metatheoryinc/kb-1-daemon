@@ -728,6 +728,7 @@ export class OneFileDocumentSession implements OneFileDocumentSessionRuntimeSurf
       this.markPersistRecovered();
       this.emitEvent({
         ...this.createEvent('content-persisted'),
+        persistedContent: content,
         ...(attribution !== undefined ? { attribution } : {})
       });
     } finally {

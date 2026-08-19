@@ -689,9 +689,47 @@ describe("daemon routing", () => {
     });
     expect(JSON.stringify(historyBody)).not.toContain("attributed\\n");
 
+    const versionId = (historyBody as { entries: Array<{ id: string }> }).entries[0]?.id;
+    expect(versionId).toBeTruthy();
+    const version = await app.request(
+      `${filePath("notes/attributed.md")}/history/content?id=${encodeURIComponent(versionId!)}`,
+    );
+    expect(version.status).toBe(200);
+    await expect(version.json()).resolves.toMatchObject({
+      ok: true,
+      available: true,
+      content: "attributed\n",
+      entry: { id: versionId },
+    });
+    const missingVersionId = await app.request(
+      `${filePath("notes/attributed.md")}/history/content`,
+    );
+    expect(missingVersionId.status).toBe(400);
+    await expect(missingVersionId.json()).resolves.toMatchObject({
+      ok: false,
+      error: "invalid_request",
+    });
+
     const historyAgain = await app.request(`${filePath("notes/attributed.md")}/history`);
     expect(historyAgain.status).toBe(200);
     await expect(historyAgain.json()).resolves.toEqual(historyBody);
+
+    const boundary = await app.request(
+      `${filePath("notes/attributed.md")}/history/boundary`,
+      { method: "POST" },
+    );
+    expect(boundary.status).toBe(200);
+    await expect(boundary.json()).resolves.toMatchObject({ ok: true, flushed: 1 });
+    const committedVersion = await app.request(
+      `${filePath("notes/attributed.md")}/history/content?id=${encodeURIComponent(versionId!)}`,
+    );
+    expect(committedVersion.status).toBe(200);
+    await expect(committedVersion.json()).resolves.toMatchObject({
+      ok: true,
+      available: true,
+      content: "attributed\n",
+      entry: { id: versionId },
+    });
 
     const moved = await app.request(`${filePath("notes/attributed.md")}/move`, {
       method: "POST",

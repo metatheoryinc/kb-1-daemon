@@ -396,6 +396,21 @@ function registerVaultDataRoutes(
   router.get(`${basePath}/files/*`, async (context) => {
     const resolved = scope.resolve(context);
     if (!resolved.ok) return mapServiceResult(context, resolved);
+    if (context.req.path.endsWith('/history/content')) {
+      const filePath = filePathParam(context.req.path, scope.filesPrefix(context), '/history/content');
+      const id = context.req.query('id');
+      if (!id) {
+        return mapServiceResult(context, {
+          ok: false,
+          error: 'invalid_request',
+          message: 'History version id is required.'
+        });
+      }
+      return mapServiceResult(context, await resolved.service.readNoteHistoryVersion({
+        path: filePath,
+        id
+      }));
+    }
     if (context.req.path.endsWith('/history')) {
       const filePath = filePathParam(context.req.path, scope.filesPrefix(context), '/history');
       return mapServiceResult(context, await resolved.service.listNoteHistory({
@@ -439,6 +454,13 @@ function registerVaultDataRoutes(
     if (!resolved.ok) return mapServiceResult(context, resolved);
     const service = resolved.service;
     const filesPrefix = scope.filesPrefix(context);
+
+    if (context.req.path.endsWith('/history/boundary')) {
+      const filePath = filePathParam(context.req.path, filesPrefix, '/history/boundary');
+      return mapServiceResult(context, await service.createNoteHistoryBoundary({
+        path: filePath
+      }));
+    }
 
     if (context.req.path.endsWith('/splice')) {
       const request = await serviceJsonPathMutationRequest(context, service, actorDefault, filesPrefix, '/splice');

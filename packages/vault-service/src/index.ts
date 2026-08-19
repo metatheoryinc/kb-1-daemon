@@ -20,6 +20,7 @@ import {
   getFolderMetadata as getVaultFolderMetadata,
   getVaultInfo,
   listFileHistory,
+  readFileHistoryVersion,
   listFolderMetadata as listVaultFolderMetadata,
   listVaultTree,
   makeVaultFolder,
@@ -138,6 +139,8 @@ export interface LocalMcpVaultService {
 
 export interface VaultService extends LocalMcpVaultService {
   listNoteHistory(input: { path: string; before?: string; beforeId?: string; limit?: number }): Promise<ServiceResult<{ entries: FileHistoryEntry[]; hasMore: boolean }>>;
+  readNoteHistoryVersion(input: { path: string; id: string }): Promise<ServiceResult<{ entry: FileHistoryEntry; available: boolean; content?: string }>>;
+  createNoteHistoryBoundary(input: { path: string }): Promise<ServiceResult<{ flushed: number; unavailable?: boolean }>>;
   flushDirtySessions(): Promise<ServiceResult<{ flushed: number; durableAsOf: string }>>;
   onEvent(handler: VaultChangeEventHandler): () => void;
 }
@@ -151,6 +154,12 @@ export interface VaultServiceOptions {
 export function createVaultService(options: VaultServiceOptions): VaultService {
   const ctx = (actor?: VaultActor) => ({ root: options.vaultRoot, ...(actor ? { actor } : {}) });
   const eventHandlers = new Set<VaultChangeEventHandler>();
+  let historyMutationTail: Promise<void> = Promise.resolve();
+  const enqueueHistoryMutation = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = historyMutationTail.then(work, work);
+    historyMutationTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
   let treeReadGeneration = 0;
   const invalidateTreeReads = () => {
     treeReadGeneration += 1;
@@ -321,23 +330,33 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       });
     }
   });
-  const recordHistory = async (
+  const recordHistoryUnqueued = async (
     path: string,
     operation: 'create' | 'update',
     actor: VaultActor,
-    content: string
+    content: string,
+    now?: Date
   ): Promise<void> => {
     const result = await recordFileHistory(options.vaultRoot, {
       path,
       operation,
       actor,
       content,
+      ...(now !== undefined ? { now } : {}),
       coalesceWindowMs: options.historyCoalesceWindowMs
     });
     if (!result.ok) {
       throw new Error(`Failed to record file history for ${path}: ${result.message}`);
     }
   };
+  const recordHistory = (
+    path: string,
+    operation: 'create' | 'update',
+    actor: VaultActor,
+    content: string
+  ): Promise<void> => enqueueHistoryMutation(
+    () => recordHistoryUnqueued(path, operation, actor, content)
+  );
   const recordHistoryFromAudit = async (audit: AuditEntry, content: string): Promise<void> => {
     const operation = historyOperationFromAudit(audit.operation);
     if (operation !== 'create' && operation !== 'update') return;
@@ -350,9 +369,12 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
       console.warn('KB-1 failed to record file history for service write.', error);
     }
   };
+  const flushHistory = (paths?: string[]) => enqueueHistoryMutation(
+    () => flushFileHistory(options.vaultRoot, paths === undefined ? {} : { paths })
+  );
   const flushPendingHistory = async (paths?: string[]): Promise<void> => {
     try {
-      const result = await flushFileHistory(options.vaultRoot, paths === undefined ? {} : { paths });
+      const result = await flushHistory(paths);
       if (!result.ok) {
         throw new Error(`Failed to flush file history: ${result.message}`);
       }
@@ -362,9 +384,15 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
   };
   const recordPersistedSessionHistory = async (event: DocumentSessionEvent): Promise<void> => {
     const actor = vaultActorFromDocumentAttribution(event.attribution);
-    const read = await readVaultFile(ctx(), event.path);
-    if (!read.ok) return;
-    await recordHistory(event.path, 'update', actor, read.value.content);
+    let content = event.persistedContent;
+    if (content === undefined) {
+      const read = await readVaultFile(ctx(), event.path);
+      if (!read.ok) return;
+      content = read.value.content;
+    }
+    await enqueueHistoryMutation(
+      () => recordHistoryUnqueued(event.path, 'update', actor, content, new Date(event.ts))
+    );
   };
   const carryHistoryAfterFileMove = async (moved: {
     fromPath: string;
@@ -372,18 +400,20 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     audit: AuditEntry;
   }): Promise<void> => {
     try {
-      const read = await readVaultFile(ctx(), moved.toPath);
-      if (!read.ok) return;
-      const result = await moveFileHistory(options.vaultRoot, {
-        fromPath: moved.fromPath,
-        toPath: moved.toPath,
-        actor: moved.audit.actor,
-        content: read.value.content,
-        coalesceWindowMs: options.historyCoalesceWindowMs,
+      await enqueueHistoryMutation(async () => {
+        const read = await readVaultFile(ctx(), moved.toPath);
+        if (!read.ok) return;
+        const result = await moveFileHistory(options.vaultRoot, {
+          fromPath: moved.fromPath,
+          toPath: moved.toPath,
+          actor: moved.audit.actor,
+          content: read.value.content,
+          coalesceWindowMs: options.historyCoalesceWindowMs,
+        });
+        if (!result.ok) {
+          throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+        }
       });
-      if (!result.ok) {
-        throw new Error(`Failed to move file history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
-      }
     } catch (error: unknown) {
       console.warn('KB-1 failed to carry file history after note move.', error);
     }
@@ -394,14 +424,16 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
     audit: AuditEntry;
   }): Promise<void> => {
     try {
-      const result = await moveFolderHistory(options.vaultRoot, {
-        fromPath: moved.fromPath,
-        toPath: moved.toPath,
-        actor: moved.audit.actor,
+      await enqueueHistoryMutation(async () => {
+        const result = await moveFolderHistory(options.vaultRoot, {
+          fromPath: moved.fromPath,
+          toPath: moved.toPath,
+          actor: moved.audit.actor,
+        });
+        if (!result.ok) {
+          throw new Error(`Failed to move folder history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
+        }
       });
-      if (!result.ok) {
-        throw new Error(`Failed to move folder history from ${moved.fromPath} to ${moved.toPath}: ${result.message}`);
-      }
     } catch (error: unknown) {
       console.warn('KB-1 failed to carry file history after folder move.', error);
     }
@@ -488,6 +520,26 @@ export function createVaultService(options: VaultServiceOptions): VaultService {
         return { ok: true, entries: [], hasMore: false };
       }
       return serviceResult(await listFileHistory(options.vaultRoot, input));
+    },
+
+    async readNoteHistoryVersion(input) {
+      const read = await readVaultFile(ctx(), input.path);
+      if (!read.ok) return serviceResult(read);
+      return serviceResult(await readFileHistoryVersion(options.vaultRoot, input));
+    },
+
+    async createNoteHistoryBoundary(input) {
+      const boundary = await mapWriteFailure(() => options.documentSessions.withStablePath(
+        input.path,
+        async (liveSession): Promise<ServiceResult<{ flushed: number; unavailable?: boolean }>> => {
+          await liveSession?.flush();
+          const read = await readVaultFile(ctx(), input.path);
+          if (!read.ok) return serviceResult(read);
+          return serviceResult(await flushHistory([input.path]));
+        }
+      ));
+      if (!boundary.ok) return boundary;
+      return boundary.value;
     },
 
     async createNote(input) {

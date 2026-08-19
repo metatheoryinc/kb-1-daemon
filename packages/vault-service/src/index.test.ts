@@ -236,7 +236,8 @@ describe("vault service failure mapping", () => {
       content: "two\n",
     });
 
-    await expect(service.listNoteHistory({ path: "notes/history.md" })).resolves.toMatchObject({
+    const pendingHistory = await service.listNoteHistory({ path: "notes/history.md" });
+    expect(pendingHistory).toMatchObject({
       ok: true,
       entries: [
         {
@@ -280,6 +281,21 @@ describe("vault service failure mapping", () => {
         },
       ],
     });
+    if (!pendingHistory.ok || !pendingHistory.entries[0]) {
+      throw new Error("expected pending history");
+    }
+    const pendingVersionId = pendingHistory.entries[0].id;
+    await expect(service.createNoteHistoryBoundary({
+      path: "notes/history.md",
+    })).resolves.toMatchObject({ ok: true, flushed: 1 });
+    await expect(service.readNoteHistoryVersion({
+      path: "notes/history.md",
+      id: pendingVersionId,
+    })).resolves.toMatchObject({
+      ok: true,
+      available: true,
+      content: "two\nthree\n",
+    });
     await expect(service.flushDirtySessions()).resolves.toMatchObject({ ok: true });
     const flushed = await service.listNoteHistory({ path: "notes/history.md" });
     expect(flushed).toMatchObject({
@@ -295,6 +311,21 @@ describe("vault service failure mapping", () => {
     });
     if (!flushed.ok) throw new Error("expected flushed history");
     expect(flushed.entries[0]).not.toHaveProperty("pending");
+    const versionId = flushed.entries[0]?.id;
+    if (!versionId) throw new Error("expected committed history id");
+    await expect(service.readNoteHistoryVersion({
+      path: "notes/history.md",
+      id: versionId,
+    })).resolves.toMatchObject({
+      ok: true,
+      available: true,
+      content: "two\nthree\n",
+      entry: { id: versionId },
+    });
+    await expect(service.readNoteHistoryVersion({
+      path: "notes/history.md",
+      id: "unknown-version",
+    })).resolves.toMatchObject({ ok: false, error: "not_found" });
   });
 
   it("waits for a live path transition before overwriting the source path", async () => {
