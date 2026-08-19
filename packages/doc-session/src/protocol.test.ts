@@ -42,6 +42,25 @@ describe('document session protocol events', () => {
     expect(decodeSessionEvent(decoder)).toEqual(event);
   });
 
+  it('does not send internal persisted content in session event frames', () => {
+    const decoder = decoding.createDecoder(encodeSessionEvent({
+      kind: 'content-persisted',
+      path: 'notes/private.md',
+      ts: 123,
+      attribution: { actor: { kind: 'user', id: 'sam' } },
+      persistedContent: 'private note body',
+    }));
+
+    expect(decoding.readVarUint(decoder)).toBe(MESSAGE_SESSION_EVENT);
+    const wireEvent = JSON.parse(decoding.readVarString(decoder)) as Record<string, unknown>;
+    expect(wireEvent).not.toHaveProperty('persistedContent');
+    expect(wireEvent).toMatchObject({
+      kind: 'content-persisted',
+      path: 'notes/private.md',
+      attribution: { actor: { kind: 'user', id: 'sam' } },
+    });
+  });
+
   it.each([
     { kind: 'unknown', path: 'notes/demo.md', ts: 123 },
     { kind: 'content-persisted', path: 42, ts: 123 },

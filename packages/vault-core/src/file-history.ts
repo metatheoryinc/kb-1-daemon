@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -42,6 +42,11 @@ export interface ListFileHistoryInput {
   limit?: number;
 }
 
+export interface ReadFileHistoryVersionInput {
+  path: string;
+  id: string;
+}
+
 export interface MoveFileHistoryInput {
   fromPath: string;
   toPath: string;
@@ -68,6 +73,12 @@ export interface FileHistoryPage {
   hasMore: boolean;
 }
 
+export interface FileHistoryVersion {
+  entry: FileHistoryEntry;
+  available: boolean;
+  content?: string;
+}
+
 export interface FlushFileHistoryValue {
   flushed: number;
   unavailable?: boolean;
@@ -84,6 +95,7 @@ interface PendingHistoryEntry {
   content: string;
   size: number;
   contentHash: string;
+  contentHashFormat?: string;
   contributors: VaultActor[];
 }
 
@@ -95,6 +107,18 @@ interface GitResult {
 interface CommitValues {
   get(key: string): string | undefined;
   getAll(key: string): string[];
+}
+
+interface CommittedHistoryRecord {
+  entry: FileHistoryEntry;
+  contentPath: string;
+  contentHashFormat?: string;
+}
+
+interface HistoryLogRecord {
+  commitId: string;
+  committedAt: string;
+  body: string;
 }
 
 type HistoryCommitScope =
@@ -115,6 +139,8 @@ const MAX_HISTORY_PAGE_LIMIT = 200;
 const DAEMON_AUTHOR_NAME = "KB-1 Daemon";
 const DAEMON_AUTHOR_EMAIL = "history@kb-1.ai";
 const GITIGNORE_RELATIVE_PATH = ".gitignore";
+const GIT_BLOB_CONTENT_HASH_FORMAT = "git-blob-v1";
+const HISTORY_INDEX_RELATIVE_PATH = ".kb1/history-index";
 /* v8 ignore next -- Constant is exercised indirectly through Git log parsing but v8 marks separator declarations as uncovered. */
 const COMMIT_SEPARATOR = "\x1e";
 const FIELD_SEPARATOR = "\x00";
@@ -193,7 +219,7 @@ export async function listFileHistory(
   }
 
   const pendingEntries = pendingEntriesForPath(root, rel);
-  const committedEntries = await readCommittedHistory(root, rel);
+  const committedEntries = (await readCommittedHistory(root, rel)).map(({ entry }) => entry);
   const newestFirst = [...pendingEntries, ...committedEntries].sort(compareHistoryEntriesDesc);
   const limited = applyHistoryCursor(newestFirst, input.before, input.beforeId);
   const limit = normalizePageLimit(input.limit);
@@ -203,6 +229,80 @@ export async function listFileHistory(
     value: {
       entries: entries.map(cloneFileHistoryEntry),
       hasMore: limited.length > entries.length,
+    },
+  };
+}
+
+/**
+ * Resolve one version only after proving that its id belongs to the requested
+ * note's explicit KB-1 history chain. Committed content is intentionally read
+ * lazily so history-list responses stay metadata-only.
+ */
+export async function readFileHistoryVersion(
+  root: string,
+  input: ReadFileHistoryVersionInput,
+): Promise<VaultResult<FileHistoryVersion>> {
+  let rel: string;
+  try {
+    rel = validateVaultPath(input.path, "file");
+  } catch (error) {
+    if (error instanceof Error) return fail("invalid_path", error.message);
+    /* v8 ignore next -- validateVaultPath throws Error instances; non-Error throws are defensive rethrows. */
+    throw error;
+  }
+
+  if (input.id.length === 0) {
+    return { ok: false, error: "not_found", message: "history version not found" };
+  }
+
+  const pending = [...pendingForRoot(root).values()].find(
+    (entry) => entry.path === rel && entry.id === input.id,
+  );
+  if (pending) {
+    return {
+      ok: true,
+      value: {
+        entry: pendingEntryToHistoryEntry(pending),
+        available: true,
+        content: pending.content,
+      },
+    };
+  }
+
+  const record = (await readCommittedHistory(root, rel)).find(
+    ({ entry }) => entry.id === input.id,
+  );
+  if (!record) {
+    return { ok: false, error: "not_found", message: "history version not found" };
+  }
+
+  let content: string;
+  try {
+    const result = await runGitContent(root, [
+      "show",
+      "--no-textconv",
+      `${record.entry.commitId}:${record.contentPath}`,
+    ]);
+    content = result.stdout;
+  } catch {
+    return { ok: true, value: { entry: cloneFileHistoryEntry(record.entry), available: false } };
+  }
+
+  if (record.contentHashFormat !== undefined) {
+    const hasVerifiedSnapshot = record.contentHashFormat === GIT_BLOB_CONTENT_HASH_FORMAT
+      && record.entry.contentHash.length > 0
+      && await hashContent(content) === record.entry.contentHash;
+    if (!hasVerifiedSnapshot) {
+      return { ok: true, value: { entry: cloneFileHistoryEntry(record.entry), available: false } };
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      entry: cloneFileHistoryEntry(record.entry),
+      available: true,
+      content,
     },
   };
 }
@@ -343,13 +443,71 @@ async function commitPendingEntry(
   entry: PendingHistoryEntry,
   now: Date | undefined,
 ): Promise<void> {
-  const paths = entry.fromPath ? [entry.fromPath, entry.path] : [entry.path];
-  await runGit(root, ["add", "-A", "--", ...paths]);
-  const changed = await hasStagedChanges(root, paths);
-  if (!changed) return;
+  await stagePendingEntry(root, entry);
   await runGit(root, ["add", "--", GITIGNORE_RELATIVE_PATH]);
 
-  await commitHistoryEntry(root, entry, now);
+  // Git attributes and platform line-ending rules can transform a note while
+  // it is staged. Record the bytes that the commit will actually preserve so
+  // later integrity checks validate the historical snapshot, not the working
+  // tree representation that preceded it.
+  const staged = await runGitContent(root, [
+    "show",
+    "--no-textconv",
+    `:0:${entry.path}`,
+  ]);
+  const committedEntry = {
+    ...entry,
+    size: Buffer.byteLength(staged.stdout, "utf8"),
+    contentHash: await hashContent(staged.stdout),
+    contentHashFormat: GIT_BLOB_CONTENT_HASH_FORMAT,
+  };
+  await commitHistoryEntry(root, committedEntry, now);
+}
+
+async function stagePendingEntry(root: string, entry: PendingHistoryEntry): Promise<void> {
+  const tempDir = path.join(root, ".kb1", "tmp", "file-history");
+  const tempPath = path.join(tempDir, randomUUID());
+  await mkdir(tempDir, { recursive: true });
+  try {
+    await writeFile(tempPath, entry.content, "utf8");
+    const blobId = (await runGit(root, [
+      "hash-object",
+      "-w",
+      `--path=${entry.path}`,
+      tempPath,
+    ])).stdout.trim();
+    /* v8 ignore next -- Real Git output is exercised; malformed hash-object output is a defensive tool-integrity guard. */
+    if (!/^[0-9a-f]{40,64}$/u.test(blobId)) {
+      throw new Error("Git returned an invalid history blob id");
+    }
+    if (entry.fromPath !== undefined) {
+      const previousMarkerPath = await historyMarkerPath(entry.fromPath);
+      await rm(path.join(root, previousMarkerPath), { force: true });
+      await runGit(root, [
+        "rm",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        entry.fromPath,
+        previousMarkerPath,
+      ]);
+    }
+    await runGit(root, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      "100644",
+      blobId,
+      entry.path,
+    ]);
+
+    const markerPath = await historyMarkerPath(entry.path);
+    await mkdir(path.dirname(path.join(root, markerPath)), { recursive: true });
+    await writeFile(path.join(root, markerPath), `${entry.id}\n`, "utf8");
+    await runGit(root, ["add", "--force", "--", markerPath]);
+  } finally {
+    await rm(tempPath, { force: true });
+  }
 }
 
 async function commitHistoryEntry(
@@ -407,10 +565,14 @@ function commitMessage(
         ...(!hasLineBreak(entry.fromPath) ? [`KB1-From-Path: ${entry.fromPath}`] : []),
       ]),
     `KB1-Operation: ${entry.operation}`,
+    `KB1-History-ID: ${entry.id}`,
     `KB1-Bucket-Start: ${entry.bucketStart}`,
     `KB1-Bucket-End: ${bucketEnd}`,
     `KB1-Size: ${entry.size}`,
     `KB1-Content-SHA256: ${entry.contentHash}`,
+    ...(entry.contentHashFormat === undefined
+      ? []
+      : [`KB1-Content-Hash-Format: ${entry.contentHashFormat}`]),
     ...entry.contributors.map((actor) => `KB1-Contributor: ${JSON.stringify(actor)}`),
   ].join("\n");
 
@@ -420,38 +582,26 @@ function commitMessage(
   };
 }
 
-async function readCommittedHistory(root: string, rel: string): Promise<FileHistoryEntry[]> {
+async function readCommittedHistory(root: string, rel: string): Promise<CommittedHistoryRecord[]> {
   if (!await hasGitRepository(root)) return [];
 
-  const entries: FileHistoryEntry[] = [];
+  const entries: CommittedHistoryRecord[] = [];
   const seenCommitIds = new Set<string>();
   let currentPath = rel;
   let revision: string | undefined;
 
   while (true) {
-    let result: GitResult;
+    let records: HistoryLogRecord[];
     try {
-      result = await runGit(root, [
-        "log",
-        "--no-follow",
-        ...(revision ? [revision] : []),
-        "--format=%H%x00%cI%x00%B%x1e",
-        "--",
-        currentPath,
-      ]);
+      records = await readHistoryLogSegment(root, currentPath, revision);
     } catch {
       /* v8 ignore next -- Git log failures are treated as the end of best-effort history traversal. */
       return entries;
     }
 
     let previousSegment: { path: string; revision: string } | undefined;
-    for (const raw of result.stdout.split(COMMIT_SEPARATOR)) {
-      const trimmed = raw.trim();
-      if (trimmed.length === 0) continue;
-      const [commitId, committedAt, ...bodyParts] = trimmed.split(FIELD_SEPARATOR);
-      /* v8 ignore next -- Git log format is controlled by this module. */
-      if (!commitId || !committedAt) continue;
-      const values = commitValues(bodyParts.join(FIELD_SEPARATOR));
+    for (const { commitId, committedAt, body } of records) {
+      const values = commitValues(body);
       const parsed = entryFromCommitValues(rel, commitId, committedAt, values);
       /* v8 ignore next -- Invalid external KB1 history commits are ignored; emitted commits parse successfully. */
       if (!parsed) continue;
@@ -465,7 +615,12 @@ async function readCommittedHistory(root: string, rel: string): Promise<FileHist
       if (!scope.matches) continue;
 
       if (!seenCommitIds.has(commitId)) {
-        entries.push(parsed);
+        const contentHashFormat = values.get("KB1-Content-Hash-Format");
+        entries.push({
+          entry: parsed,
+          contentPath: currentPath,
+          ...(contentHashFormat === undefined ? {} : { contentHashFormat }),
+        });
         seenCommitIds.add(commitId);
       }
 
@@ -485,6 +640,44 @@ async function readCommittedHistory(root: string, rel: string): Promise<FileHist
     currentPath = previousSegment.path;
     revision = previousSegment.revision;
   }
+}
+
+async function readHistoryLogSegment(
+  root: string,
+  currentPath: string,
+  revision: string | undefined,
+): Promise<HistoryLogRecord[]> {
+  const format = "--format=%H%x00%cI%x00%B%x1e";
+  const revisionArgs = revision === undefined ? [] : [revision];
+  const markerPath = await historyMarkerPath(currentPath);
+  const result = await runGit(root, [
+    "log",
+    "--no-follow",
+    format,
+    ...revisionArgs,
+    "--",
+    currentPath,
+    markerPath,
+  ]);
+
+  const records: HistoryLogRecord[] = [];
+  for (const raw of result.stdout.split(COMMIT_SEPARATOR)) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    const [commitId, committedAt, ...bodyParts] = trimmed.split(FIELD_SEPARATOR);
+    /* v8 ignore next -- Git log format is controlled by this module. */
+    if (!commitId || !committedAt) continue;
+    records.push({
+      commitId,
+      committedAt,
+      body: bodyParts.join(FIELD_SEPARATOR),
+    });
+  }
+  return records;
+}
+
+async function historyMarkerPath(notePath: string): Promise<string> {
+  return `${HISTORY_INDEX_RELATIVE_PATH}/${await hashContent(notePath)}`;
 }
 
 function entryFromCommitValues(
@@ -507,7 +700,7 @@ function entryFromCommitValues(
   const contentHash = values.get("KB1-Content-SHA256") ?? "";
 
   return {
-    id: commitId,
+    id: values.get("KB1-History-ID") ?? commitId,
     commitId,
     path: requestedPath,
     operation,
@@ -682,6 +875,26 @@ async function runGit(
     env,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
+    timeout: 30_000,
+  }) as GitResult;
+  return result;
+}
+
+/**
+ * Run a Git command whose stdout is note content returned to the caller.
+ * Unlike metadata commands, snapshot reads must not inherit the shared 10 MiB
+ * cap: vault writes currently allow larger notes and the API necessarily
+ * materializes the selected snapshot as a string.
+ */
+async function runGitContent(
+  root: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GitResult> {
+  const result = await execFileAsync("git", ["-C", root, ...args], {
+    env,
+    encoding: "utf8",
+    maxBuffer: Number.POSITIVE_INFINITY,
     timeout: 30_000,
   }) as GitResult;
   return result;

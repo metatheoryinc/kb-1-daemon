@@ -26,6 +26,8 @@ export interface DocumentSessionEvent {
   fromPath?: string;
   toPath?: string;
   attribution?: DocumentUpdateAttribution;
+  /** Internal immutable snapshot; deliberately omitted from websocket event frames. */
+  persistedContent?: string;
 }
 
 export interface AckedSyncUpdate {
@@ -103,7 +105,15 @@ export function documentUpdateAttributionSourceFromOrigin(origin: unknown): unkn
 export function encodeSessionEvent(event: DocumentSessionEvent): Uint8Array {
   const encoder = encoding.createEncoder();
   encoding.writeVarUint(encoder, MESSAGE_SESSION_EVENT);
-  encoding.writeVarString(encoder, JSON.stringify(event));
+  const wireEvent = {
+    kind: event.kind,
+    path: event.path,
+    ts: event.ts,
+    ...(event.fromPath !== undefined ? { fromPath: event.fromPath } : {}),
+    ...(event.toPath !== undefined ? { toPath: event.toPath } : {}),
+    ...(event.attribution !== undefined ? { attribution: event.attribution } : {}),
+  };
+  encoding.writeVarString(encoder, JSON.stringify(wireEvent));
   return encoding.toUint8Array(encoder);
 }
 

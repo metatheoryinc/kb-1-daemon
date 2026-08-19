@@ -278,7 +278,11 @@ describe('OneFileDocumentSession', () => {
     await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 1 });
 
     await expect(readFile(join(kb1Home, 'demo-vault', 'notes', 'flush.md'), 'utf8')).resolves.toBe('manager flush\n');
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'content-persisted', path: 'notes/flush.md' }));
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'content-persisted',
+      path: 'notes/flush.md',
+      persistedContent: 'manager flush\n',
+    }));
     await expect(manager.flushDirtySessions()).resolves.toEqual({ flushed: 0 });
     await manager.close();
   });

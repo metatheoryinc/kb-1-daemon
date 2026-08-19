@@ -47,6 +47,7 @@ import {
   historyOperationFromAudit,
   flushFileHistory,
   listFileHistory,
+  readFileHistoryVersion,
   moveFileHistory,
   moveFolderHistory,
   recordFileHistory,
@@ -631,6 +632,357 @@ describe("vault-core filesystem operations", () => {
       flushFileHistory(root, { paths: ["alpha/sorted.md"] }),
     ).resolves.toMatchObject({ ok: true, value: { flushed: 1 } });
     await expect(flushFileHistory(root)).resolves.toEqual({ ok: true, value: { flushed: 0 } });
+  });
+
+  it("reads pending and committed history content only through the note's identity chain", async () => {
+    const actor = { kind: "user" as const, id: "history-reader", client: "browser" };
+    const sourcePath = "notes/versioned.md";
+    const targetPath = "archive/versioned.md";
+    await writeFileWithParents(path.join(root, sourcePath), "first version\n", "utf8");
+    const pending = await recordFileHistory(root, {
+      path: sourcePath,
+      operation: "create",
+      actor,
+      content: "first version\n",
+      now: new Date("2026-07-01T00:00:00.000Z"),
+    });
+    if (!pending.ok) throw new Error("expected pending history");
+
+    await expect(readFileHistoryVersion(root, {
+      path: sourcePath,
+      id: pending.value.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "first version\n" },
+    });
+    await flushFileHistory(root, { paths: [sourcePath] });
+    const created = await listFileHistory(root, { path: sourcePath });
+    if (!created.ok || !created.value.entries[0]) throw new Error("expected committed history");
+    const createdId = created.value.entries[0].id;
+    expect(createdId).toBe(pending.value.id);
+    await expect(readFileHistoryVersion(root, {
+      path: sourcePath,
+      id: pending.value.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "first version\n" },
+    });
+
+    await mkdir(path.join(root, "archive"), { recursive: true });
+    await rename(path.join(root, sourcePath), path.join(root, targetPath));
+    await moveFileHistory(root, {
+      fromPath: sourcePath,
+      toPath: targetPath,
+      actor,
+      content: "first version\n",
+      now: new Date("2026-07-01T00:01:00.000Z"),
+    });
+
+    await expect(readFileHistoryVersion(root, {
+      path: targetPath,
+      id: createdId,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "first version\n", entry: { id: createdId } },
+    });
+    await expect(readFileHistoryVersion(root, {
+      path: "notes/unrelated.md",
+      id: createdId,
+    })).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(readFileHistoryVersion(root, {
+      path: targetPath,
+      id: "not-a-history-entry",
+    })).resolves.toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("preserves a pending version id when its content matches the current Git snapshot", async () => {
+    const notePath = "notes/no-op-version.md";
+    const content = "same content\n";
+    await writeFile(path.join(root, ".gitignore"), ".kb1/\n", "utf8");
+    await writeFileWithParents(path.join(root, notePath), content, "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content,
+      now: new Date("2026-07-01T00:30:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    const pending = await recordFileHistory(root, {
+      path: notePath,
+      operation: "update",
+      content,
+      now: new Date("2026-07-01T00:31:00.000Z"),
+    });
+    if (!pending.ok) throw new Error("expected no-op pending history");
+    await expect(flushFileHistory(root, { paths: [notePath] })).resolves.toEqual({
+      ok: true,
+      value: { flushed: 1 },
+    });
+
+    const history = await listFileHistory(root, { path: notePath });
+    if (!history.ok) throw new Error("expected no-op committed history");
+    expect(history.value.entries).toHaveLength(2);
+    expect(history.value.entries.some((entry) => entry.id === pending.value.id)).toBe(true);
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: pending.value.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content, entry: { id: pending.value.id } },
+    });
+  });
+
+  it("reports unavailable committed snapshots without returning unverified content", async () => {
+    const notePath = "notes/unavailable.md";
+    await writeFileWithParents(path.join(root, notePath), "trusted\n", "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content: "trusted\n",
+      now: new Date("2026-07-01T01:00:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    const originalMessage = (await git(root, ["log", "-1", "--format=%B"])).stdout;
+    await git(root, [
+      "commit",
+      "--amend",
+      "-m",
+      originalMessage.replace(/KB1-Content-SHA256: [0-9a-f]+/u, `KB1-Content-SHA256: ${"0".repeat(64)}`),
+    ]);
+    const tamperedHistory = await listFileHistory(root, { path: notePath });
+    if (!tamperedHistory.ok || !tamperedHistory.value.entries[0]) {
+      throw new Error("expected tampered history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: tamperedHistory.value.entries[0].id,
+    })).resolves.toMatchObject({ ok: true, value: { available: false } });
+
+    await rm(path.join(root, notePath));
+    await git(root, ["add", "-A", "--", notePath]);
+    const deletedMessage = [
+      `KB-1 history: update ${notePath}`,
+      "",
+      `KB1-Path-JSON: ${JSON.stringify(notePath)}`,
+      "KB1-Operation: update",
+      "KB1-Bucket-Start: 2026-07-01T01:01:00.000Z",
+      "KB1-Bucket-End: 2026-07-01T01:01:00.000Z",
+      "KB1-Size: 8",
+    ].join("\n");
+    await git(root, ["commit", "-m", deletedMessage]);
+    const deletedHistory = await listFileHistory(root, { path: notePath });
+    if (!deletedHistory.ok || !deletedHistory.value.entries[0]) {
+      throw new Error("expected deleted-blob history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: deletedHistory.value.entries[0].id,
+    })).resolves.toMatchObject({ ok: true, value: { available: false } });
+
+    await expect(readFileHistoryVersion(root, { path: "../escape.md", id: "x" }))
+      .resolves.toMatchObject({ ok: false, error: "invalid_path" });
+    await expect(readFileHistoryVersion(root, { path: notePath, id: "" }))
+      .resolves.toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("fails closed when explicit snapshot integrity metadata is incomplete or unknown", async () => {
+    const missingHashPath = "notes/missing-history-hash.md";
+    await writeFileWithParents(path.join(root, missingHashPath), "missing hash\n", "utf8");
+    await recordFileHistory(root, {
+      path: missingHashPath,
+      operation: "create",
+      content: "missing hash\n",
+      now: new Date("2026-07-01T01:10:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [missingHashPath] });
+    const missingHashMessage = (await git(root, ["log", "-1", "--format=%B"])).stdout
+      .replace(/^KB1-Content-SHA256:.*\n?/mu, "");
+    await git(root, ["commit", "--amend", "-m", missingHashMessage]);
+
+    const missingHashHistory = await listFileHistory(root, { path: missingHashPath });
+    if (!missingHashHistory.ok || !missingHashHistory.value.entries[0]) {
+      throw new Error("expected history entry with missing integrity hash");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: missingHashPath,
+      id: missingHashHistory.value.entries[0].id,
+    })).resolves.toMatchObject({ ok: true, value: { available: false } });
+
+    const unknownFormatPath = "notes/unknown-history-format.md";
+    await writeFileWithParents(path.join(root, unknownFormatPath), "unknown format\n", "utf8");
+    await recordFileHistory(root, {
+      path: unknownFormatPath,
+      operation: "create",
+      content: "unknown format\n",
+      now: new Date("2026-07-01T01:20:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [unknownFormatPath] });
+    const unknownFormatMessage = (await git(root, ["log", "-1", "--format=%B"])).stdout
+      .replace(
+        /^KB1-Content-Hash-Format:.*$/mu,
+        "KB1-Content-Hash-Format: future-format",
+      );
+    await git(root, ["commit", "--amend", "-m", unknownFormatMessage]);
+
+    const unknownFormatHistory = await listFileHistory(root, { path: unknownFormatPath });
+    if (!unknownFormatHistory.ok || !unknownFormatHistory.value.entries[0]) {
+      throw new Error("expected history entry with unknown integrity format");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: unknownFormatPath,
+      id: unknownFormatHistory.value.entries[0].id,
+    })).resolves.toMatchObject({ ok: true, value: { available: false } });
+  });
+
+  it("reads committed snapshots larger than the metadata command buffer", async () => {
+    const notePath = "notes/large-history.md";
+    const content = `${"a".repeat(10 * 1024 * 1024)}\n`;
+    await writeFileWithParents(path.join(root, notePath), content, "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content,
+      now: new Date("2026-07-01T02:00:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    const history = await listFileHistory(root, { path: notePath });
+    if (!history.ok || !history.value.entries[0]) {
+      throw new Error("expected large history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: history.value.entries[0].id,
+    })).resolves.toMatchObject({ ok: true, value: { available: true, content } });
+  });
+
+  it("hashes the committed representation after Git clean filters", async () => {
+    const notePath = "notes/normalized-history.md";
+    const workingTreeContent = "first\r\nsecond\r\n";
+    await writeFile(path.join(root, ".gitattributes"), "*.md text eol=lf\n", "utf8");
+    await writeFileWithParents(path.join(root, notePath), workingTreeContent, "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content: workingTreeContent,
+      now: new Date("2026-07-01T03:00:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    const history = await listFileHistory(root, { path: notePath });
+    if (!history.ok || !history.value.entries[0]) {
+      throw new Error("expected normalized history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: history.value.entries[0].id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "first\nsecond\n" },
+    });
+  });
+
+  it("reads pre-upgrade snapshots whose trailer hash predates Git normalization", async () => {
+    const notePath = "notes/legacy-normalized-history.md";
+    const workingTreeContent = "legacy\r\ncontent\r\n";
+    await writeFile(path.join(root, ".gitattributes"), "*.md text eol=lf\n", "utf8");
+    await writeFileWithParents(path.join(root, notePath), workingTreeContent, "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content: workingTreeContent,
+      now: new Date("2026-07-01T03:30:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    const legacyHashBytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(workingTreeContent),
+    );
+    const legacyHash = Array.from(
+      new Uint8Array(legacyHashBytes),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    const originalMessage = (await git(root, ["log", "-1", "--format=%B"])).stdout;
+    await git(root, [
+      "commit",
+      "--amend",
+      "-m",
+      originalMessage
+        .replace(/^KB1-Content-Hash-Format:.*\n?/mu, "")
+        .replace(/KB1-Content-SHA256: [0-9a-f]+/u, `KB1-Content-SHA256: ${legacyHash}`),
+    ]);
+
+    const history = await listFileHistory(root, { path: notePath });
+    if (!history.ok || !history.value.entries[0]) {
+      throw new Error("expected legacy normalized history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: history.value.entries[0].id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "legacy\ncontent\n" },
+    });
+  });
+
+  it("reads the stage-zero blob for filenames that resemble Git index stages", async () => {
+    const notePath = "1:note.md";
+    await writeFile(path.join(root, notePath), "stage zero\n", "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content: "stage zero\n",
+      now: new Date("2026-07-01T03:45:00.000Z"),
+    });
+    await expect(flushFileHistory(root, { paths: [notePath] })).resolves.toMatchObject({
+      ok: true,
+      value: { flushed: 1 },
+    });
+
+    const history = await listFileHistory(root, { path: notePath });
+    if (!history.ok || !history.value.entries[0]) {
+      throw new Error("expected stage-like history entry");
+    }
+    await expect(readFileHistoryVersion(root, {
+      path: notePath,
+      id: history.value.entries[0].id,
+    })).resolves.toMatchObject({
+      ok: true,
+      value: { available: true, content: "stage zero\n" },
+    });
+  });
+
+  it("durably clears pending history when the staged note was deleted", async () => {
+    const notePath = "notes/deleted-after-edit.md";
+    await writeFileWithParents(path.join(root, notePath), "original\n", "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "create",
+      content: "original\n",
+      now: new Date("2026-07-01T04:00:00.000Z"),
+    });
+    await flushFileHistory(root, { paths: [notePath] });
+
+    await writeFile(path.join(root, notePath), "edited then deleted\n", "utf8");
+    await recordFileHistory(root, {
+      path: notePath,
+      operation: "update",
+      content: "edited then deleted\n",
+      now: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    await rm(path.join(root, notePath));
+
+    await expect(flushFileHistory(root, { paths: [notePath] })).resolves.toEqual({
+      ok: true,
+      value: { flushed: 1 },
+    });
+    await expect(flushFileHistory(root, { paths: [notePath] })).resolves.toEqual({
+      ok: true,
+      value: { flushed: 0 },
+    });
   });
 
   it("keeps independently created copies out of each other's history", async () => {
