@@ -1,0 +1,84 @@
+name: Dispatch linked Cloud repin
+
+on:
+  pull_request:
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      daemon_pr_number:
+        description: Already-merged internal daemon PR to replay
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: dispatch-linked-cloud-repin-${{ github.event.pull_request.number || inputs.daemon_pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Notify linked Cloud PRs
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (
+          github.event.pull_request.merged == true &&
+          github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout trusted dispatcher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Resolve and verify the merged daemon PR
+        id: resolve
+        run: node scripts/linked-cloud-repin-dispatch.mjs resolve
+        env:
+          DAEMON_GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Check repin App configuration
+        id: config
+        env:
+          APP_CLIENT_ID: ${{ vars.KB1_REPIN_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.KB1_REPIN_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$APP_CLIENT_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Linked Cloud repin is dormant until KB1_REPIN_APP_CLIENT_ID and KB1_REPIN_APP_PRIVATE_KEY are configured."
+          fi
+
+      - name: Create scoped KB-1 repin token
+        if: ${{ steps.config.outputs.enabled == 'true' }}
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.KB1_REPIN_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KB1_REPIN_APP_PRIVATE_KEY }}
+          owner: metatheoryinc
+          repositories: kb-1-cloud
+          permission-contents: write
+
+      - name: Dispatch exact merge coordinates to Cloud
+        if: ${{ steps.config.outputs.enabled == 'true' }}
+        run: node scripts/linked-cloud-repin-dispatch.mjs dispatch
+        env:
+          CLOUD_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          DISPATCH_PAYLOAD: ${{ steps.resolve.outputs.payload }}
