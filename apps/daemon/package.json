@@ -16,20 +16,20 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.4",
+    "@hono/node-server": "2.1.1",
     "@kb-1/doc-session": "workspace:*",
     "@kb-1/local-mcp": "workspace:*",
     "@kb-1/tunnel-client": "workspace:*",
     "@kb-1/vault-core": "workspace:*",
     "@kb-1/vault-service": "workspace:*",
     "github-slugger": "2.0.0",
-    "hono": "4.12.25",
-    "ws": "8.21.0"
+    "hono": "4.13.2",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.8",
-    "yjs": "13.6.31"
+    "yjs": "13.6.32"
   }
 }
