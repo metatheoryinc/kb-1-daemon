@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -410,7 +411,7 @@ describe('OneFileDocumentSession', () => {
     await session.close();
   });
 
-  it('uses the default external-change warning and keeps notifying after a handler throws', async () => {
+  it('keeps notifying after a handler throws', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const events: DocumentSessionEvent[] = [];
     await writeFileWithParents(filePath, 'active\n');
@@ -430,14 +431,29 @@ describe('OneFileDocumentSession', () => {
       `Timed out waiting for external merge; events=${JSON.stringify(events)}`
     );
 
-    await writeFile(filePath, 'racing disk edit\n', 'utf8');
-    await session.reset('session edit\n');
-
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('external document change detected'));
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('document session event handler failed'),
       expect.any(Error)
     );
+    warnSpy.mockRestore();
+    await session.close();
+  });
+
+  it('uses the default external-change warning for a racing disk edit', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await writeFileWithParents(filePath, 'active\n');
+    const session = new OneFileDocumentSession(filePath, {
+      // Keep the watcher out of this persistence-race test. The reset must be
+      // the operation that discovers the disk edit, independent of CI load.
+      watchDebounceMs: 60_000,
+      watchPollMs: 60_000
+    });
+    await session.open();
+
+    writeFileSync(filePath, 'racing disk edit\n', 'utf8');
+    await expect(session.reset('session edit\n')).resolves.toBe('racing disk edit\n');
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('external document change detected'));
     warnSpy.mockRestore();
     await session.close();
   });
@@ -491,9 +507,11 @@ describe('OneFileDocumentSession', () => {
     session.onEvent((event) => events.push(event));
     await session.open();
 
-    await writeFile(filePath, 'external 1\n', 'utf8');
-    await writeFile(filePath, 'external 2\n', 'utf8');
-    await writeFile(filePath, 'external final\n', 'utf8');
+    // Synchronous writes prevent the event loop from reconciling an
+    // intermediate value before the complete rapid-write burst lands.
+    writeFileSync(filePath, 'external 1\n', 'utf8');
+    writeFileSync(filePath, 'external 2\n', 'utf8');
+    writeFileSync(filePath, 'external final\n', 'utf8');
 
     await waitUntil(async () => await session.getContent() === 'external final\n', () =>
       `Timed out waiting for coalesced reconcile; content=${session.ydoc.getText('markdown').toString()}`
