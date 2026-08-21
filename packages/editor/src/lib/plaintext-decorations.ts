@@ -660,8 +660,10 @@ function linkUrlFromElement(
   link: InlineElement,
   source: string,
 ): string | null {
+  const labelEnd = linkLabelEnd(parser, link, source);
+  if (labelEnd === null) return null;
   for (const child of childElements(link)) {
-    if (inlineElementName(parser, child) === 'URL') {
+    if (inlineElementName(parser, child) === 'URL' && child.from > labelEnd) {
       return stripAngleUrl(source.slice(child.from, child.to));
     }
   }
@@ -704,13 +706,16 @@ function tableInlinePartsFromRange(
   to: number,
   elements: readonly InlineElement[],
   context: Pick<TableInlineRenderContext, 'livePaths' | 'orgPeople'>,
+  suppressAutolinks = false,
 ): TableInlinePart[] {
   const parts: TableInlinePart[] = [];
   let pos = from;
   for (const element of elements) {
     if (element.to <= from || element.from >= to) continue;
     if (element.from > pos) pushTextPart(parts, source.slice(pos, element.from));
-    parts.push(...tableInlinePartsFromElement(parser, source, element, context));
+    parts.push(
+      ...tableInlinePartsFromElement(parser, source, element, context, suppressAutolinks),
+    );
     pos = Math.max(pos, element.to);
   }
   if (pos < to) pushTextPart(parts, source.slice(pos, to));
@@ -722,6 +727,7 @@ function tableInlinePartsFromElement(
   source: string,
   element: InlineElement,
   context: Pick<TableInlineRenderContext, 'livePaths' | 'orgPeople'>,
+  suppressAutolinks: boolean,
 ): TableInlinePart[] {
   const name = inlineElementName(parser, element);
   const children = childElements(element);
@@ -749,6 +755,7 @@ function tableInlinePartsFromElement(
           element.to,
           children,
           context,
+          suppressAutolinks,
         ),
       },
     ];
@@ -764,6 +771,7 @@ function tableInlinePartsFromElement(
           element.to,
           children,
           context,
+          suppressAutolinks,
         ),
       },
     ];
@@ -779,6 +787,7 @@ function tableInlinePartsFromElement(
           element.to,
           children,
           context,
+          suppressAutolinks,
         ),
       },
     ];
@@ -791,6 +800,7 @@ function tableInlinePartsFromElement(
       element.to,
       children,
       context,
+      suppressAutolinks,
     );
     return [
       {
@@ -820,12 +830,14 @@ function tableInlinePartsFromElement(
           labelEnd,
           children,
           context,
+          true,
         ),
       },
     ];
   }
   if (name === 'URL') {
     const raw = source.slice(element.from, element.to);
+    if (suppressAutolinks) return [{ kind: 'text', text: raw }];
     return [
       { kind: 'link', href: normalizeInlineHref(raw), children: [{ kind: 'text', text: raw }] },
     ];
@@ -844,7 +856,15 @@ function tableInlinePartsFromElement(
     ];
   }
   if (children.length > 0) {
-    return tableInlinePartsFromRange(parser, source, element.from, element.to, children, context);
+    return tableInlinePartsFromRange(
+      parser,
+      source,
+      element.from,
+      element.to,
+      children,
+      context,
+      suppressAutolinks,
+    );
   }
   return [{ kind: 'text', text: source.slice(element.from, element.to) }];
 }

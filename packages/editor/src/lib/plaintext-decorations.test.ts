@@ -326,6 +326,32 @@ describe('table cells — inline rendering contract', () => {
     });
   });
 
+  it('uses destinations when table link labels are URL-shaped', () => {
+    const parts = parseTableCellInlineMarkdown(
+      '[https://label.example](https://destination.example) ' +
+        '[https://profile.example](mention:alice@kb-1.dev)',
+      {
+        orgPeople: [
+          {
+            id: 'user-alice',
+            email: 'alice@kb-1.dev',
+            name: 'Alice (dev)',
+            image: null,
+          },
+        ],
+        livePaths: [],
+      },
+    );
+
+    const link = parts.find((part) => part.kind === 'link');
+    expect(link?.kind === 'link' ? link.href : null).toBe('https://destination.example');
+    expect(link?.kind === 'link' ? link.children : null).toEqual([
+      { kind: 'text', text: 'https://label.example' },
+    ]);
+    const mention = parts.find((part) => part.kind === 'mention');
+    expect(mention?.kind === 'mention' ? mention.props.displayName : null).toBe('Alice (dev)');
+  });
+
   it('keeps table source raw while the cursor is inside the table', () => {
     const doc =
       '| Feature | Value |\n' +
