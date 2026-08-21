@@ -1813,6 +1813,30 @@ describe('mentions (Apple lane Slice 1, widget-mount edition) — chip decoratio
     expect(linkLabelCount).toBe(0);
   });
 
+  it('renders a mention whose label is URL-shaped', () => {
+    const doc =
+      '[https://profile.example](mention:alice@kb-1.dev)\nelsewhere\n';
+    const state = makeState(doc);
+    const offLine = doc.indexOf('elsewhere');
+    const set = buildMarkdownDecorations(
+      state,
+      { from: offLine, to: offLine },
+      {
+        orgPeople: [
+          {
+            id: 'user-alice',
+            email: 'alice@kb-1.dev',
+            name: 'Alice',
+            image: null,
+          },
+        ],
+      },
+    );
+    const mentions = findMentionWidgets(set, doc.length);
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0].email).toBe('alice@kb-1.dev');
+  });
+
   it('skips the widget ONLY for the mention the cursor sits inside (per-Link reveal)', () => {
     // Per-Link reveal: caret inside Alice's `[...](mention:...)` range
     // reveals ONLY Alice's source; Bob's widget on the same line still

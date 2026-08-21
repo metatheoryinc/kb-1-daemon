@@ -63,6 +63,13 @@ describe('mentionAtomicDeleteRange — Backspace at right edge', () => {
     const range = mentionAtomicDeleteRange(state, doc.length, 'Backspace');
     expect(range).toBeNull();
   });
+
+  it('uses the destination when a mention has a URL-shaped label', () => {
+    const doc = '[https://profile.example](mention:alice@kb-1.dev)';
+    const state = makeState(doc);
+    const range = mentionAtomicDeleteRange(state, doc.length, 'Backspace');
+    expect(range).toEqual({ from: 0, to: doc.length });
+  });
 });
 
 describe('mentionAtomicDeleteRange — Delete at left edge', () => {

@@ -352,7 +352,7 @@ function buildMentionWidgetProps(email: string, resolved: OrgPerson | null): Men
 function extractMentionEmailFromLink(link: SyntaxNode, state: EditorState): string | null {
   let child: SyntaxNode | null = link.firstChild;
   while (child !== null) {
-    if (child.type.name === 'URL') {
+    if (child.type.name === 'URL' && isLinkDestinationUrl(child, state)) {
       let raw = state.sliceDoc(child.from, child.to).trim();
       if (raw.startsWith('<') && raw.endsWith('>')) {
         raw = raw.slice(1, -1);

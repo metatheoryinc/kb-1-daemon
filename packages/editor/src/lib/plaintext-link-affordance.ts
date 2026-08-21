@@ -255,9 +255,15 @@ export function extractLinkUrl(
   state: EditorState,
   linkNode: SyntaxNode,
 ): string | null {
+  let sawCloseBracket = false;
   let child: SyntaxNode | null = linkNode.firstChild;
   while (child !== null) {
-    if (child.type.name === 'URL') {
+    if (
+      child.type.name === 'LinkMark' &&
+      state.sliceDoc(child.from, child.to) === ']'
+    ) {
+      sawCloseBracket = true;
+    } else if (child.type.name === 'URL' && sawCloseBracket) {
       let raw = state.sliceDoc(child.from, child.to).trim();
       if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1);
       return raw.length > 0 ? raw : null;
