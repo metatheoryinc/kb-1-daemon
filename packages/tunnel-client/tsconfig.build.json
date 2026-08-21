@@ -3,6 +3,7 @@
   "compilerOptions": {
     "emitDeclarationOnly": false,
     "noEmit": false,
+    "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo",
     "types": ["node"],
     "paths": {
       "@kb-1/tunnel-protocol": ["../tunnel-protocol/dist/index.d.ts"]

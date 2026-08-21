@@ -37,7 +37,20 @@ there is no signed native Windows installer or SCM service release.
    container, volume, and default per-run image tag are removed even when a
    check fails. Set
    `KB1_RELEASE_SMOKE_IMAGE` to override the image tag or
-   `KB1_RELEASE_SMOKE_PORT` when a fixed host port is needed.
+   `KB1_RELEASE_SMOKE_PORT` when a fixed host port is needed. CI sets
+   `KB1_RELEASE_SMOKE_SKIP_BUILD=1` only after BuildKit has loaded the exact
+   checkout image locally. CI tags and pushes that same local image only after
+   the smoke succeeds.
+
+   A successful push to `main` publishes a unique run tag after the release
+   smoke, then creates `sha-<full-git-sha>` only when the alias is absent or
+   already resolves to that verified digest. A mismatched existing alias fails
+   closed. The retained receipt contains the unique run ref, source alias,
+   source SHA, platform, and registry digest. There is intentionally no mutable
+   `latest` release tag. KB-1 Cloud may copy the exact SHA-alias digest into its
+   Fly staging registry instead of rebuilding the same daemon source. The GHCR
+   package must grant the Cloud repository Actions read access; until then
+   Cloud falls back to its cached source build for the same submodule SHA.
 
    The regular GitHub Actions check must also pass its Windows jobs. Those jobs
    verify source startup, note create/read/soft-delete, restart persistence,

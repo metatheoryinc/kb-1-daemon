@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const repoRoot = resolve(import.meta.dirname, '..');
 const nonce = `${Date.now()}-${process.pid}`;
 const imageOverride = process.env.KB1_RELEASE_SMOKE_IMAGE;
+const skipImageBuild = process.env.KB1_RELEASE_SMOKE_SKIP_BUILD === '1';
 const image = imageOverride || `kb-1-daemon:release-smoke-${nonce}`;
 const container = `kb1-release-smoke-${nonce}`;
 const volume = `kb1-release-smoke-${nonce}`;
@@ -20,7 +21,14 @@ let containerCreated = false;
 let volumeCreated = false;
 
 try {
-  await run('docker', ['build', '-f', 'apps/daemon/Dockerfile', '-t', image, '.']);
+  if (skipImageBuild) {
+    if (!imageOverride) {
+      throw new Error('KB1_RELEASE_SMOKE_SKIP_BUILD=1 requires KB1_RELEASE_SMOKE_IMAGE.');
+    }
+    await run('docker', ['image', 'inspect', image], process.env, false);
+  } else {
+    await run('docker', ['build', '-f', 'apps/daemon/Dockerfile', '-t', image, '.']);
+  }
   await run('docker', ['volume', 'create', volume]);
   volumeCreated = true;
   await run('docker', [

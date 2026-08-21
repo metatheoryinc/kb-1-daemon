@@ -32,6 +32,8 @@ FROM node:22-slim AS runtime
 
 WORKDIR /app
 
+LABEL org.opencontainers.image.source="https://github.com/metatheoryinc/kb-1-daemon"
+
 ENV NODE_ENV=production
 ENV KB1_HOME=/data/kb1
 ENV KB1_HOST=0.0.0.0
