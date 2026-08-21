@@ -380,6 +380,33 @@ const footnoteDefLabelMark = Decoration.mark({
 const hiddenSyntaxMark = Decoration.mark({ class: 'cm-md-syntax cm-hidden' });
 const visibleSyntaxMark = Decoration.mark({ class: 'cm-md-syntax' });
 
+/**
+ * Lezer may emit a `URL` child for URL-shaped text inside a link label as
+ * well as for the actual parenthesized destination. Only the destination is
+ * Markdown syntax that should collapse in live preview.
+ */
+function isLinkDestinationUrl(node: SyntaxNode, state: EditorState): boolean {
+  const parent = node.parent;
+  if (
+    parent === null ||
+    (parent.type.name !== 'Link' && parent.type.name !== 'Image')
+  ) {
+    return false;
+  }
+
+  let child: SyntaxNode | null = parent.firstChild;
+  while (child !== null) {
+    if (
+      child.type.name === 'LinkMark' &&
+      state.sliceDoc(child.from, child.to) === ']'
+    ) {
+      return node.from > child.from;
+    }
+    child = child.nextSibling;
+  }
+  return false;
+}
+
 /* ---------------------------------------------------------------- *
  * Inner-language registry for fenced code blocks.                   *
  *                                                                   *
@@ -3201,9 +3228,7 @@ export function buildMarkdownDecorations(
         (name === 'LinkMark' &&
           node.node.parent !== null &&
           (node.node.parent.type.name === 'Link' || node.node.parent.type.name === 'Image')) ||
-        (name === 'URL' &&
-          node.node.parent !== null &&
-          (node.node.parent.type.name === 'Link' || node.node.parent.type.name === 'Image'));
+        (name === 'URL' && isLinkDestinationUrl(node.node, state));
       if (isSyntaxMark) {
         const parent = node.node.parent;
         if (parent === null) return;
