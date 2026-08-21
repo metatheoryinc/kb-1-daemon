@@ -697,6 +697,33 @@ describe('wikilinks (Slice 5) — parse + decoration', () => {
     expect(labelsOff.length).toBe(1);
     expect(doc.slice(labelsOff[0].from, labelsOff[0].to)).toBe('Anthropic');
   });
+
+  it('does not collapse the visible label of an off-line URL link', () => {
+    const doc =
+      '[https://x.com/GidoGidoGame](https://x.com/GidoGidoGame)\n\nelsewhere\n';
+    const state = makeState(doc);
+    const cursor = doc.indexOf('elsewhere');
+    const set = buildMarkdownDecorations(state, { from: cursor, to: cursor });
+    const labels = findMarksByClass(set, 'cm-md-link-label', doc.length);
+    const hiddenSyntax = findMarksByClass(
+      set,
+      'cm-md-syntax cm-hidden',
+      doc.length,
+    );
+
+    expect(labels).toHaveLength(1);
+    const label = labels[0];
+    expect(doc.slice(label.from, label.to)).toBe('https://x.com/GidoGidoGame');
+    expect(
+      hiddenSyntax.filter(({ from, to }) => from < label.to && to > label.from),
+    ).toEqual([]);
+    expect(
+      hiddenSyntax.some(
+        ({ from, to }) =>
+          from > label.to && doc.slice(from, to) === 'https://x.com/GidoGidoGame',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('escaped brackets in Markdown link labels', () => {
