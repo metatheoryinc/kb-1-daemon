@@ -7,12 +7,29 @@ const env = {
   ...(skipNxCache ? { NX_SKIP_NX_CACHE: 'true' } : {})
 };
 
-for (const script of ['typecheck', 'test', 'build', 'licenses:check']) {
-  const code = await run([script], env);
-  if (code !== 0) {
-    process.exitCode = code;
-    break;
+// Nx owns dependency ordering for the non-web workspace. Web targets stay
+// serial because SvelteKit's sync, test, and build paths share `.svelte-kit`.
+// Repository-level checks remain independent of that workspace lane.
+const results = await Promise.all([
+  runWorkspaceChecks(),
+  run(['test:scripts'], env),
+  run(['licenses:check'], env)
+]);
+const failure = results.find((code) => code !== 0);
+if (failure !== undefined) process.exitCode = failure;
+
+async function runWorkspaceChecks() {
+  const nonWebCode = await run(
+    ['exec', 'nx', 'run-many', '-t', 'typecheck', 'test', 'build', '--parallel=3', '--exclude=web'],
+    env
+  );
+  if (nonWebCode !== 0) return nonWebCode;
+
+  for (const target of ['typecheck', 'test', 'build']) {
+    const webCode = await run(['exec', 'nx', 'run', `web:${target}`], env);
+    if (webCode !== 0) return webCode;
   }
+  return 0;
 }
 
 function run(args, env) {

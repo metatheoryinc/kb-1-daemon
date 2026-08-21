@@ -26,6 +26,26 @@ test('spawnPnpm uses one validated shell command on Windows', () => {
   ]]);
 });
 
+test('spawnPnpm accepts the full Nx check arguments on Windows', () => {
+  const calls = [];
+  spawnPnpm(
+    ['exec', 'nx', 'run-many', '-t', 'typecheck', 'test', 'build', '--parallel=3', '--exclude=web'],
+    { stdio: 'inherit' },
+    {
+      platform: 'win32',
+      spawnImpl(...args) {
+        calls.push(args);
+        return {};
+      }
+    }
+  );
+
+  assert.deepEqual(calls, [[
+    'pnpm exec nx run-many -t typecheck test build --parallel=3 --exclude=web',
+    { shell: true, stdio: 'inherit' }
+  ]]);
+});
+
 test('spawnPnpm rejects shell metacharacters on Windows', () => {
   let spawned = false;
   assert.throws(
