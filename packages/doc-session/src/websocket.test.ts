@@ -697,6 +697,11 @@ describe('Yjs WebSocket session', () => {
     const client = await connectYjsClient(`ws://127.0.0.1:${port}${DEMO_DOCUMENT_YJS_PATH}`);
     client.text.insert(0, 'first durable edit\n');
     await waitForDiskContent(filePath, (content) => content === 'first durable edit\n');
+    // Seeing the markdown bytes is not the full durability boundary: the
+    // session records its non-empty guard after the paired Yjs snapshot is
+    // written. Wait for that same persistence cycle before injecting the
+    // independent stale update this test expects the guard to reject.
+    await session.flush();
 
     const staleSocket = new FakeSocket();
     const staleBinding = await bindYjsWebSocket(session, staleSocket);
