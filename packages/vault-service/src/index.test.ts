@@ -1413,7 +1413,12 @@ describe("vault service failure mapping", () => {
 
   afterEach(async () => {
     await sessions.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   });
 
   it("maps live-session persist failures without writing a success audit row", async () => {
