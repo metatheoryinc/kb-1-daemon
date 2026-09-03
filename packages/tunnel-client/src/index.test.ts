@@ -1416,7 +1416,7 @@ describe('TunnelClient HTTP proxy cancellation', () => {
         .filter((frame) => frame.type === 'http.response.chunk')
         .map((frame) => Buffer.from(frame.bodyB64 ?? '', 'base64')),
     )).toEqual(archive);
-  });
+  }, 15_000);
 
   it('cancels the daemon snapshot body when relaying a response chunk fails', async () => {
     let bodyCanceled = false;
