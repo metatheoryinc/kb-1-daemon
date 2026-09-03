@@ -16,6 +16,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
 import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -129,6 +130,101 @@ describe("daemon routing", () => {
       },
     });
     expect(statusFileContents).toMatchObject(body.status);
+  });
+
+  it("flushes live documents before streaming the organization snapshot", async () => {
+    const { app, registry, manager, vaultRoot } = await setupScopedVault();
+    const session = manager.getSession("live.md", { defaultContent: "" });
+    await session.open();
+    session.ydoc.getText("markdown").insert(0, "durable snapshot\n");
+
+    const response = await app.request("/api/ops/snapshot.zip");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/zip");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-disposition")).toMatch(
+      /^attachment; filename="kb1-data-\d{8}T\d{6}Z\.zip"$/,
+    );
+    expect(Number(response.headers.get("x-kb1-snapshot-files"))).toBeGreaterThan(0);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    expect([...bytes.subarray(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    await expect(readFile(join(vaultRoot, "live.md"), "utf8")).resolves.toBe(
+      "durable snapshot\n",
+    );
+    await registry.close();
+  });
+
+  it("rejects HEAD without creating a snapshot spool", async () => {
+    const { app, registry } = await setupScopedVault();
+    const createSnapshotArchive = vi.spyOn(
+      registry,
+      "createSnapshotArchive",
+    );
+
+    const response = await app.request("/api/ops/snapshot.zip", {
+      method: "HEAD",
+    });
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("GET");
+    expect(createSnapshotArchive).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it("allows only one snapshot spool or delivery at a time", async () => {
+    const { app, registry } = await setupScopedVault();
+    const first = await app.request("/api/ops/snapshot.zip");
+
+    const overlapping = await app.request("/api/ops/snapshot.zip");
+    expect(overlapping.status).toBe(409);
+    await expect(overlapping.json()).resolves.toMatchObject({
+      error: "snapshot_in_progress",
+    });
+
+    await first.arrayBuffer();
+    const afterDelivery = await app.request("/api/ops/snapshot.zip");
+    expect(afterDelivery.status).toBe(200);
+    await afterDelivery.arrayBuffer();
+    await registry.close();
+  });
+
+  it("releases a stalled snapshot delivery after its idle timeout", async () => {
+    const { registry, vaultRoot, config } = await setupScopedVault();
+    await writeFile(join(vaultRoot, "large.bin"), randomBytes(2 * 1024 * 1024));
+    const timedApp = createApp({
+      statusFile: config.statusFile,
+      registry,
+      actorDefault: config.actorDefault,
+      snapshotDeliveryIdleTimeoutMs: 25,
+    });
+
+    const first = await timedApp.request("/api/ops/snapshot.zip");
+    const reader = first.body?.getReader();
+    if (!reader) throw new Error("Expected snapshot response body");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await expect(reader.read()).rejects.toThrow("Snapshot delivery timed out.");
+    const afterTimeout = await timedApp.request("/api/ops/snapshot.zip");
+    expect(afterTimeout.status).toBe(200);
+    await afterTimeout.arrayBuffer();
+    await registry.close();
+  });
+
+  it("stops snapshot delivery when the requesting client disconnects", async () => {
+    const { app, registry } = await setupScopedVault();
+    const request = new AbortController();
+    const response = await app.request("/api/ops/snapshot.zip", {
+      signal: request.signal,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Expected snapshot response body");
+
+    request.abort();
+
+    await expect(reader.read()).rejects.toThrow(
+      "Snapshot delivery was interrupted.",
+    );
+    await registry.close();
   });
 
   it("requires the private control token before requesting daemon shutdown", async () => {

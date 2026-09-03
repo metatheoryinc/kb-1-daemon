@@ -36,7 +36,8 @@ export const TUNNEL_FEATURES = {
   VAULT_CONTENT_EVENTS_V2: "relay.vault-content-events.v2",
   MCP_TOOL_CALL_BOUNDED_RESULTS_V1:
     "relay.mcp-tool-call.bounded-results.v1",
-  HTTP_RESPONSE_CHUNK_ACKS_V1: "relay.http-response-chunk-acks.v1"
+  HTTP_RESPONSE_CHUNK_ACKS_V1: "relay.http-response-chunk-acks.v1",
+  SNAPSHOT_STREAM_V1: "relay.snapshot-stream.v1"
 } as const;
 
 export type TunnelFeature = (typeof TUNNEL_FEATURES)[keyof typeof TUNNEL_FEATURES];
@@ -572,6 +573,11 @@ export type TunnelHttpCancelEnvelope = {
   reason?: string;
 };
 
+export type TunnelSnapshotRequestEnvelope = {
+  type: "snapshot.request";
+  id: string;
+};
+
 export type TunnelHttpResponseEnvelope = {
   type: "http.response";
   id: string;
@@ -661,6 +667,7 @@ export type TunnelControlServerMessage =
   | TunnelHttpRequestStartEnvelope
   | TunnelHttpRequestChunkEnvelope
   | TunnelHttpRequestEndEnvelope
+  | TunnelSnapshotRequestEnvelope
   | TunnelHttpCancelEnvelope
   | TunnelHttpResponseChunkAckEnvelope
   | TunnelWebSocketOpenEnvelope

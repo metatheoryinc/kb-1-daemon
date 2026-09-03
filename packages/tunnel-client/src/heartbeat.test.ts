@@ -97,6 +97,7 @@ describe('TunnelClient control heartbeat', () => {
         TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
         TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
+        TUNNEL_FEATURES.SNAPSHOT_STREAM_V1,
       ],
     }));
 
@@ -253,6 +254,7 @@ describe('TunnelClient control heartbeat', () => {
         TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
         TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
         TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
+        TUNNEL_FEATURES.SNAPSHOT_STREAM_V1,
       ],
     }));
   });

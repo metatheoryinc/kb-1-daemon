@@ -14,7 +14,7 @@ import { TunnelClient, type TunnelClientLogger } from '@kb-1/tunnel-client';
 import type { VaultChangeEventKind } from '@kb-1/vault-service';
 import { realpathSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
-import { mkdir } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { classifyArtifactPath, validateVaultPath, type VaultActor } from '@kb-1/vault-core';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -25,10 +25,13 @@ import {
   actorFromHeaders,
   createApp,
   mcpVaultProvider,
+  prepareSnapshotSpoolHome,
+  SNAPSHOT_SPOOL_DIRNAME,
   type RelayLifecycleController
 } from './app.js';
 import {
   createDaemonConfig,
+  DAEMON_INITIALIZED_FILENAME,
   DEFAULT_KB1_HOME_DIRNAME,
   DEFAULT_VAULT_SLUG,
   LEGACY_KB2_HOME_DIRNAME,
@@ -72,12 +75,18 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
   const config = createDaemonConfig(options);
   const env = options.env ?? process.env;
   const controlToken = env.KB1_CONTROL_TOKEN?.trim();
+  const snapshotSpoolHome = join(config.daemonHome, SNAPSHOT_SPOOL_DIRNAME);
 
   for (const warning of config.deprecationWarnings) {
     console.warn(`[${config.serviceName}] ${warning}`);
   }
 
   await migrateLegacyDaemonHome(config.kb1Home);
+
+  // Snapshot ZIPs contain the full recoverable organization state. Clear
+  // crash leftovers after legacy-home migration but before accepting traffic
+  // so deleted data and disk consumption cannot accumulate.
+  await prepareSnapshotSpoolHome(snapshotSpoolHome);
 
   // Boot migration: copy -> verify -> cleanup the legacy single-vault layout.
   await migrateLegacyVaultLayout({
@@ -90,6 +99,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
   // and mutable at runtime (create/rename/soft-delete) with no restart.
   await mkdir(config.vaultsHome, { recursive: true });
   const trashHome = join(config.kb1Home, VAULT_TRASH_DIRNAME);
+  const initializedMarker = join(config.vaultsHome, DAEMON_INITIALIZED_FILENAME);
+  // Homes created before the marker existed can legitimately have no active
+  // vaults after the final vault was soft-deleted. Preserve that state when
+  // adopting the marker instead of recreating the starter vault.
+  const wasInitialized = await pathExists(initializedMarker) || await pathExists(trashHome);
   const registry = await VaultRegistry.load(config.vaultsHome, trashHome, {
     historyCoalesceWindowMs: config.historyCoalesceWindowMs
   });
@@ -98,12 +112,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
   // a single starter vault seeded from the bundled kit. `create` performs the
   // seeding, so there is no separate seed path. After first boot, zero vaults is
   // a valid state — deleting every vault leaves the daemon serving an empty list.
-  if (registry.list().length === 0) {
+  if (registry.list().length === 0 && !wasInitialized) {
     const created = await registry.create({ displayName: DEFAULT_VAULT_SLUG, slug: DEFAULT_VAULT_SLUG });
     if (!created.ok) {
       throw new Error(`Failed to create the starter vault: ${created.message}`);
     }
   }
+  await writeFile(initializedMarker, '1\n', { flag: 'a' });
 
   // One MCP endpoint, every vault: vaultId resolution and vault enumeration both
   // go through the SAME live registry the HTTP layer uses — no second vault map.
@@ -136,6 +151,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Sta
     webBuildDir: fileURLToPath(new URL('../../web/build', import.meta.url)),
     webProxyTarget: config.webProxyTarget,
     actorDefault: config.actorDefault,
+    snapshotSpoolHome,
     relay,
     shutdownSignal: shutdownSignal.signal,
     ...(controlToken ? {
@@ -533,6 +549,16 @@ function documentUpdateAttributionForActor(actor: VaultActor): DocumentUpdateAtt
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function traceIdFromDocumentRequest(request: IncomingMessage): string | undefined {

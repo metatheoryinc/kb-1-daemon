@@ -298,6 +298,29 @@ Call it before snapshotting or syncing the vault. A clean vault returns
 canonical failure dialect as the rest of the API, and the existing save-warning
 event path still fires.
 
+`GET /api/ops/snapshot.zip` is the whole-daemon backup and export primitive. It
+flushes every active vault through the same conservative durability boundary,
+then streams a ZIP containing `vaults/`, recoverable
+`.trash/`, `kb1-snapshot.json`, and a final `kb1-snapshot.complete` marker. The
+manifest records the schema version, timestamps, paths, sizes, modes, and byte
+totals. The stream fails if any planned file or directory changes before the
+archive completes, so callers must discard an incomplete ZIP and retry instead
+of treating mixed filesystem state as a backup.
+
+The archive retains portable vault metadata. It excludes daemon-local
+`.kb1/cache/`, `.kb1/runtime/`, `.kb1/tmp/`, and `.kb1/secrets/` trees, along
+with the entire `.git` implementation directory. File history remains a
+best-effort local feature rather than part of the portable export contract.
+
+The snapshot endpoint is served on the daemon's normal local API. Packaged
+self-hosted daemons remain loopback-only unless an operator deliberately exposes
+them. Cloud-hosted backup/export callers use the private managed-container
+binding directly; the ordinary per-organization relay remains a bounded JSON/API
+transport and is not the snapshot transfer path.
+Never extract an archive over a running daemon home. Restore into a stopped or
+disposable `KB1_HOME`, validate the manifest and ZIP, start the daemon there,
+and exercise real vault reads before any separately approved cutover.
+
 `GET /api/vaults/:id/events` is the tooling primitive for one vault. It is a
 Server-Sent Events stream for watchers, backup triggers, and live tree refresh.
 Events report change kind, vault-relative paths, actor attribution, and

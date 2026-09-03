@@ -13,6 +13,7 @@ export type ActorDefault = 'user' | 'unknown';
 
 export const DEFAULT_VAULT_SLUG = 'demo-vault';
 export const LEGACY_VAULT_DIRNAME = 'demo-vault';
+export const DAEMON_INITIALIZED_FILENAME = '.kb1-initialized';
 const VAULTS_DIRNAME = 'vaults';
 
 export interface DaemonConfig {
