@@ -350,8 +350,13 @@ function assertPortableArchiveSegment(segment: string): void {
 }
 
 function isPortableSnapshotPath(path: string): boolean {
-  const segments = path.split('/').map((segment) => segment.toLocaleLowerCase('en-US'));
+  const originalSegments = path.split('/');
+  const segments = originalSegments.map((segment) => segment.toLocaleLowerCase('en-US'));
   const kb1Index = segments.lastIndexOf('.kb1');
+  // `.kb1` is a reserved metadata directory whose canonical spelling is
+  // lowercase. A distinct case-variant can exist on Linux but would collide
+  // when the portable archive is restored on Windows or common macOS volumes.
+  if (kb1Index >= 0 && originalSegments[kb1Index] !== '.kb1') return false;
   if (
     kb1Index >= 0
     && segments.length > kb1Index + 1

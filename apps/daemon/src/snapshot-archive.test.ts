@@ -121,6 +121,9 @@ describe('daemon snapshot archive', () => {
     });
     const entries = await readZipEntries(await buffer(archive.stream));
 
+    expect(entries.get('vaults/demo/.kb1/vault.json')?.toString('utf8')).toBe(
+      '{"id":"demo","displayName":"Demo"}\n'
+    );
     expect(entries.has('vaults/demo/.kb1/secrets/token')).toBe(false);
     expect(entries.has('vaults/demo/.kb1/cache/index')).toBe(false);
     expect(entries.has('vaults/demo/.git/config')).toBe(false);
