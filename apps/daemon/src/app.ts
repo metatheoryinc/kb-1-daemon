@@ -12,9 +12,11 @@ import {
   type VaultService
 } from '@kb-1/vault-service';
 import { timingSafeEqual } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { resolve } from 'node:path';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 import { SERVICE_NAME, type ActorDefault } from './config.js';
 import {
@@ -46,6 +48,23 @@ interface CreateAppOptions {
   relay?: RelayLifecycleController;
   shutdown?: ShutdownController;
   shutdownSignal?: AbortSignal;
+  /** Maximum time a snapshot response may make no delivery progress. */
+  snapshotDeliveryIdleTimeoutMs?: number;
+  /** Daemon-owned directory for temporary, restart-cleanable snapshot files. */
+  snapshotSpoolHome?: string;
+}
+
+const SNAPSHOT_DELIVERY_IDLE_TIMEOUT_MS = 10 * 60_000;
+export const SNAPSHOT_SPOOL_DIRNAME = 'snapshot-spool';
+
+export async function prepareSnapshotSpoolHome(path: string): Promise<void> {
+  await mkdir(path, { recursive: true });
+  const staleEntries = await readdir(path);
+  await Promise.all(
+    staleEntries.map((entry) =>
+      rm(join(path, entry), { force: true, recursive: true }),
+    ),
+  );
 }
 
 export interface RelayLifecycleStatus {
@@ -162,6 +181,9 @@ export function createApp(options: CreateAppOptions): Hono {
   if (options.registry) {
     const registry = options.registry;
     const actorDefault = options.actorDefault ?? 'user';
+    const snapshotSpoolHome = options.snapshotSpoolHome
+      ?? join(dirname(options.statusFile), SNAPSHOT_SPOOL_DIRNAME);
+    let snapshotInProgress = false;
 
     // One MCP endpoint addresses every vault. vaultId resolution and vault
     // enumeration go through the registry — the same source of truth as the HTTP
@@ -197,6 +219,106 @@ export function createApp(options: CreateAppOptions): Hono {
         ok: true,
         usedBytes: await registry.storageUsageBytes()
       });
+    });
+
+    api.get('/ops/snapshot.zip', async (context) => {
+      // Hono routes HEAD through GET by default. Reject it before creating the
+      // potentially large spool because the framework discards the response
+      // body and would otherwise leave the source stream unread.
+      if (context.req.method !== 'GET') {
+        return context.body(null, 405, { allow: 'GET' });
+      }
+      if (snapshotInProgress) {
+        return context.json({
+          ok: false,
+          error: 'snapshot_in_progress',
+          message: 'A data snapshot is already in progress.'
+        }, 409);
+      }
+      snapshotInProgress = true;
+      let spoolDirectory: string | undefined;
+      try {
+        const snapshotSignal = options.shutdownSignal
+          ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal])
+          : context.req.raw.signal;
+        const snapshot = await registry.createSnapshotArchive(
+          new Date(),
+          snapshotSignal,
+        );
+        // The relay protocol needs an exact total before it can stream bounded
+        // chunks with acknowledgements. Spool outside KB1_HOME so the archive
+        // never contains itself, then delete the temporary file when delivery
+        // finishes or is cancelled.
+        // Startup clears crash leftovers, and this preflight retries any
+        // cleanup that failed after an earlier request in the same process.
+        await prepareSnapshotSpoolHome(snapshotSpoolHome);
+        spoolDirectory = await mkdtemp(join(snapshotSpoolHome, 'run-'));
+        const spoolPath = join(spoolDirectory, 'snapshot.zip');
+        await pipeline(snapshot.stream, createWriteStream(spoolPath), {
+          signal: snapshotSignal,
+        });
+        const archiveSize = (await stat(spoolPath)).size;
+        const source = createReadStream(spoolPath);
+        let deliveryIdleTimeout: ReturnType<typeof setTimeout> | undefined;
+        const cleanup = () => {
+          if (deliveryIdleTimeout) clearTimeout(deliveryIdleTimeout);
+          deliveryIdleTimeout = undefined;
+          snapshotSignal.removeEventListener('abort', abortSource);
+          snapshotInProgress = false;
+          if (!spoolDirectory) return;
+          const directory = spoolDirectory;
+          spoolDirectory = undefined;
+          void rm(directory, { force: true, recursive: true }).catch((error) => {
+            console.error('KB-1 snapshot spool cleanup failed.', error);
+          });
+        };
+        const abortSource = () => {
+          source.destroy(new Error('Snapshot delivery was interrupted.'));
+        };
+        const refreshDeliveryIdleTimeout = () => {
+          if (deliveryIdleTimeout) clearTimeout(deliveryIdleTimeout);
+          deliveryIdleTimeout = setTimeout(() => {
+            source.destroy(new Error('Snapshot delivery timed out.'));
+          }, options.snapshotDeliveryIdleTimeoutMs ?? SNAPSHOT_DELIVERY_IDLE_TIMEOUT_MS);
+          deliveryIdleTimeout.unref();
+        };
+        source.once('close', cleanup);
+        source.once('error', cleanup);
+        source.on('data', refreshDeliveryIdleTimeout);
+        snapshotSignal.addEventListener('abort', abortSource, {
+          once: true
+        });
+        if (snapshotSignal.aborted) abortSource();
+        else refreshDeliveryIdleTimeout();
+        const filenameTimestamp = snapshot.manifest.createdAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+        return new Response(
+          Readable.toWeb(source) as ReadableStream<Uint8Array>,
+          {
+            headers: {
+              'cache-control': 'no-store',
+              'content-length': String(archiveSize),
+              'content-disposition': `attachment; filename="kb1-data-${filenameTimestamp}.zip"`,
+              'content-type': 'application/zip',
+              'x-kb1-snapshot-bytes': String(snapshot.manifest.totals.bytes),
+              'x-kb1-snapshot-created-at': snapshot.manifest.createdAt,
+              'x-kb1-snapshot-durable-as-of': snapshot.manifest.durableAsOf,
+              'x-kb1-snapshot-files': String(snapshot.manifest.totals.files),
+              'x-kb1-snapshot-schema': String(snapshot.manifest.schemaVersion)
+            }
+          }
+        );
+      } catch (error) {
+        snapshotInProgress = false;
+        if (spoolDirectory) {
+          await rm(spoolDirectory, { force: true, recursive: true }).catch(() => undefined);
+        }
+        console.error('KB-1 snapshot creation failed.', error);
+        return context.json({
+          ok: false,
+          error: 'snapshot_failed',
+          message: 'The daemon could not create a consistent data snapshot.'
+        }, 503);
+      }
     });
 
     api.post('/vaults', async (context) => {

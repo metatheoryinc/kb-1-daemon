@@ -8,6 +8,7 @@ import { slug as githubSlug } from 'github-slugger';
 
 import { seedVaultFromStarterKit } from './starter-kit.js';
 import { migrateDirectoryCopyVerifyCleanup, verifyCopy } from './migrations.js';
+import { createSnapshotArchive, type SnapshotArchive } from './snapshot-archive.js';
 
 const VAULT_IDENTITY_DIR = '.kb1';
 const LEGACY_VAULT_IDENTITY_DIR = '.kb2';
@@ -398,6 +399,38 @@ export class VaultRegistry {
       await directorySizeBytes(this.vaultsHome) +
       await directorySizeBytes(this.trashHome)
     );
+  }
+
+  /** Flush all live documents, then stream a portable snapshot of vaults + trash. */
+  async createSnapshotArchive(
+    now: Date = new Date(),
+    signal?: AbortSignal,
+  ): Promise<SnapshotArchive> {
+    // This is deliberately captured before any flush begins. Concurrent edits
+    // may land while a multi-vault snapshot is being prepared, so a later
+    // timestamp would claim a durability boundary we cannot globally fence.
+    const durableAsOf = new Date(now.getTime());
+    const results = await Promise.allSettled(
+      [...this.instances.values()].map((instance) => instance.service.flushDirtySessions()),
+    );
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected) throw rejected.reason;
+    const failed = results.find(
+      (result) => result.status === 'fulfilled' && !result.value.ok
+    );
+    if (failed?.status === 'fulfilled' && !failed.value.ok) {
+      throw new Error(failed.value.message);
+    }
+
+    return createSnapshotArchive({
+      roots: [
+        { archivePath: 'vaults', filesystemPath: this.vaultsHome },
+        { archivePath: VAULT_TRASH_DIRNAME, filesystemPath: this.trashHome },
+      ],
+      createdAt: now,
+      durableAsOf,
+      signal,
+    });
   }
 
   /** Resolve a vault's live instance by slug, or `undefined` when unknown. */

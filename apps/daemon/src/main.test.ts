@@ -54,6 +54,30 @@ describe('daemon startup', () => {
     await close(blocker);
   });
 
+  it('removes stale snapshot spools before accepting traffic', async () => {
+    const port = await reservePort();
+    const staleSpool = join(
+      kb1Home,
+      'daemon',
+      'snapshot-spool',
+      'run-interrupted',
+      'snapshot.zip',
+    );
+    await mkdir(join(staleSpool, '..'), { recursive: true });
+    await writeFile(staleSpool, 'sensitive snapshot bytes');
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port),
+    };
+
+    const started = await startDaemon();
+
+    await expect(access(staleSpool)).rejects.toBeTruthy();
+    await started.close();
+  });
+
   it('releases a delayed document lease when its socket closes before attachment', async () => {
     let resolveLease: ((lease: ClientDocumentSession) => void) | undefined;
     const leasePromise = new Promise<ClientDocumentSession>((resolve) => {
@@ -160,6 +184,51 @@ describe('daemon startup', () => {
     // The retired flat surface is gone.
     const flat = await fetch(`http://127.0.0.1:${port}/api/demo-document`);
     expect(flat.status).toBe(404);
+
+    await started.close();
+  });
+
+  it('adopts a legacy empty home with trashed data without recreating the starter vault', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
+    };
+    const trashedVault = join(kb1Home, '.trash', 'last-vault');
+    await mkdir(trashedVault, { recursive: true });
+    await writeFile(join(trashedVault, 'kept.md'), 'recoverable\n', 'utf8');
+
+    const started = await startDaemon();
+    const list = await fetch(`http://127.0.0.1:${port}/api/vaults`);
+
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toEqual({ ok: true, vaults: [] });
+    await expect(access(join(kb1Home, 'vaults', 'demo-vault'))).rejects.toBeTruthy();
+    await expect(readFile(join(trashedVault, 'kept.md'), 'utf8')).resolves.toBe('recoverable\n');
+    await expect(access(join(kb1Home, 'vaults', '.kb1-initialized'))).resolves.toBeUndefined();
+
+    await started.close();
+  });
+
+  it('adopts a legacy empty home with an empty trash directory without recreating the starter vault', async () => {
+    const port = await reservePort();
+    process.env = {
+      ...originalEnv,
+      KB1_HOME: kb1Home,
+      KB1_HOST: '127.0.0.1',
+      KB1_PORT: String(port)
+    };
+    await mkdir(join(kb1Home, '.trash'), { recursive: true });
+
+    const started = await startDaemon();
+    const list = await fetch(`http://127.0.0.1:${port}/api/vaults`);
+
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toEqual({ ok: true, vaults: [] });
+    await expect(access(join(kb1Home, 'vaults', 'demo-vault'))).rejects.toBeTruthy();
+    await expect(access(join(kb1Home, 'vaults', '.kb1-initialized'))).resolves.toBeUndefined();
 
     await started.close();
   });
@@ -832,6 +901,12 @@ describe('daemon vault management API', () => {
     // The daemon is still healthy and the web bundle path still serves.
     const health = await fetch(`${base()}/api/health`);
     expect(health.status).toBe(200);
+
+    // The initialized-home marker distinguishes this valid empty state from a
+    // first boot, so restarting does not silently recreate the starter vault.
+    await started.close();
+    started = await startDaemon();
+    await expect(listVaults()).resolves.toEqual([]);
 
     // A fresh vault can still be created from the empty state.
     const recreated = await fetch(`${base()}/api/vaults`, {

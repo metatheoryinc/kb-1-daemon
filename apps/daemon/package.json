@@ -24,12 +24,16 @@
     "@kb-1/vault-service": "workspace:*",
     "github-slugger": "2.0.0",
     "hono": "4.12.25",
+    "yazl": "3.3.1",
     "ws": "8.21.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@types/yauzl": "3.4.0",
+    "@types/yazl": "3.3.1",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.8",
+    "yauzl": "3.4.0",
     "yjs": "13.6.31"
   }
 }

@@ -1248,6 +1248,315 @@ describe('TunnelClient typed relay RPC', () => {
 });
 
 describe('TunnelClient HTTP proxy cancellation', () => {
+  it('does not expose the whole-home snapshot endpoint through the relay', async () => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+
+    const handleControlMessage = (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage.bind(client);
+    const paths = [
+      '/api/ops/snapshot.zip?source=relay',
+      '/api/ops/%73napshot.zip',
+      '/api/ops/snap%73hot.zip',
+    ];
+    for (const [index, path] of paths.entries()) {
+      await handleControlMessage(
+        control,
+        Buffer.from(encodeTunnelMessage({
+          type: 'http.request',
+          id: `private-snapshot-${index}`,
+          method: 'GET',
+          path,
+          headers: {},
+          bodyB64: null,
+        })),
+      );
+    }
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(control.sent).toHaveLength(paths.length);
+    for (const [index, sent] of control.sent.entries()) {
+      const response = JSON.parse(
+        Buffer.from(sent.data as Uint8Array).toString('utf8'),
+      ) as TunnelHttpResponseEnvelope;
+      expect(response).toMatchObject({
+        type: 'http.response',
+        id: `private-snapshot-${index}`,
+        status: 404,
+      });
+      expect(Buffer.from(response.bodyB64 ?? '', 'base64').toString('utf8')).toBe('Not found\n');
+    }
+  });
+
+  it('keeps ordinary relay HTTP on the daemon origin and does not follow redirects', async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, {
+          status: 302,
+          headers: { location: '/api/ops/snapshot.zip' },
+        }),
+    );
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+    const handleControlMessage = (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage.bind(client);
+
+    await handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'http.request',
+        id: 'external-origin',
+        method: 'GET',
+        path: '//attacker.example/start',
+        headers: {},
+        bodyB64: null,
+      })),
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'http.request',
+        id: 'redirecting-daemon-route',
+        method: 'GET',
+        path: '/redirect-me',
+        headers: {},
+        bodyB64: null,
+      })),
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+    const response = JSON.parse(
+      Buffer.from(control.sent.at(-1)?.data as Uint8Array).toString('utf8'),
+    ) as TunnelHttpResponseEnvelope;
+    expect(response).toMatchObject({
+      type: 'http.response',
+      id: 'redirecting-daemon-route',
+      status: 302,
+    });
+  });
+
+  it('streams a dedicated private snapshot request without materializing its body', async () => {
+    const archive = Buffer.alloc(384 * 1024, 0xa5);
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new URL(input.toString()).pathname).toBe('/api/ops/snapshot.zip');
+      expect(new Headers(init?.headers).has('x-kb1-internal-snapshot-relay')).toBe(false);
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(archive.subarray(0, 123_457));
+          controller.enqueue(archive.subarray(123_457));
+          controller.close();
+        },
+      }), {
+        headers: {
+          'content-length': String(archive.byteLength),
+          'content-type': 'application/zip',
+        },
+      });
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+    acknowledgeHttpResponseChunks(client, control);
+    await advertiseHttpResponseChunkAcks(client, control);
+
+    await (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'snapshot.request',
+        id: 'authorized-private-snapshot',
+      })),
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const frames = control.sent.map(({ data }) =>
+      JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+        type: string;
+        bodyB64?: string;
+        totalBytes?: number;
+      },
+    );
+    expect(frames[0]).toMatchObject({
+      type: 'http.response.start',
+      totalBytes: archive.byteLength,
+    });
+    expect(frames.at(-1)).toMatchObject({ type: 'http.response.end' });
+    expect(Buffer.concat(
+      frames
+        .filter((frame) => frame.type === 'http.response.chunk')
+        .map((frame) => Buffer.from(frame.bodyB64 ?? '', 'base64')),
+    )).toEqual(archive);
+  });
+
+  it('cancels the daemon snapshot body when relaying a response chunk fails', async () => {
+    let bodyCanceled = false;
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Buffer.alloc(64 * 1024, 0xa5));
+      },
+      cancel() {
+        bodyCanceled = true;
+      },
+    }), {
+      headers: {
+        'content-length': String(128 * 1024),
+        'content-type': 'application/zip',
+      },
+    }));
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+    await advertiseHttpResponseChunkAcks(client, control);
+    control.onSend = (data) => {
+      const message = JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+        type: string;
+      };
+      if (message.type === 'http.response.chunk') {
+        throw new Error('relay socket write failed');
+      }
+    };
+
+    await (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'snapshot.request',
+        id: 'snapshot-relay-write-failure',
+      })),
+    );
+
+    expect(bodyCanceled).toBe(true);
+  });
+
+  it('rejects snapshot streaming when chunk acknowledgements were not negotiated', async () => {
+    const fetchImpl = vi.fn();
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+
+    await (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage(
+      control,
+      Buffer.from(encodeTunnelMessage({
+        type: 'snapshot.request',
+        id: 'snapshot-without-acks',
+      })),
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const response = JSON.parse(
+      Buffer.from(control.sent.at(-1)?.data as Uint8Array).toString('utf8'),
+    ) as TunnelHttpResponseEnvelope;
+    expect(response).toMatchObject({
+      type: 'http.response',
+      id: 'snapshot-without-acks',
+      status: 503,
+    });
+  });
+
+  it('keeps snapshot preparation alive until the relay cancels it', async () => {
+    let observedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal as AbortSignal | undefined;
+      await new Promise((_resolve, reject) => {
+        observedSignal?.addEventListener(
+          'abort',
+          () => reject(new Error('aborted')),
+          { once: true },
+        );
+      });
+      return new Response('late');
+    });
+    const client = new TunnelClient({
+      relayUrl: new URL('ws://relay.test/t/demo'),
+      daemonUrl: new URL('http://daemon.test'),
+      token: 'token',
+      fetch: fetchImpl as typeof fetch,
+    });
+    const control = new FakeSocket();
+    control.open();
+    await advertiseHttpResponseChunkAcks(client, control);
+    const handleControlMessage = (
+      client as unknown as {
+        handleControlMessage(control: FakeSocket, data: Buffer): Promise<void>;
+      }
+    ).handleControlMessage.bind(client);
+
+    vi.useFakeTimers();
+    try {
+      const request = handleControlMessage(
+        control,
+        Buffer.from(encodeTunnelMessage({
+          type: 'snapshot.request',
+          id: 'long-snapshot-preparation',
+        })),
+      );
+      expect(observedSignal).toBeDefined();
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(observedSignal?.aborted).toBe(false);
+
+      await handleControlMessage(
+        control,
+        Buffer.from(encodeTunnelMessage({
+          type: 'http.cancel',
+          id: 'long-snapshot-preparation',
+          reason: 'relay idle timeout',
+        })),
+      );
+      await request;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('aborts an in-flight daemon HTTP fetch when the relay sends http.cancel', async () => {
     let observedSignal: AbortSignal | undefined;
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

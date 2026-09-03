@@ -27,6 +27,7 @@ import {
   type TunnelHttpResponseChunkEnvelope,
   type TunnelHttpResponseEnvelope,
   type TunnelJsonMessage,
+  type TunnelSnapshotRequestEnvelope,
   type TunnelWebSocketDataAckEnvelope,
   type TunnelWebSocketDataEnvelope,
   type TunnelWebSocketOpenEnvelope,
@@ -78,6 +79,28 @@ export type BackoffOptions = {
 const DEFAULT_BACKOFF_BASE_MS = 250;
 const DEFAULT_BACKOFF_MAX_MS = 10_000;
 const DEFAULT_BACKOFF_JITTER_RATIO = 0.25;
+const PRIVATE_DAEMON_HTTP_PATHS = new Set(['/api/ops/snapshot.zip']);
+
+function daemonRoutingPath(pathname: string): string {
+  // Match Hono's default getPath decoding. In particular, preserve encoded
+  // percent signs so a doubly encoded path is not decoded more times here than
+  // it is by the daemon router.
+  const escapedPercentSigns = pathname.includes('%25')
+    ? pathname.replace(/%25/gi, '%2525')
+    : pathname;
+  try {
+    return decodeURI(escapedPercentSigns);
+  } catch {
+    return escapedPercentSigns.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match) => {
+      try {
+        return decodeURI(match);
+      } catch {
+        return match;
+      }
+    });
+  }
+}
+
 const MCP_RELAY_CLIENT_NAME = 'kb-1-cloud-relay';
 const MCP_RELAY_MAX_PAYLOAD_BYTES = 192 * 1024;
 const MAX_MCP_TOOL_NAME_BYTES = 256;
@@ -282,6 +305,7 @@ export class TunnelClient {
           TUNNEL_FEATURES.VAULT_CONTENT_EVENTS_V2,
           TUNNEL_FEATURES.MCP_TOOL_CALL_BOUNDED_RESULTS_V1,
           TUNNEL_FEATURES.HTTP_RESPONSE_CHUNK_ACKS_V1,
+          TUNNEL_FEATURES.SNAPSHOT_STREAM_V1,
         ],
       }));
       this.startControlHeartbeat(control);
@@ -363,6 +387,9 @@ export class TunnelClient {
         return;
       case 'http.request':
         await this.proxyAndSendHttpResponse(control, message);
+        return;
+      case 'snapshot.request':
+        await this.proxyAndSendSnapshotResponse(control, message);
         return;
       case 'http.request.start':
         this.httpAssembler.start(message);
@@ -740,6 +767,23 @@ export class TunnelClient {
 
   private async proxyHttp(envelope: TunnelHttpRequestEnvelope): Promise<TunnelHttpResponseEnvelope | null> {
     const upstreamUrl = new URL(envelope.path, this.config.daemonUrl);
+    // Whole-home operational endpoints require a capability added only by the
+    // private OrgChannel backup path. Ordinary organization-facing relay
+    // requests must never proxy them, even if their URL is percent-encoded.
+    // A protocol-relative path must not turn the daemon into an outbound proxy.
+    if (
+      upstreamUrl.origin !== this.config.daemonUrl.origin
+      ||
+      PRIVATE_DAEMON_HTTP_PATHS.has(daemonRoutingPath(upstreamUrl.pathname))
+    ) {
+      return {
+        type: 'http.response',
+        id: envelope.id,
+        status: 404,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        bodyB64: Buffer.from('Not found\n').toString('base64'),
+      };
+    }
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), TUNNEL_HTTP_REQUEST_TIMEOUT_MS);
     const pending: PendingDaemonHttpRequest = { abort, canceled: false };
@@ -750,6 +794,9 @@ export class TunnelClient {
         method: envelope.method,
         headers: withoutHopByHop(envelope.headers),
         body: envelope.bodyB64 ? Buffer.from(envelope.bodyB64, 'base64') : undefined,
+        // Relay callers may choose the path, so never allow fetch to follow a
+        // redirect into a daemon-private endpoint (or away from the daemon).
+        redirect: 'manual',
         signal: abort.signal,
       });
 
@@ -793,6 +840,171 @@ export class TunnelClient {
       }
     } finally {
       if (!pending || this.pendingHttpRequests.get(envelope.id) === pending) {
+        this.pendingHttpRequests.delete(envelope.id);
+      }
+    }
+  }
+
+  private async proxyAndSendSnapshotResponse(
+    control: WebSocket,
+    request: TunnelSnapshotRequestEnvelope,
+  ): Promise<void> {
+    if (!this.relaySupportsHttpResponseChunkAcks) {
+      await this.sendHttpResponse(control, {
+        type: 'http.response',
+        id: request.id,
+        status: 503,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        bodyB64: Buffer.from(
+          'Snapshot streaming requires relay chunk acknowledgements.\n',
+        ).toString('base64'),
+      });
+      return;
+    }
+
+    const envelope: TunnelHttpRequestEnvelope = {
+      type: 'http.request',
+      id: request.id,
+      method: 'GET',
+      path: '/api/ops/snapshot.zip',
+      headers: {},
+      bodyB64: null,
+    };
+    await this.proxyAndSendStreamingHttpResponse(
+      control,
+      envelope,
+      new URL(envelope.path, this.config.daemonUrl),
+    );
+  }
+
+  private async proxyAndSendStreamingHttpResponse(
+    control: WebSocket,
+    envelope: TunnelHttpRequestEnvelope,
+    upstreamUrl: URL,
+  ): Promise<void> {
+    const abort = new AbortController();
+    const pending: PendingDaemonHttpRequest = { abort, canceled: false };
+    this.pendingHttpRequests.set(envelope.id, pending);
+    let responseStarted = false;
+    let chunks = 0;
+
+    try {
+      const response = await this.fetchImpl(upstreamUrl, {
+        method: envelope.method,
+        headers: withoutHopByHop(envelope.headers),
+        body: envelope.bodyB64 ? Buffer.from(envelope.bodyB64, 'base64') : undefined,
+        redirect: 'manual',
+        signal: abort.signal,
+      });
+      const totalBytes = Number(response.headers.get('content-length'));
+      if (
+        !response.ok
+        || !response.body
+        || !Number.isSafeInteger(totalBytes)
+        || totalBytes <= 0
+      ) {
+        await this.sendHttpResponse(control, {
+          type: 'http.response',
+          id: envelope.id,
+          status: response.status,
+          headers: serializableResponseHeaders(response.headers),
+          bodyB64: (await materializedResponseBody(response)).toString('base64'),
+        });
+        return;
+      }
+
+      control.send(encodeJsonBytes({
+        type: 'http.response.start',
+        id: envelope.id,
+        status: response.status,
+        headers: serializableResponseHeaders(response.headers),
+        totalBytes,
+      }));
+      responseStarted = true;
+      let sentBytes = 0;
+      const reader = response.body.getReader();
+      let responseCompleted = false;
+      let streamFailure: unknown;
+      try {
+        for (;;) {
+          const result = await reader.read();
+          if (result.done) break;
+          let offset = 0;
+          while (offset < result.value.byteLength) {
+            if (pending.canceled) return;
+            const emptyChunk = encodeJsonBytes({
+              type: 'http.response.chunk',
+              id: envelope.id,
+              sequence: chunks,
+              bodyB64: '',
+            });
+            const chunkBytes = Math.floor(
+              (TUNNEL_WS_FRAME_BYTE_LIMIT - emptyChunk.byteLength) / 4,
+            ) * 3;
+            if (chunkBytes <= 0) {
+              throw new Error('HTTP response chunk metadata exceeded tunnel frame cap');
+            }
+            const chunk = result.value.subarray(offset, offset + chunkBytes);
+            if (sentBytes + chunk.byteLength > totalBytes) {
+              throw new Error('Streaming HTTP response exceeded its content length');
+            }
+            const message: TunnelHttpResponseChunkEnvelope = {
+              type: 'http.response.chunk',
+              id: envelope.id,
+              sequence: chunks,
+              bodyB64: Buffer.from(chunk).toString('base64'),
+            };
+            if (this.relaySupportsHttpResponseChunkAcks) {
+              await this.sendHttpResponseChunk(control, message);
+            } else {
+              control.send(encodeJsonBytes(message));
+            }
+            sentBytes += chunk.byteLength;
+            chunks += 1;
+            offset += chunk.byteLength;
+          }
+        }
+        if (sentBytes !== totalBytes) {
+          throw new Error('Streaming HTTP response ended before its content length');
+        }
+        responseCompleted = true;
+      } catch (error) {
+        streamFailure = error;
+        throw error;
+      } finally {
+        if (!responseCompleted) {
+          abort.abort(streamFailure ?? 'streaming HTTP response was cancelled');
+          await reader.cancel(streamFailure).catch(() => undefined);
+        }
+        reader.releaseLock();
+      }
+      if (!pending.canceled) {
+        control.send(encodeJsonBytes({
+          type: 'http.response.end',
+          id: envelope.id,
+          chunks,
+        }));
+      }
+    } catch (error) {
+      if (pending.canceled) return;
+      if (responseStarted) {
+        // Let the relay reject the incomplete byte count immediately.
+        control.send(encodeJsonBytes({
+          type: 'http.response.end',
+          id: envelope.id,
+          chunks,
+        }));
+        return;
+      }
+      await this.sendHttpResponse(control, {
+        type: 'http.response',
+        id: envelope.id,
+        status: 502,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        bodyB64: Buffer.from(`Tunnel client failed to reach daemon: ${String(error)}\n`).toString('base64'),
+      });
+    } finally {
+      if (this.pendingHttpRequests.get(envelope.id) === pending) {
         this.pendingHttpRequests.delete(envelope.id);
       }
     }
