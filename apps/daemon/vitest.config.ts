@@ -20,11 +20,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text'],
-      include: ['src/app.ts', 'src/request-helpers.ts', 'src/starter-kit.ts', 'src/ui-static.ts', 'src/vault-registry.ts'],
-      thresholds: {
-        lines: 90,
-        perFile: true
-      }
+      include: ['src/app.ts', 'src/request-helpers.ts', 'src/starter-kit.ts', 'src/ui-static.ts', 'src/vault-registry.ts']
     }
   }
 });

@@ -56,7 +56,8 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
   const limit = clampPositiveInteger(input.limit, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
   const offset = clampNonNegativeInteger(input.offset);
   const context = clampNonNegativeInteger(input.context, DEFAULT_CONTEXT_LINES, MAX_CONTEXT_LINES);
-  const allHits: SearchHit[] = [];
+  const results: SearchHit[] = [];
+  let total = 0;
   const { files, truncated } = await collectSearchableFiles(root, under);
   const lowerQuery = query.toLocaleLowerCase();
 
@@ -66,7 +67,10 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
     const lines = content.split('\n');
     for (const [index, lineText] of lines.entries()) {
       if (!lineText.toLocaleLowerCase().includes(lowerQuery)) continue;
-      allHits.push({
+      // Keep counting the full scan, but retain text/context only for this page.
+      const matchIndex = total++;
+      if (matchIndex < offset || results.length >= limit) continue;
+      results.push({
         path: filePath,
         line: index + 1,
         lineText,
@@ -83,9 +87,9 @@ export async function searchVaultFiles(root: string, input: SearchInput): Promis
     under,
     limit,
     offset,
-    total: allHits.length,
+    total,
     truncated,
-    results: allHits.slice(offset, offset + limit)
+    results
   };
 }
 

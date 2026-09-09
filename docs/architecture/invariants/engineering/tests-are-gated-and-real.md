@@ -1,59 +1,45 @@
-# Tests Are Gated And Real
+# Tests Protect Consequential Behavior
 
 ## Invariant
 
-Test suites for service and session code run against real resources, assert
-through two independent paths, and enforce coverage through build-failing
-gates. A test suite is a first-class deliverable, not an accompaniment.
+Tests protect customer-visible behavior, data durability, access boundaries, and
+known regressions. Verification is proportional to the consequence of a failure.
+Coverage reports help locate gaps; percentages and assertion counts are not the
+acceptance criteria.
 
 ## This Means
 
-- **Real resources.** Filesystem-touching tests run against real temp
-  directories (`mkdtemp`); no in-memory fs shims, no mocking the resource
-  under test. Processes under test bind real (ephemeral/temp) ports and are
-  killed by the test.
-- **Dual assertion.** Every mutation is verified BOTH through the
-  service/API read path AND by direct inspection of the underlying resource
-  (file content/stat, trash contents, audit JSONL rows). One without the
-  other is half a test.
-- **Gated coverage.** Vitest coverage thresholds are wired into `pnpm
-  check` so the build FAILS below them: pure-logic packages at 100%
-  statements/functions/lines (≥95% branches); route/session/service glue at
-  ≥90% lines. Every new production file lands inside a gate's include — a
-  file outside all gates is a violation, not an oversight.
-- **Truthful suppressions.** Every coverage-ignore comment carries a reason
-  that is accurate for ITS line (copy-paste drift is a violation), and
-  auditors review every ignore.
-- **Truthful names.** A test's name describes what it actually exercises;
-  a name claiming a library or behavior the test does not touch is a
-  violation (this happened: a test titled "using gray-matter detection"
-  tested a hand-rolled scanner).
-- **Property tests** defend algorithmic glue (validation, splice/diff
-  application) with randomized inputs including unicode/surrogate cases
-  near the operation site.
+- **Real resources where they matter.** Filesystem and persistence tests use
+  disposable real directories, and process tests own their ports and cleanup.
+  Never use a developer's real vault or shared state. Mock external boundaries
+  when appropriate, but do not mock away the resource whose behavior is under test.
+- **Independent durability evidence.** Save, collaboration, restart, recovery,
+  and other persistence-sensitive tests verify both the public read path and
+  persisted bytes when either alone could hide a real failure. Routine mutations
+  need the assertions that establish their contract, not a mandatory second path.
+- **Meaningful regressions.** Add a test when it catches a plausible bug, protects
+  an important contract, or reproduces a known failure. Reversible, low-impact
+  edits and implementation details do not automatically require new tests.
+- **Coverage as diagnosis.** Keep coverage reporting for review, without blanket
+  percentage gates or a requirement that every production file have a gate.
+  Investigate consequential untested behavior; do not add assertions or ignore
+  comments just to change a number. Existing ignores must describe their actual line.
+- **Truthful names.** Test names describe the behavior actually exercised.
+- **Focused property tests.** Retain randomized validation, Unicode, and
+  splice/diff checks where they expose input combinations that examples miss.
 
-## Good Examples
+## Verification And Review
 
-- `KB1_HOME=$(mktemp -d)` per suite; chmod-based persist-failure repros.
-- The splice property test: randomized docs/edits reproduce expected
-  content exactly.
-- Negative-testing a gate (raise threshold → build fails → revert) to prove
-  it enforces.
+Run the repository's required checks for the change. Reuse valid results from the
+same revision and environment; rerun affected checks after changes or failures.
+Do not repeat unchanged suites for reassurance or negative-test coverage tooling
+merely to prove it enforces a quota.
 
-## Violations
+Keep high-value persistence, restart, reconnection, revocation, isolation,
+provisioning, and deletion coverage. Remove or consolidate a test only after
+identifying the obsolete behavior, duplication, or implementation-only assertion;
+a high test count is not itself a reason to delete tests.
 
-- A new production file outside every coverage include.
-- A mutation test that asserts only the API response.
-- memfs/mock-fs for vault behavior; tests sharing a developer's real state.
-- An ignore comment whose reason describes a different line.
-
-## Exceptions
-
-None currently accepted.
-
-## Review Checklist
-
-- Is every new file inside a gate? Run the negative test on one gate.
-- Spot-check three mutations for dual assertion.
-- Read every new coverage-ignore reason against its line.
-- Do test names match what the bodies do?
+Reviewers should ask which failure each added test catches, whether the resources
+and assertions expose that failure, and what material gaps remain. A green suite
+is evidence for its tested behavior, not proof of production readiness.

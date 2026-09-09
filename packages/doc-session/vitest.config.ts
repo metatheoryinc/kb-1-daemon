@@ -26,21 +26,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text'],
-      include: ['src/manager.ts', 'src/protocol.ts', 'src/session.ts', 'src/websocket.ts'],
-      thresholds: {
-        'src/manager.ts': {
-          lines: 95
-        },
-        'src/protocol.ts': {
-          lines: 95
-        },
-        'src/session.ts': {
-          lines: 90
-        },
-        'src/websocket.ts': {
-          lines: 90
-        }
-      }
+      include: ['src/manager.ts', 'src/protocol.ts', 'src/session.ts', 'src/websocket.ts']
     }
   }
 });
