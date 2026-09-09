@@ -241,10 +241,6 @@ export function createApp(options: CreateAppOptions): Hono {
         const snapshotSignal = options.shutdownSignal
           ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal])
           : context.req.raw.signal;
-        const snapshot = await registry.createSnapshotArchive(
-          new Date(),
-          snapshotSignal,
-        );
         // The relay protocol needs an exact total before it can stream bounded
         // chunks with acknowledgements. Spool outside KB1_HOME so the archive
         // never contains itself, then delete the temporary file when delivery
@@ -253,6 +249,11 @@ export function createApp(options: CreateAppOptions): Hono {
         // cleanup that failed after an earlier request in the same process.
         await prepareSnapshotSpoolHome(snapshotSpoolHome);
         spoolDirectory = await mkdtemp(join(snapshotSpoolHome, 'run-'));
+        const snapshot = await registry.createSnapshotArchive(
+          new Date(),
+          snapshotSignal,
+          spoolDirectory,
+        );
         const spoolPath = join(spoolDirectory, 'snapshot.zip');
         await pipeline(snapshot.stream, createWriteStream(spoolPath), {
           signal: snapshotSignal,

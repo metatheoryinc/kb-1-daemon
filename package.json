@@ -18,6 +18,7 @@
     "smoke:windows": "node scripts/windows-smoke.mjs",
     "smoke:yjs": "node scripts/yjs-smoke.mjs",
     "storybook": "pnpm --filter @kb-1/ui storybook",
+    "snapshot:restore": "tsx apps/daemon/src/snapshot-restore-cli.ts",
     "test": "pnpm test:scripts && nx run-many -t test",
     "test:scripts": "node --test scripts/*.test.mjs",
     "typecheck": "nx run-many -t typecheck"

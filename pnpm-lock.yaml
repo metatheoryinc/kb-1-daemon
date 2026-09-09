@@ -127,9 +127,15 @@ importers:
       ws:
         specifier: 8.21.0
         version: 8.21.0
+      yauzl:
+        specifier: 3.4.0
+        version: 3.4.0
       yazl:
         specifier: 3.3.1
         version: 3.3.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
@@ -146,9 +152,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.8
         version: 4.1.8(vitest@4.1.8)
-      yauzl:
-        specifier: 3.4.0
-        version: 3.4.0
       yjs:
         specifier: 13.6.31
         version: 13.6.31
