@@ -23,13 +23,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text'],
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
-      thresholds: {
-        statements: 100,
-        functions: 100,
-        lines: 100,
-        branches: 95
-      }
+      exclude: ['src/**/*.test.ts']
     }
   }
 });

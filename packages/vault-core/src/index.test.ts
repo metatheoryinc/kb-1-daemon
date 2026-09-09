@@ -2800,6 +2800,23 @@ describe("scan search", () => {
     ]);
   });
 
+  it("keeps full totals and context when paging across dense files", async () => {
+    await writeFileWithParents(path.join(root, "dense", "a.md"), "needle a1\nneedle a2\nneedle a3", "utf8");
+    await writeFileWithParents(path.join(root, "dense", "b.md"), "needle b1\nneedle b2\nneedle b3", "utf8");
+
+    const page = await searchVaultFiles(root, { q: "needle", under: "dense", offset: 2, limit: 2, context: 1 });
+    expect(page.total).toBe(6);
+    expect(page.results).toEqual([
+      { path: "dense/a.md", line: 3, lineText: "needle a3", context: { before: ["needle a2"], after: [] } },
+      { path: "dense/b.md", line: 1, lineText: "needle b1", context: { before: [], after: ["needle b2"] } },
+    ]);
+    const last = await searchVaultFiles(root, { q: "needle", under: "dense", offset: 5, limit: 2 });
+    expect(last.total).toBe(6);
+    expect(last.results.map((hit) => hit.lineText)).toEqual(["needle b3"]);
+    const beyond = await searchVaultFiles(root, { q: "needle", under: "dense", offset: 6 });
+    expect(beyond).toMatchObject({ total: 6, results: [] });
+  });
+
   it("searches from the vault root and excludes metadata and trash folders", async () => {
     await mkdir(path.join(root, ".git", "objects", "aa"), { recursive: true });
     await writeFile(
