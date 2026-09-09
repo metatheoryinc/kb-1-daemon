@@ -303,9 +303,28 @@ flushes every active vault through the same conservative durability boundary,
 then streams a ZIP containing `vaults/`, recoverable
 `.trash/`, `kb1-snapshot.json`, and a final `kb1-snapshot.complete` marker. The
 manifest records the schema version, timestamps, paths, sizes, modes, and byte
-totals. The stream fails if any planned file or directory changes before the
-archive completes, so callers must discard an incomplete ZIP and retry instead
-of treating mixed filesystem state as a backup.
+totals. Files are captured into private temporary storage before hashing and
+compression. Source changes during capture fail the attempt; edits after a
+validated capture do not invalidate it. Callers must discard incomplete ZIPs
+and retry instead of treating mixed filesystem state as a backup.
+
+Schema 2 preserves accepted names such as `Meeting: launch.md`, `con.md`, and
+case-colliding paths. Names that common extraction filesystems cannot safely
+represent use a `~kb1-` archive segment; `originalPath` in the manifest records
+the exact original file or directory path. Contents and source names are not
+modified. The ZIP can be inspected with ordinary tools, but use the restore
+command to recover a working vault with its original names and links:
+
+```bash
+pnpm snapshot:restore --archive /path/to/snapshot.zip --target /tmp/kb1-restored-home
+```
+
+The target must not exist. The command accepts schema 1 and 2, checks the
+completion marker and every file's SHA-256, preserves empty directories, and
+refuses to merge into an existing home. If the destination filesystem cannot
+represent the original names, restoration fails and removes only its newly
+created partial home; use a compatible filesystem such as a case-sensitive
+Linux volume. See [the snapshot format](docs/snapshot-format.md).
 
 The archive retains portable vault metadata. It excludes daemon-local
 `.kb1/cache/`, `.kb1/runtime/`, `.kb1/tmp/`, and `.kb1/secrets/` trees, along
@@ -317,7 +336,7 @@ self-hosted daemons remain loopback-only unless an operator deliberately exposes
 them. Cloud-hosted backup/export callers use the private managed-container
 binding directly; the ordinary per-organization relay remains a bounded JSON/API
 transport and is not the snapshot transfer path.
-Never extract an archive over a running daemon home. Restore into a stopped or
+Never extract an archive over a running daemon home. Restore into a new
 disposable `KB1_HOME`, validate the manifest and ZIP, start the daemon there,
 and exercise real vault reads before any separately approved cutover.
 

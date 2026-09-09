@@ -1,17 +1,22 @@
-import { lstat, open, readdir } from 'node:fs/promises';
+import { copyFile, lstat, mkdtemp, open, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 
 import { ZipFile } from 'yazl';
 
-export const SNAPSHOT_ARCHIVE_SCHEMA_VERSION = 1;
+import { portableSnapshotPaths } from './snapshot-paths.js';
+
+export const SNAPSHOT_ARCHIVE_SCHEMA_VERSION = 2;
 export const SNAPSHOT_MANIFEST_PATH = 'kb1-snapshot.json';
 export const SNAPSHOT_COMPLETION_PATH = 'kb1-snapshot.complete';
+export const SNAPSHOT_RESTORE_HELP_PATH = 'kb1-restore.txt';
 
 export interface SnapshotArchiveFile {
   path: string;
+  originalPath?: string;
   sizeBytes: number;
   modifiedAt: string;
   mode: number;
@@ -23,10 +28,18 @@ export interface SnapshotArchiveManifest {
   createdAt: string;
   durableAsOf: string;
   files: SnapshotArchiveFile[];
+  directories: SnapshotArchiveDirectory[];
   totals: {
     files: number;
     bytes: number;
   };
+}
+
+export interface SnapshotArchiveDirectory {
+  path: string;
+  originalPath?: string;
+  modifiedAt: string;
+  mode: number;
 }
 
 export interface SnapshotArchive {
@@ -40,6 +53,7 @@ interface SnapshotRoot {
 }
 
 interface PlannedFile extends SnapshotArchiveFile {
+  sourceMode: number;
   filesystemPath: string;
   device: number;
   inode: number;
@@ -49,6 +63,7 @@ interface PlannedFile extends SnapshotArchiveFile {
 
 interface PlannedDirectory {
   path: string;
+  originalPath?: string;
   filesystemPath: string;
   modifiedAt: Date;
   device: number;
@@ -59,32 +74,44 @@ interface PlannedDirectory {
 }
 
 const LOCAL_KB1_DIRECTORY_NAMES = new Set(['cache', 'runtime', 'secrets', 'tmp']);
-const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i;
-const WINDOWS_INVALID_CHARACTER = /[<>:"\\|?*\u0000-\u001f]/;
 
 /**
  * Build one portable ZIP containing every active vault plus the daemon trash.
  * Callers must flush live document sessions before invoking this function.
  *
- * Files are planned with lstat and reopened lazily as yazl consumes them. If a
- * file was replaced between planning and streaming, the stream fails instead
- * of silently producing a mixed snapshot. Hosted daemon writes are atomic
- * renames, so this detects the concurrent-write shape that matters there.
+ * Capture files into private temporary storage and validate the source before
+ * hashing/compression. Changes during capture fail closed; subsequent edits
+ * cannot invalidate the captured snapshot. Hosted writes are atomic renames.
  */
 export async function createSnapshotArchive(input: {
   roots: SnapshotRoot[];
   createdAt: Date;
   durableAsOf: Date;
   signal?: AbortSignal;
+  stagingHome?: string;
 }): Promise<SnapshotArchive> {
   throwIfSnapshotAborted(input.signal);
-  const plan = await planSnapshot(input.roots, input.signal);
-  throwIfSnapshotAborted(input.signal);
+  const stagingDirectory = await mkdtemp(join(input.stagingHome ?? tmpdir(), 'kb1-snapshot-source-'));
+  let plan: Awaited<ReturnType<typeof planSnapshot>>;
+  try {
+    plan = await planSnapshot(input.roots, input.signal);
+    await captureSnapshotFiles(plan, stagingDirectory, input.signal);
+    throwIfSnapshotAborted(input.signal);
+  } catch (error) {
+    await rm(stagingDirectory, { recursive: true, force: true });
+    throw error;
+  }
   const manifest: SnapshotArchiveManifest = {
     schemaVersion: SNAPSHOT_ARCHIVE_SCHEMA_VERSION,
     createdAt: input.createdAt.toISOString(),
     durableAsOf: input.durableAsOf.toISOString(),
     files: plan.files.map((file) => manifestFile(file)),
+    directories: plan.directories.map((directory) => ({
+      path: directory.path.replace(/\/$/, ''),
+      ...(directory.originalPath ? { originalPath: directory.originalPath } : {}),
+      modifiedAt: directory.modifiedAt.toISOString(),
+      mode: directory.mode,
+    })),
     totals: {
       files: plan.files.length,
       bytes: plan.files.reduce((total, file) => total + file.sizeBytes, 0),
@@ -113,10 +140,24 @@ export async function createSnapshotArchive(input: {
     input.signal?.removeEventListener('abort', abortHandler);
     for (const source of activeSources) source.destroy();
     activeSources.clear();
+    void rm(stagingDirectory, { recursive: true, force: true }).catch((error: unknown) => {
+      console.error('KB-1 snapshot capture cleanup failed.', error);
+    });
   });
   archive.addBuffer(
     Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'),
     SNAPSHOT_MANIFEST_PATH,
+    { mtime: input.createdAt, mode: 0o100600 },
+  );
+  archive.addBuffer(
+    Buffer.from('KB-1 recovery archive\n\n'
+      + 'Some names may use a ~kb1- prefix so every file can be safely unpacked on common filesystems.\n'
+      + 'kb1-snapshot.json records each originalPath. File contents are unchanged.\n'
+      + 'For a working vault with its exact original names and links, use the matching daemon release:\n'
+      + '  pnpm snapshot:restore --archive /path/to/snapshot.zip --target /path/to/new-home\n'
+      + 'The target must not exist. The restore command verifies hashes and refuses incompatible names.\n'
+      + 'Never extract over an existing or running daemon home.\n', 'utf8'),
+    SNAPSHOT_RESTORE_HELP_PATH,
     { mtime: input.createdAt, mode: 0o100600 },
   );
   for (const directory of plan.directories) {
@@ -130,7 +171,7 @@ export async function createSnapshotArchive(input: {
       file.path,
       {
         mtime: new Date(file.modifiedAt),
-        mode: file.mode,
+        mode: file.sourceMode,
         size: file.sizeBytes,
         compress: true,
       },
@@ -199,7 +240,7 @@ export async function createSnapshotArchive(input: {
         callback(snapshotAbortError(input.signal), Readable.from([]));
         return;
       }
-      void validateSnapshotPlan(plan, input.signal).then(
+      void validateSnapshotPlan({ files: plan.files, directories: [], missingRoots: [] }, input.signal).then(
         () => callback(null, Readable.from(completion)),
         (error: unknown) => callback(error, Readable.from([]))
       );
@@ -246,7 +287,19 @@ async function planSnapshot(roots: SnapshotRoot[], signal?: AbortSignal): Promis
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
   directories.sort((left, right) => left.path.localeCompare(right.path));
-  validatePortableArchivePaths(files, directories);
+  const mapped = portableSnapshotPaths([
+    SNAPSHOT_MANIFEST_PATH,
+    SNAPSHOT_COMPLETION_PATH,
+    SNAPSHOT_RESTORE_HELP_PATH,
+    ...directories.map((directory) => directory.path.replace(/\/$/, '')),
+    ...files.map((file) => file.path),
+  ]);
+  for (const entry of [...files, ...directories]) {
+    const original = entry.path.replace(/\/$/, '');
+    const portable = mapped.get(original)!;
+    if (portable !== original) entry.originalPath = original;
+    entry.path = entry.path.endsWith('/') ? `${portable}/` : portable;
+  }
   return { files, directories, missingRoots };
 }
 
@@ -296,56 +349,14 @@ async function walkSnapshotRoot(
       modifiedAtMs: info.mtimeMs,
       changedAtMs: info.ctimeMs,
       mode: info.mode,
+      sourceMode: info.mode,
       device: info.dev,
       inode: info.ino,
     };
     files.push({
       ...plannedFile,
-      sha256: await hashSnapshotFile(plannedFile, signal),
+      sha256: '',
     });
-  }
-}
-
-function validatePortableArchivePaths(
-  files: PlannedFile[],
-  directories: PlannedDirectory[],
-): void {
-  const paths = [
-    SNAPSHOT_MANIFEST_PATH,
-    SNAPSHOT_COMPLETION_PATH,
-    ...directories.map((directory) => directory.path.replace(/\/$/, '')),
-    ...files.map((file) => file.path),
-  ];
-  const canonicalPaths = new Map<string, string>();
-
-  for (const path of paths) {
-    const segments = path.split('/');
-    for (const segment of segments) assertPortableArchiveSegment(segment);
-
-    // Windows and common macOS installations compare names without case, and
-    // macOS also normalizes canonically equivalent Unicode. Reject collisions
-    // up front so extraction cannot silently merge two source entries.
-    const canonicalPath = segments
-      .map((segment) => segment.normalize('NFC').toLocaleLowerCase('en-US'))
-      .join('/');
-    const existing = canonicalPaths.get(canonicalPath);
-    if (existing !== undefined) {
-      throw new Error(`Snapshot source contains colliding portable paths: ${existing} and ${path}`);
-    }
-    canonicalPaths.set(canonicalPath, path);
-  }
-}
-
-function assertPortableArchiveSegment(segment: string): void {
-  if (
-    segment.length === 0
-    || segment === '.'
-    || segment === '..'
-    || WINDOWS_INVALID_CHARACTER.test(segment)
-    || /[. ]$/.test(segment)
-    || WINDOWS_RESERVED_BASENAME.test(segment)
-  ) {
-    throw new Error(`Snapshot source contains a non-portable path segment: ${JSON.stringify(segment)}`);
   }
 }
 
@@ -373,11 +384,41 @@ function isPortableSnapshotPath(path: string): boolean {
 function manifestFile(file: PlannedFile): SnapshotArchiveFile {
   return {
     path: file.path,
+    ...(file.originalPath ? { originalPath: file.originalPath } : {}),
     sizeBytes: file.sizeBytes,
     modifiedAt: file.modifiedAt,
-    mode: file.mode,
+    mode: file.sourceMode,
     sha256: file.sha256,
   };
+}
+
+async function captureSnapshotFiles(
+  plan: Awaited<ReturnType<typeof planSnapshot>>,
+  stagingDirectory: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const capturedPaths: string[] = [];
+  for (const [index, file] of plan.files.entries()) {
+    throwIfSnapshotAborted(signal);
+    const path = join(stagingDirectory, String(index));
+    // Reflink where supported; Node falls back to a normal copy elsewhere.
+    // Never hard-link: in-place metadata/audit writes would alter the capture.
+    await copyFile(file.filesystemPath, path, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL);
+    capturedPaths.push(path);
+  }
+  await validateSnapshotPlan(plan, signal);
+  for (const [index, file] of plan.files.entries()) {
+    throwIfSnapshotAborted(signal);
+    const path = capturedPaths[index]!;
+    const captured = await lstat(path);
+    file.filesystemPath = path;
+    file.device = captured.dev;
+    file.inode = captured.ino;
+    file.modifiedAtMs = captured.mtimeMs;
+    file.changedAtMs = captured.ctimeMs;
+    file.mode = captured.mode;
+    file.sha256 = await hashSnapshotFile(file, signal);
+  }
 }
 
 async function validateSnapshotPlan(plan: {

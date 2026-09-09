@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "bin": {
-    "kb1d": "./dist/main.js"
+    "kb1d": "./dist/main.js",
+    "kb1-restore": "./dist/snapshot-restore-cli.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/main.js', 0o755)\" && node scripts/bundle-starter-kit.mjs",
+    "build": "tsc -p tsconfig.build.json && node -e \"for (const path of ['dist/main.js', 'dist/snapshot-restore-cli.js']) require('node:fs').chmodSync(path, 0o755)\" && node scripts/bundle-starter-kit.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -25,6 +26,8 @@
     "github-slugger": "2.0.0",
     "hono": "4.12.25",
     "yazl": "3.3.1",
+    "yauzl": "3.4.0",
+    "zod": "4.4.3",
     "ws": "8.21.0"
   },
   "devDependencies": {
@@ -33,7 +36,6 @@
     "@types/yazl": "3.3.1",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.8",
-    "yauzl": "3.4.0",
     "yjs": "13.6.31"
   }
 }
