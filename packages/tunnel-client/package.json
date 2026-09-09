@@ -21,8 +21,8 @@
   },
   "dependencies": {
     "@kb-1/tunnel-protocol": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "ws": "8.21.0"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@types/ws": "8.18.1",
