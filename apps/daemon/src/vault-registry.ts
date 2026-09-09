@@ -405,6 +405,7 @@ export class VaultRegistry {
   async createSnapshotArchive(
     now: Date = new Date(),
     signal?: AbortSignal,
+    stagingHome?: string,
   ): Promise<SnapshotArchive> {
     // This is deliberately captured before any flush begins. Concurrent edits
     // may land while a multi-vault snapshot is being prepared, so a later
@@ -430,6 +431,7 @@ export class VaultRegistry {
       createdAt: now,
       durableAsOf,
       signal,
+      ...(stagingHome ? { stagingHome } : {}),
     });
   }
 

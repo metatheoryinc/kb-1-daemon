@@ -7,7 +7,7 @@ regenerated and reviewed for every release.
 Platform-specific optional native build bindings are excluded because they are not
 copied into the shipped runtime; their platform-neutral parent packages remain listed.
 
-Inventory count: **199 packages**.
+Inventory count: **201 packages**.
 
 | Package | Declared license | Source | Included notice files |
 | --- | --- | --- | --- |
@@ -160,6 +160,7 @@ Inventory count: **199 packages**.
 | parseurl 1.3.3 | MIT | [source](https://github.com/pillarjs/parseurl) | LICENSE (7f36c1a3cd7f) |
 | path-key 3.1.1 | MIT | [source](https://github.com/sindresorhus/path-key) | license (c9808a775260) |
 | path-to-regexp 8.4.2 | MIT | [source](https://github.com/pillarjs/path-to-regexp) | LICENSE (e257f36bcf5e) |
+| pend 1.2.0 | MIT | [source](https://github.com/andrewrk/node-pend) | LICENSE (92832e59724a) |
 | phosphor-svelte 3.1.0 | MIT | [source](https://github.com/haruaki07/phosphor-svelte) | LICENSE (1609a422af37) |
 | picocolors 1.1.1 | ISC | [source](https://github.com/alexeyraspopov/picocolors) | LICENSE (fa11af88c78d) |
 | picomatch 4.0.4 | MIT | [source](https://github.com/micromatch/picomatch) | LICENSE (9219a3ebed1d) |
@@ -205,6 +206,7 @@ Inventory count: **199 packages**.
 | ws 8.21.0 | MIT | [source](https://github.com/websockets/ws) | LICENSE (7adebaeee45b) |
 | y-protocols 1.0.7 | MIT | [source](https://github.com/yjs/y-protocols) | LICENSE (7ad5cbfd9f9f) |
 | yaml 2.9.0 | ISC | [source](https://github.com/eemeli/yaml) | LICENSE (cf12d35c36ba) |
+| yauzl 3.4.0 | MIT | [source](https://github.com/thejoshwolfe/yauzl) | LICENSE (da5f77b8bc87) |
 | yazl 3.3.1 | MIT | [source](https://github.com/thejoshwolfe/yazl) | LICENSE (da5f77b8bc87) |
 | yjs 13.6.31 | MIT | [source](https://github.com/yjs/yjs) | LICENSE (467c210a105c) |
 | zimmerframe 1.1.4 | MIT | [source](https://github.com/sveltejs/zimmerframe) | LICENSE (3ef5af147392) |
@@ -4577,6 +4579,38 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+### 92832e59724a11084eeb483058f27197d06a4d4f34a18cedb462892001c74d60
+
+Packages: pend@1.2.0
+
+Files: pend@1.2.0/LICENSE
+
+```text
+The MIT License (Expat)
+
+Copyright (c) 2014 Andrew Kelley
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### 1609a422af374a9fe833b3e897ec3b1d9b5006b1ac69822e6001d599f426e330
 
 Packages: phosphor-svelte@3.1.0
@@ -7727,9 +7761,9 @@ THIS SOFTWARE.
 
 ### da5f77b8bc8717f6e33aedce55a88702d79038d83cdc00af5ca08f3bc4f22ff9
 
-Packages: yazl@3.3.1
+Packages: yauzl@3.4.0, yazl@3.3.1
 
-Files: yazl@3.3.1/LICENSE
+Files: yauzl@3.4.0/LICENSE, yazl@3.3.1/LICENSE
 
 ```text
 The MIT License (MIT)
