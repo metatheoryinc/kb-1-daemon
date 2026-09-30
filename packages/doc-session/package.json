@@ -27,14 +27,14 @@
     "@kb-1/vault-core": "workspace:*",
     "@noble/hashes": "catalog:",
     "fast-diff": "1.3.0",
-    "lib0": "0.2.117",
+    "lib0": "0.2.118",
     "y-protocols": "1.0.7",
-    "yjs": "13.6.31"
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.8",
-    "vitest": "4.1.8",
-    "ws": "8.21.0"
+    "vitest": "5.0.2",
+    "ws": "8.22.0"
   }
 }
