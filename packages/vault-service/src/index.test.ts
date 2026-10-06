@@ -1276,6 +1276,37 @@ describe("vault service failure mapping", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("saves, clears, and reopens empty notes without accepting stale baselines", async () => {
+    const path = "notes/empty.md";
+    const actor = { kind: "user" } as const;
+    let service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    await service.createNote({ path, content: "", actor });
+    const empty = await service.readNote({ path });
+    const first = await service.editNote({ path, actor, baseline: requireBaseline(empty), oldText: "", newText: "first\n" });
+    expect(first).toMatchObject({ ok: true, content: "first\n" });
+    await expect(readFile(join(root, path), "utf8")).resolves.toBe("first\n");
+
+    const cleared = await service.editNote({ path, actor, baseline: requireBaseline(first), oldText: "first\n", newText: "" });
+    expect(cleared).toMatchObject({ ok: true, content: "" });
+    await expect(readFile(join(root, path), "utf8")).resolves.toBe("");
+    // Even when content is empty again, a pre-clear token cannot authorize a write.
+    await expect(service.editNote({ path, actor, baseline: requireBaseline(empty), oldText: "", newText: "stale" })).resolves.toMatchObject({
+      ok: false, error: "stale_doc", current_content: ""
+    });
+    await sessions.close();
+    sessions = new DocumentSessionManager({ root, defaultContent: "" });
+    service = createVaultService({ vaultRoot: root, documentSessions: sessions });
+    const reopened = await service.readNote({ path });
+    expect(reopened).toMatchObject({ ok: true, content: "" });
+    const saved = await service.editNote({ path, actor, baseline: requireBaseline(reopened), oldText: "", newText: "reopened\n" });
+    expect(saved).toMatchObject({ ok: true, content: "reopened\n" });
+    await expect(service.editNote({ path, actor, baseline: requireBaseline(saved), oldText: "", newText: "overwrite" })).resolves.toMatchObject({
+      ok: false, error: "not_found"
+    });
+    await expect(service.readNote({ path })).resolves.toMatchObject({ ok: true, content: "reopened\n" });
+    await expect(readFile(join(root, path), "utf8")).resolves.toBe("reopened\n");
+  });
+
   it("maps live baseline edit rejections into the canonical failure dialect", async () => {
     await writeFileWithParents(
       join(root, "notes", "edit.md"),

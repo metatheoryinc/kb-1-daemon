@@ -1520,6 +1520,54 @@ describe("daemon routing", () => {
     ]).toContain(mergedContent);
   });
 
+  it("saves and clears an empty note over HTTP while refusing stale and nonempty empty-needle edits", async () => {
+    const { app, vaultRoot, registry } = await setupScopedVault();
+    const path = "notes/empty.md";
+    const route = filePath(path);
+    const splice = (baseline: string, old_text: string, new_text: string) => app.request(`${route}/splice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseline, old_text, new_text }),
+    });
+    try {
+      const created = await app.request(route, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "" }),
+      });
+      expect(created.status).toBe(201);
+      const empty = await (await app.request(route)).json() as { baseline: string };
+      const first = await splice(empty.baseline, "", "first\n");
+      expect(first.status).toBe(200);
+      const firstBody = await first.json() as { baseline: string; content: string };
+      expect(firstBody.content).toBe("first\n");
+      await expect(readFile(join(vaultRoot, path), "utf8")).resolves.toBe("first\n");
+
+      const stale = await splice(empty.baseline, "", "overwrite");
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toMatchObject({ error: "stale_doc", current_content: "first\n" });
+      const refused = await splice(firstBody.baseline, "", "overwrite");
+      expect(refused.status).toBe(404);
+      await expect(refused.json()).resolves.toMatchObject({ error: "not_found" });
+      await expect(readFile(join(vaultRoot, path), "utf8")).resolves.toBe("first\n");
+
+      const cleared = await splice(firstBody.baseline, "first\n", "");
+      expect(cleared.status).toBe(200);
+      const clearedBody = await cleared.json() as { baseline: string; content: string };
+      expect(clearedBody.content).toBe("");
+      await expect(readFile(join(vaultRoot, path), "utf8")).resolves.toBe("");
+      const staleEmpty = await splice(empty.baseline, "", "stale");
+      expect(staleEmpty.status).toBe(409);
+      await expect(staleEmpty.json()).resolves.toMatchObject({ error: "stale_doc", current_content: "" });
+      const saved = await splice(clearedBody.baseline, "", "after clear\n");
+      expect(saved.status).toBe(200);
+      await expect((await app.request(route)).json()).resolves.toMatchObject({ content: "after clear\n" });
+      await expect(readFile(join(vaultRoot, path), "utf8")).resolves.toBe("after clear\n");
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("serves baselines and applies agent splice with stale retry through live sessions", async () => {
     const { app, vaultRoot } = await setupScopedVault();
     await writeFileWithParents(
