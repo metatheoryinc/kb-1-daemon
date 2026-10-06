@@ -44,7 +44,11 @@ export function applyAnchoredSplice(
 
   const normalizedContent = normalizeWithRawOffsets(content);
   const needle = before + oldText + after;
-  const matches = findAllSubstringOffsets(normalizedContent.value, needle);
+  // An empty document has one insertion point. Nonempty documents still
+  // require a nonempty needle (old text and/or anchors) to locate an edit.
+  const matches = content === '' && needle === ''
+    ? [0]
+    : findAllSubstringOffsets(normalizedContent.value, needle);
   if (matches.length === 0) return { ok: false, rejected: 'not_found' };
 
   let matchOffset: number;

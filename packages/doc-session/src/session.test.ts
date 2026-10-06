@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import * as Y from 'yjs';
+import { applyAnchoredSplice } from '@kb-1/vault-core';
 
 import { createFastDiffYTextDelta, resolveWatchDirectory } from './session.js';
 import {
@@ -323,6 +324,41 @@ describe('OneFileDocumentSession', () => {
     });
     await expect(readFile(filePath, 'utf8')).resolves.toBe('one TWO THREE\n');
     await session.close();
+  });
+
+  it('persists empty-document first saves and preserves concurrent Yjs content', async () => {
+    const session = new OneFileDocumentSession(filePath, { defaultContent: '' });
+    await session.open();
+    const empty = await session.readWithBaseline();
+    const clientDoc = new Y.Doc();
+    Y.applyUpdate(clientDoc, Y.encodeStateAsUpdate(session.ydoc));
+    clientDoc.getText('markdown').insert(0, 'concurrent\n');
+    const inFlightUpdate = Y.encodeStateAsUpdate(clientDoc, Y.encodeStateVector(session.ydoc));
+
+    const first = await session.applyBaselineEdit(empty.baseline, (current) =>
+      applyAnchoredSplice(current, { oldText: '', newText: 'first\n' }));
+    expect(first).toMatchObject({ ok: true, content: 'first\n' });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('first\n');
+
+    Y.applyUpdate(session.ydoc, inFlightUpdate, clientDoc);
+    await session.flush();
+    const merged = await session.readWithBaseline();
+    expect(merged.content).toContain('first\n');
+    expect(merged.content).toContain('concurrent\n');
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(merged.content);
+
+    const staleEdit = vi.fn((current: string) =>
+      applyAnchoredSplice(current, { oldText: '', newText: 'must not overwrite' }));
+    await expect(session.applyBaselineEdit(empty.baseline, staleEdit)).resolves.toMatchObject({
+      ok: false, rejected: 'stale_doc', current_content: merged.content
+    });
+    expect(staleEdit).not.toHaveBeenCalled();
+    await expect(session.applyBaselineEdit(merged.baseline, staleEdit)).resolves.toEqual({
+      ok: false, rejected: 'not_found'
+    });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(merged.content);
+    await session.close();
+    clientDoc.destroy();
   });
 
   it('truncates stale baseline echoes for oversized resident documents', async () => {

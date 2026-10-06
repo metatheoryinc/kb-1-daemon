@@ -385,8 +385,12 @@ Workflow: call `list_vaults` first, then pass one returned `id` as the required
 anchored splice contract as the REST API: stale baselines return
 `stale_doc` with current content and a fresh baseline, ambiguous matches return
 `match_count`, and persist failures are surfaced without writing a success
-audit row. `list_files` includes inline folder metadata. `set_folder_metadata`
-persists durable folder color/icon metadata and is audited as `mcp_client`.
+audit row. An empty `old_text` with no anchors inserts the first content only
+when the current document is empty and the baseline is valid; the same request
+against a nonempty document returns `not_found`. Empty `new_text` can clear a
+matched range or the whole document. `list_files` includes inline folder metadata.
+`set_folder_metadata` persists durable folder color/icon metadata and is audited
+as `mcp_client`.
 `move_note` and `move_folder` do not rewrite links. Attachment tools operate on
 binary vault-relative paths: `list_attachments` discovers them,
 `read_attachment` returns image blocks or base64 metadata, and
