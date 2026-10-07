@@ -24,7 +24,7 @@
     "@kb-1/vault-core": "workspace:*",
     "@kb-1/vault-service": "workspace:*",
     "github-slugger": "2.0.0",
-    "hono": "4.12.25",
+    "hono": "4.13.5",
     "yazl": "3.3.1",
     "yauzl": "3.4.0",
     "zod": "4.4.3",
