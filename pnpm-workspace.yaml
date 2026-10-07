@@ -21,7 +21,7 @@ catalog:
   '@storybook/sveltekit': 10.4.6
   storybook: 10.4.6
   '@sveltejs/adapter-static': 3.0.10
-  '@sveltejs/kit': 2.69.2
+  '@sveltejs/kit': 2.70.2
   '@sveltejs/vite-plugin-svelte': 7.2.0
   '@tailwindcss/vite': 4.3.2
   svelte: 5.55.7
